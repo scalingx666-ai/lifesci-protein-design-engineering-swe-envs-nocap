@@ -33,6 +33,7 @@ context_files = [
     "flexs/baselines/models/adaptive_ensemble.py",
     "tests/test_models.py",
 ]
+bootstrap_image = "python:3.12-slim"
 
 [metadata.repo2env.reward_calibration]
 baseline_reward = 0.0
@@ -51,10 +52,15 @@ provenance = "unknown"
 evidence = []
 
 [metadata.repo2env.reproducibility]
-mode = "local_only"
+mode = "inline_dockerfile"
 image_ref = "python:3.12-slim"
 image_tag = "python:3.12-slim"
-image_visibility = "private"
+image_visibility = "public"
+pushed_at = "2026-11-16T15:51:18.648843+00:00"
+pushed_by = "scalingX"
+inline_recipe_sha256 = "sha256:fc27089b35c69569ed2e2900bd4aa59422427790fdd6e2b526656f6afb2a7231"
+inline_recipe_lines = 37
+inline_recipe_source = "user_dockerfile"
 
 [agent]
 timeout_sec = 1800.0

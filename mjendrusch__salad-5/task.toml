@@ -32,6 +32,7 @@ diff_format = "unified"
 context_files = [
     "salad/training/eval_motif_benchmark_without_genie2_format.py",
 ]
+bootstrap_image = "python:3.12-slim"
 
 [metadata.repo2env.reward_calibration]
 baseline_reward = 0.0
@@ -50,10 +51,15 @@ provenance = "unknown"
 evidence = []
 
 [metadata.repo2env.reproducibility]
-mode = "local_only"
+mode = "inline_dockerfile"
 image_ref = "python:3.12-slim"
 image_tag = "python:3.12-slim"
-image_visibility = "private"
+image_visibility = "public"
+pushed_at = "2026-11-16T15:51:18.642841+00:00"
+pushed_by = "scalingX"
+inline_recipe_sha256 = "sha256:d45f61b83612189438ce2b6ab824aab8676c748d52dc216aca38ddc11ae7a86a"
+inline_recipe_lines = 37
+inline_recipe_source = "user_dockerfile"
 
 [agent]
 timeout_sec = 1800.0

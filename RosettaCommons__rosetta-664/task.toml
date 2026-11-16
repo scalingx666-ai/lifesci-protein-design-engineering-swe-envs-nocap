@@ -33,6 +33,7 @@ context_files = [
     "source/src/utility/io/izstream.cc",
     "source/src/utility/io/izstream.hh",
 ]
+bootstrap_image = "python:3.12-slim"
 
 [metadata.repo2env.reward_calibration]
 baseline_reward = 0.0
@@ -51,10 +52,15 @@ provenance = "unknown"
 evidence = []
 
 [metadata.repo2env.reproducibility]
-mode = "local_only"
+mode = "inline_dockerfile"
 image_ref = "python:3.12-slim"
 image_tag = "python:3.12-slim"
-image_visibility = "private"
+image_visibility = "public"
+pushed_at = "2026-11-16T15:51:18.607435+00:00"
+pushed_by = "scalingX"
+inline_recipe_sha256 = "sha256:b1d4fc727a793337848c2503b77606c700731c1abc150a1a0dd5181b5511b2f5"
+inline_recipe_lines = 37
+inline_recipe_source = "user_dockerfile"
 
 [agent]
 timeout_sec = 1800.0

@@ -32,6 +32,7 @@ diff_format = "unified"
 context_files = [
     "main.nf",
 ]
+bootstrap_image = "python:3.12-slim"
 
 [metadata.repo2env.reward_calibration]
 baseline_reward = 0.0
@@ -50,10 +51,15 @@ provenance = "unknown"
 evidence = []
 
 [metadata.repo2env.reproducibility]
-mode = "local_only"
+mode = "inline_dockerfile"
 image_ref = "python:3.12-slim"
 image_tag = "python:3.12-slim"
-image_visibility = "private"
+image_visibility = "public"
+pushed_at = "2026-11-16T15:51:18.555396+00:00"
+pushed_by = "scalingX"
+inline_recipe_sha256 = "sha256:ac9877e2d154803afb46a1e5f16368425b443073b0d899f46acf493d25429bc0"
+inline_recipe_lines = 37
+inline_recipe_source = "user_dockerfile"
 
 [agent]
 timeout_sec = 1800.0

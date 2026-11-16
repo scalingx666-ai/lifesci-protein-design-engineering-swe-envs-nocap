@@ -44,6 +44,7 @@ context_files = [
     "source/src/protocols/peptide_deriver/PeptideDeriverBasicStreamOutputter.cc",
     "source/src/protocols/peptide_deriver/PeptideDeriverBasicStreamOutputter.hh",
 ]
+bootstrap_image = "python:3.12-slim"
 
 [metadata.repo2env.reward_calibration]
 baseline_reward = 0.0
@@ -62,10 +63,15 @@ provenance = "unknown"
 evidence = []
 
 [metadata.repo2env.reproducibility]
-mode = "local_only"
+mode = "inline_dockerfile"
 image_ref = "python:3.12-slim"
 image_tag = "python:3.12-slim"
-image_visibility = "private"
+image_visibility = "public"
+pushed_at = "2026-11-16T15:51:18.624162+00:00"
+pushed_by = "scalingX"
+inline_recipe_sha256 = "sha256:93ea7f4766b24400b4d41947fc18a93fd46e82cbb0438e4782686390a62f5f70"
+inline_recipe_lines = 37
+inline_recipe_source = "user_dockerfile"
 
 [agent]
 timeout_sec = 1800.0

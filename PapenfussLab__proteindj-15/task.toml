@@ -38,6 +38,7 @@ context_files = [
     "schemas/nextflow_schema_custom.json",
     "schemas/nextflow_schema_monomer_partialdiff.json",
 ]
+bootstrap_image = "python:3.12-slim"
 
 [metadata.repo2env.reward_calibration]
 baseline_reward = 0.0
@@ -56,10 +57,15 @@ provenance = "unknown"
 evidence = []
 
 [metadata.repo2env.reproducibility]
-mode = "local_only"
+mode = "inline_dockerfile"
 image_ref = "python:3.12-slim"
 image_tag = "python:3.12-slim"
-image_visibility = "private"
+image_visibility = "public"
+pushed_at = "2026-11-16T15:51:18.553677+00:00"
+pushed_by = "scalingX"
+inline_recipe_sha256 = "sha256:2c6dcdcc77c9e15db4d4d7ac1c0b188bbbae01cbef823351e96c62c80d01aa28"
+inline_recipe_lines = 37
+inline_recipe_source = "user_dockerfile"
 
 [agent]
 timeout_sec = 1800.0
