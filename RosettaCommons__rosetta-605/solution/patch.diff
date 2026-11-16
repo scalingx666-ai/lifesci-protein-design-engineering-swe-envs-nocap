@@ -1,0 +1,853 @@
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/__init__.py b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/__init__.py
+index 88e64bc2e9e..2f87ba39cf0 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/__init__.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/__init__.py
+@@ -50,7 +50,7 @@
+     "run",
+     "update_scores",
+ ]
+-__version__: str = "3.4.1"
++__version__: str = "3.5.0"
+ 
+ 
+ with warnings.catch_warnings() and suppress(NameError):
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/base.py b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/base.py
+index 38e403a06dc..2222b3926df 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/base.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/base.py
+@@ -27,7 +27,7 @@
+ from datetime import datetime
+ from functools import wraps
+ from pyrosetta.distributed.cluster.config import __dask_version__
+-from pyrosetta.distributed.cluster.converters import _parse_protocols
++from pyrosetta.distributed.cluster.converters import _parse_protocols, _version_tuple_to_str
+ from pyrosetta.distributed.cluster.initialization import (
+     _get_norm_task_options,
+     _get_residue_type_set_name3 as _get_residue_type_set,
+@@ -38,6 +38,7 @@
+     _validate_priorities,
+     _validate_protocols_seeds_decoy_ids,
+     _validate_resources,
++    _validate_retries,
+ )
+ from pyrosetta.distributed.packed_pose.core import PackedPose
+ from typing import (
+@@ -147,38 +148,92 @@ def _get_priority(
+             _protocols_index = len(priorities) - len(protocols)
+             return priorities[_protocols_index]
+ 
++    def _get_retry(
++            self, retries: Optional[Union[int, List[int], Tuple[int, ...]]], protocols: List[Callable[..., Any]]
++        ) -> Optional[int]:
++        """Return the number of task retries for the current protocol."""
++        if retries is None:
++            return None
++        elif isinstance(retries, int):
++            return retries
++        else:
++            _protocols_index = len(retries) - len(protocols)
++            return retries[_protocols_index]
++
++    def _parse_resources(self, resources: Any) -> Any:
++        """Parse the resources keyword argument parameter."""
++        _dask_version_threshold = (2, 1, 0)
++        if __dask_version__ < _dask_version_threshold:
++            if resources is not None:
++                _dask_version_str = _version_tuple_to_str(__dask_version__)
++                _dask_version_threshold_str = _version_tuple_to_str(_dask_version_threshold)
++                logging.warning(
++                    "Use of the `resources` keyword argument is not supported for 'dask' and 'distributed' "
++                    f"package versions <{_dask_version_threshold_str}\nCurrent dask version: {_dask_version_str}\n"
++                    "Please set `PyRosettaCluster().distribute(resources=None)`, or upgrade the 'dask' and 'distributed' "
++                    f"package versions to >={_dask_version_threshold_str} to silence this warning. "
++                    "Automatically disabling resource constraints..."
++                )
++            return None
++        else:
++            return resources
++
+     def _parse_priorities(self, priorities: Any) -> Any:
+-        """Parse the priorities keyword argument."""
+-        if __dask_version__ < (1, 21, 0):
+-            _dask_version_str = ".".join(map(str, __dask_version__))
+-            logging.warning(
+-                "Use of the `priorities` keyword argument is not supported for 'dask' and 'distributed' "
+-                f"package versions <1.21.0\nCurrent dask version: {_dask_version_str}\n"
+-                "Please set `PyRosettaCluster().distribute(priority=None)`, or upgrade the 'dask' and 'distributed' "
+-                "package versions to >=1.21.0 to silence this warning. Automatically disabling priorities..."
+-            )
++        """Parse the priorities keyword argument parameter."""
++        _dask_version_threshold = (1, 21, 0)
++        if __dask_version__ < _dask_version_threshold:
++            if priorities is not None:
++                _dask_version_str = _version_tuple_to_str(__dask_version__)
++                _dask_version_threshold_str = _version_tuple_to_str(_dask_version_threshold)
++                logging.warning(
++                    "Use of the `priorities` keyword argument is not supported for 'dask' and 'distributed' "
++                    f"package versions <{_dask_version_threshold_str}\nCurrent dask version: {_dask_version_str}\n"
++                    "Please set `PyRosettaCluster().distribute(priorities=None)`, or upgrade the 'dask' and 'distributed' "
++                    f"package versions to >={_dask_version_threshold_str} to silence this warning. "
++                    "Automatically disabling priorities..."
++                )
+             return None
+         else:
+             return priorities
+ 
++    def _parse_retries(self, retries: Any) -> Any:
++        """Parse the retries keyword argument parameter."""
++        _dask_version_threshold = (1, 20, 0)
++        if __dask_version__ < _dask_version_threshold:
++            if retries is not None:
++                _dask_version_str = _version_tuple_to_str(__dask_version__)
++                _dask_version_threshold_str = _version_tuple_to_str(_dask_version_threshold)
++                logging.warning(
++                    "Use of the `retries` keyword argument is not supported for 'dask' and 'distributed' "
++                    f"package versions <{_dask_version_threshold_str}\nCurrent dask version: {_dask_version_str}\n"
++                    "Please set `PyRosettaCluster().distribute(retries=None)`, or upgrade the 'dask' and 'distributed' "
++                    f"package versions to >={_dask_version_threshold_str} to silence this warning. "
++                    "Automatically disabling task retries..."
++                )
++            return None
++        else:
++            return retries
++
+     def _setup_kwargs(
+         self,
+         kwargs: Dict[Any, Any],
+         clients_indices: List[int],
+         resources: Optional[Union[List[Dict[Any, Any]], Tuple[Dict[Any, Any], ...]]],
+         priorities: Optional[Union[List[int], Tuple[int, ...]]],
+-    ) -> Tuple[bytes, Dict[str, Any], Callable[..., Any], int, Optional[Dict[Any, Any]], Optional[int]]:
++        retries: Optional[Union[int, List[int], Tuple[int, ...]]],
++    ) -> Tuple[bytes, Dict[str, Any], Callable[..., Any], int, Optional[Dict[Any, Any]], Optional[int], Optional[int]]:
+         """Setup the kwargs for the subsequent tasks."""
+         clients_index = self._get_clients_index(clients_indices, kwargs[self.protocols_key])
+         resource = self._get_resource(resources, kwargs[self.protocols_key])
+         priority = self._get_priority(priorities, kwargs[self.protocols_key])
++        retry = self._get_retry(retries, kwargs[self.protocols_key])
+         _protocols, protocol, seed = self._get_task_state(kwargs[self.protocols_key])
+         kwargs[self.protocols_key] = _protocols
+         kwargs = self._setup_seed(kwargs, seed)
+         pyrosetta_init_kwargs = self._setup_pyrosetta_init_kwargs(kwargs)
+         compressed_kwargs = self.serializer.compress_kwargs(kwargs)
+ 
+-        return compressed_kwargs, pyrosetta_init_kwargs, protocol, clients_index, resource, priority
++        return compressed_kwargs, pyrosetta_init_kwargs, protocol, clients_index, resource, priority, retry
+ 
+     def _setup_seed(self, kwargs: Dict[Any, Any], seed: Optional[str]) -> Dict[Any, Any]:
+         """
+@@ -207,8 +262,8 @@ def _setup_seed(self, kwargs: Dict[Any, Any], seed: Optional[str]) -> Dict[Any,
+         return kwargs
+ 
+     def _setup_protocols_protocol_seed(
+-        self, args: Tuple[Any, ...], protocols: Any, clients_indices: Any, resources: Any, priorities: Any
+-    ) -> Tuple[List[Callable[..., Any]], Callable[..., Any], Optional[str], int, Optional[Dict[Any, Any]], Optional[int]]:
++        self, args: Tuple[Any, ...], protocols: Any, clients_indices: Any, resources: Any, priorities: Any, retries: Any
++    ) -> Tuple[List[Callable[..., Any]], Callable[..., Any], Optional[str], int, Optional[Dict[Any, Any]], Optional[int], Optional[int]]:
+         """Parse, validate, and setup the user-provided PyRosetta protocol(s)."""
+ 
+         _protocols = _parse_protocols(args) + _parse_protocols(protocols)
+@@ -216,14 +271,16 @@ def _setup_protocols_protocol_seed(
+         _validate_clients_indices(clients_indices, _protocols, _clients_dict_keys)
+         _validate_resources(resources, _protocols)
+         _validate_priorities(priorities, _protocols)
++        _validate_retries(retries, _protocols)
+         _clients_index = self._get_clients_index(clients_indices, _protocols)
+         _resource = self._get_resource(resources, _protocols)
+         _priority = self._get_priority(priorities, _protocols)
++        _retry = self._get_retry(retries, _protocols)
+         _protocols, _protocol, _seed = self._get_task_state(
+             _validate_protocols_seeds_decoy_ids(_protocols, self.seeds, self.decoy_ids)
+         )
+ 
+-        return _protocols, _protocol, _seed, _clients_index, _resource, _priority
++        return _protocols, _protocol, _seed, _clients_index, _resource, _priority, _retry
+ 
+ 
+ def capture_task_metadata(func: M) -> M:
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/converters.py b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/converters.py
+index 77ca0a9a2fb..0bcc84221aa 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/converters.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/converters.py
+@@ -769,3 +769,8 @@ def _from_iterable(objs: collections.abc.Iterable) -> Union[List[str], NoReturn]
+         raise AssertionError(_msg)
+ 
+     return result
++
++
++def _version_tuple_to_str(version_tuple: Tuple[int, int, int]) -> str:
++    """Return a version string from a version tuple."""
++    return ".".join(map(str, version_tuple))
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/core.py b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/core.py
+index ec5628a8fb8..44a80af032c 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/core.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/core.py
+@@ -908,6 +908,7 @@ def _create_future(
+         passkey: bytes,
+         resource: Optional[Dict[Any, Any]],
+         priority: Optional[int],
++        retry: Optional[int],
+     ) -> Future:
+         """Scatter data and return submitted 'user_spawn_thread' future."""
+         task_id = uuid.uuid4().hex
+@@ -927,10 +928,21 @@ def _create_future(
+             broadcast=False,
+             hash=False,
+         )
+-        if priority is None: # Use default priority in distributed versions >=1.21.0
+-            return client.submit(user_spawn_thread, *scatter, pure=False, resources=resource)
+-        else:
+-            return client.submit(user_spawn_thread, *scatter, pure=False, resources=resource, priority=priority)
++        submit_kwargs = {"pure": False}
++        # Omit resources keyword argument for distributed versions <2.1.0
++        # or use default if user specifies `resources=None` in distributed versions >=2.1.0
++        if resource is not None:
++            submit_kwargs["resources"] = resource
++        # Omit priority keyword argument for distributed versions <1.21.0
++        # or use default if user specifies `priorities=None` in distributed versions >=1.21.0
++        if priority is not None:
++            submit_kwargs["priority"] = priority
++        # Omit retries keyword argument for distributed versions <1.20.0
++        # or use default if user specifies `retries=None` for distributed versions >=1.20.0
++        if retry is not None:
++            submit_kwargs["retries"] = retry
++
++        return client.submit(user_spawn_thread, *scatter, **submit_kwargs)
+ 
+     def _run(
+         self,
+@@ -939,6 +951,7 @@ def _run(
+         clients_indices: Any = None,
+         resources: Any = None,
+         priorities: Any = None,
++        retries: Any = None,
+     ) -> Union[NoReturn, Generator[Tuple[PackedPose, Dict[Any, Any]], None, None]]:
+         """
+         Run user-provided PyRosetta protocols on a local or remote compute cluster using
+@@ -986,12 +999,18 @@ def _run(
+                 resources=[{"GPU": 2}, {"MEMORY": 100e9}],
+             )
+ 
+-            # Run protocols with depth-first task execution
++            # Run protocols with depth-first task execution:
+             PyRosettaCluster().distribute(
+                 protocols=[protocol_1, protocol_2, protocol_3, protocol_4],
+                 priorities=[0, 10, 20, 30],
+             )
+ 
++            # Run protocols with up to three retries per failed task during `protocol_3` and `protocol_4`:
++            PyRosettaCluster().distribute(
++                protocols=[protocol_1, protocol_2, protocol_3, protocol_4],
++                retries=[0, 0, 3, 3],
++            )
++
+         Args:
+             *args: Optional instances of type `types.GeneratorType` or `types.FunctionType`,
+                 in the order of protocols to be executed.
+@@ -1041,15 +1060,34 @@ def _run(
+                     protocols when dask worker resources are saturated.
+                 See https://distributed.dask.org/en/stable/priority.html for more information.
+                 Default: None
++            retries: An optional `list` or `tuple` of `int` objects, where each `int` object (≥0) sets the number of allowed
++                automatic retries of each failed task that was submitted to the corresponding user-provided PyRosetta protocol
++                (i.e., indexed the same as `client_indices`). If an `int` object (≥0) is provided, then apply that number of
++                allowed automatic retries to all user-provided PyRosetta protocols. If `None`, then no explicit retries are
++                allowed. If not `None` and not an `int` object, then the length of the `retries` parameter must equal the number
++                of protocols passed to the `PyRosettaCluster().distribute` method, and each `int` value determines the number
++                of automatic retries the dask scheduler allows for that protocol's failed tasks. Allowing retries of failed tasks
++                may be useful if remote compute resources are subject to preemption (e.g., cloud spot instances or backfill
++                queues). Note that retries are only appropriate for user-provided PyRosetta protocols that are side effect-free
++                upon preemption, in which tasks can be restarted without producing inconsistent external states if preempted midway
++                through the protocol. Also note that if `PyRosettaCluster(ignore_errors=True)` is used, then protocols failing due
++                to standard Python exceptions or Rosetta segmentation faults will still be considered successes, and this
++                keyword argument parameter has no effect on them since these protocol errors are ignored. However, if a compute
++                resource executing tasks is reclaimed midway through a protocol, then the dask scheduler registers those tasks
++                as incomplete, and they may be retried a certain number of times based on this keyword argument parameter.
++                See https://distributed.dask.org/en/latest/scheduling-state.html#task-state for more information.
++                Default: None
+         """
+         yield_results = _parse_yield_results(self.yield_results)
+         clients, cluster, adaptive = self._setup_clients_cluster_adaptive()
+         self._setup_task_security_plugin(clients)
+         socket_listener_address, passkey = self._setup_socket_listener(clients)
+         compressed_input_packed_pose = self.serializer.compress_packed_pose(self.input_packed_pose)
++        resources = self._parse_resources(resources)
+         priorities = self._parse_priorities(priorities)
+-        protocols, protocol, seed, clients_index, resource, priority = self._setup_protocols_protocol_seed(
+-            args, protocols, clients_indices, resources, priorities
++        retries = self._parse_retries(retries)
++        protocols, protocol, seed, clients_index, resource, priority, retry = self._setup_protocols_protocol_seed(
++            args, protocols, clients_indices, resources, priorities, retries
+         )
+         protocol_name = protocol.__name__
+         compressed_protocol = self.serializer.compress_object(protocol)
+@@ -1082,6 +1120,7 @@ def _run(
+                     passkey,
+                     resource,
+                     priority,
++                    retry,
+                 )
+                 for _ in range(self.nstruct)
+                 for compressed_kwargs, pyrosetta_init_kwargs in (
+@@ -1116,8 +1155,8 @@ def _run(
+                         )
+                     if self.filter_results and _is_empty(self.serializer.decompress_packed_pose(compressed_packed_pose)):
+                         continue
+-                    compressed_kwargs, pyrosetta_init_kwargs, protocol, clients_index, resource, priority = self._setup_kwargs(
+-                        kwargs, clients_indices, resources, priorities
++                    compressed_kwargs, pyrosetta_init_kwargs, protocol, clients_index, resource, priority, retry = self._setup_kwargs(
++                        kwargs, clients_indices, resources, priorities, retries
+                     )
+                     protocol_name = protocol.__name__
+                     compressed_protocol = self.serializer.compress_object(protocol)
+@@ -1133,6 +1172,7 @@ def _run(
+                             passkey,
+                             resource,
+                             priority,
++                            retry,
+                         )
+                     )
+                     self.tasks_size += 1
+@@ -1149,6 +1189,7 @@ def generate(
+         clients_indices: Any = None,
+         resources: Any = None,
+         priorities: Any = None,
++        retries: Any = None,
+     ) -> Union[NoReturn, Generator[Tuple[PackedPose, Dict[Any, Any]], None, None]]:
+         if self.sha1 != "":
+             logging.warning(
+@@ -1165,6 +1206,7 @@ def generate(
+             clients_indices=clients_indices,
+             resources=resources,
+             priorities=priorities,
++            retries=retries,
+         ):
+             yield result
+ 
+@@ -1175,6 +1217,7 @@ def distribute(
+         clients_indices: Any = None,
+         resources: Any = None,
+         priorities: Any = None,
++        retries: Any = None,
+     ) -> Optional[NoReturn]:
+         self.yield_results = False
+         for _ in self._run(
+@@ -1183,6 +1226,7 @@ def distribute(
+             clients_indices=clients_indices,
+             resources=resources,
+             priorities=priorities,
++            retries=retries,
+         ):
+             pass
+ 
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/tools.py b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/tools.py
+index 9193fce33e1..075ced1f70d 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/tools.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/tools.py
+@@ -432,6 +432,7 @@ def reproduce(
+     instance_kwargs: Optional[Dict[Any, Any]] = None,
+     clients_indices: Optional[List[int]] = None,
+     resources: Optional[Dict[Any, Any]] = None,
++    retries: Optional[Union[int, List[int], Tuple[int, ...]]] = None,
+     skip_corrections: bool = False,
+     init_from_file_kwargs: Optional[Dict[str, Any]] = None,
+ ) -> Optional[NoReturn]:
+@@ -511,6 +512,23 @@ def reproduce(
+             applied, the protocols will not run. See https://distributed.dask.org/en/latest/resources.html for more
+             information.
+             Default: None
++        retries: An optional `list` or `tuple` of `int` objects, where each `int` object (≥0) sets the number of allowed
++            automatic retries of each failed task that was submitted to the corresponding user-provided PyRosetta protocol
++            (i.e., indexed the same as `client_indices`). If an `int` object (≥0) is provided, then apply that number of
++            allowed automatic retries to all user-provided PyRosetta protocols. If `None`, then no explicit retries are
++            allowed. If not `None` and not an `int` object, then the length of the `retries` parameter must equal the number
++            of protocols passed to the `PyRosettaCluster().distribute` method, and each `int` value determines the number
++            of automatic retries the dask scheduler allows for that protocol's failed tasks. Allowing retries of failed tasks
++            may be useful if remote compute resources are subject to preemption (e.g., cloud spot instances or backfill
++            queues). Note that retries are only appropriate for user-provided PyRosetta protocols that are side effect-free
++            upon preemption, in which tasks can be restarted without producing inconsistent external states if preempted midway
++            through the protocol. Also note that if `PyRosettaCluster(ignore_errors=True)` is used, then protocols failing due
++            to standard Python exceptions or Rosetta segmentation faults will still be considered successes, and this
++            keyword argument parameter has no effect on them since these protocol errors are ignored. However, if a compute
++            resource executing tasks is reclaimed midway through a protocol, then the dask scheduler registers those tasks
++            as incomplete, and they may be retried a certain number of times based on this keyword argument parameter.
++            See https://distributed.dask.org/en/latest/scheduling-state.html#task-state for more information.
++            Default: None
+         skip_corrections: A `bool` object specifying whether or not to skip any ScoreFunction corrections specified in
+             the PyRosettaCluster task 'options' or 'extra_options' values (extracted from either the 'input_file' or
+             'scorefile' keyword argument parameter), which are set in-code upon PyRosetta initialization. If the current
+@@ -608,6 +626,8 @@ def reproduce(
+         ),
+         clients_indices=clients_indices,
+         resources=resources,
++        priorities=None,
++        retries=retries,
+     )
+     if isinstance(_tmp_dir, tempfile.TemporaryDirectory):
+         _tmp_dir.cleanup()
+@@ -617,26 +637,28 @@ def produce(**kwargs: Any) -> Optional[NoReturn]:
+     """
+     `PyRosettaCluster().distribute()` shim requiring the 'protocols' keyword argument, and optionally
+     any PyRosettaCluster keyword arguments or the 'clients_indices' keyword argument (when using
+-    the `PyRosettaCluster(clients=...)` keyword argument), or the 'resources' keyword argument, or
+-    the 'priorities' keyword argument.
++    the `PyRosettaCluster(clients=...)` keyword argument), the 'resources' keyword argument,
++    the 'priorities' keyword argument, or the 'retries' keyword argument.
+ 
+     Args:
+         **kwargs: See `PyRosettaCluster` docstring. The keyword arguments must also include
+             'protocols', an iterable object of function or generator objects specifying
+             an ordered sequence of user-defined PyRosetta protocols to execute for
+             the simulation (see `PyRosettaCluster().distribute` docstring). The keyword arguments
+-            may also optionally include 'clients_indices', 'resources', and 'priorities' (see
+-            `PyRosettaCluster().distribute` docstring).
++            may also optionally include 'clients_indices', 'resources', 'priorities', and 'retries'
++            (see `PyRosettaCluster().distribute` docstring).
+     """
+     protocols = kwargs.pop("protocols", None)
+     clients_indices = kwargs.pop("clients_indices", None)
+     resources = kwargs.pop("resources", None)
+     priorities = kwargs.pop("priorities", None)
++    retries = kwargs.pop("retries", None)
+     PyRosettaCluster(**kwargs).distribute(
+         protocols=protocols,
+         clients_indices=clients_indices,
+         resources=resources,
+         priorities=priorities,
++        retries=retries,
+     )
+ 
+ run: Callable[..., Optional[NoReturn]] = produce
+@@ -647,11 +669,13 @@ def iterate(**kwargs: Any) -> Union[NoReturn, Generator[Tuple[PackedPose, Dict[A
+     clients_indices = kwargs.pop("clients_indices", None)
+     resources = kwargs.pop("resources", None)
+     priorities = kwargs.pop("priorities", None)
++    retries = kwargs.pop("retries", None)
+     for result in PyRosettaCluster(**kwargs).generate(
+         protocols=protocols,
+         clients_indices=clients_indices,
+         resources=resources,
+         priorities=priorities,
++        retries=retries,
+     ):
+         yield result
+ 
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/validators.py b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/validators.py
+index f9aa65bf520..31ed567edf6 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/validators.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/validators.py
+@@ -106,6 +106,40 @@ def _validate_priorities(priorities: Any, _protocols: List[Callable[..., Any]])
+             )
+ 
+ 
++def _validate_retries(retries: Any, _protocols: List[Callable[..., Any]]) -> Optional[NoReturn]:
++    """Validate the `retries` keyword argument parameter."""
++    if retries is not None:
++        if isinstance(retries, int):
++            if retries < 0:
++                raise ValueError(
++                    "If the `retries` keyword argument parameter is of type `int`, it must be greater than or equal to 0.\n"
++                    + f"Received: {retries}\n"
++                )
++        elif isinstance(retries, (tuple, list)):
++            for obj in retries:
++                if not isinstance(obj, int):
++                    raise ValueError(
++                        "Each item of the `retries` keyword argument parameter must be of type `int`.\n"
++                        + f"Received: {type(obj)}\n"
++                    )
++                if obj < 0:
++                    raise ValueError(
++                        "Each item of the `retries` keyword argument parameter must be greater than or equal to 0.\n"
++                        + f"Received: {obj}\n"
++                    )
++            if len(retries) != len(_protocols):
++                raise ValueError(
++                    "The `retries` keyword argument parameter must have the same length as the number of user-defined PyRosetta protocols!\n"
++                    + f"Received `PyRosettaCluster().distribute(protocols=...)`: {_protocols}\n"
++                    + f"Received `PyRosettaCluster().distribute(retries=...)`: {retries}\n"
++                )
++        else:
++            raise ValueError(
++                "The `retries` keyword argument parameter must be of type `int`, `list`, or `tuple`.\n"
++                + f"Received: {type(retries)}\n"
++            )
++
++
+ def _validate_scorefile_name(self, attribute: str, value: Any) -> Optional[NoReturn]:
+     if not value.endswith(".json"):
+         raise ValueError(f"The '{attribute}' keyword argument parameter must end in '.json'.")
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/tests/distributed/cluster/test_smoke.py b/source/src/python/PyRosetta/src/pyrosetta/tests/distributed/cluster/test_smoke.py
+index bac8357817b..3195a23b70e 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/tests/distributed/cluster/test_smoke.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/tests/distributed/cluster/test_smoke.py
+@@ -2782,5 +2782,354 @@ def my_pyrosetta_protocol(packed_pose, **kwargs):
+             cluster_1.close()
+ 
+ 
++class IntentionalError(RuntimeError):
++    def __init__(self, *args):
++        super().__init__(*args)
++
++
++class RetriesTest(unittest.TestCase):
++    """Smoke tests for the use case of task retries with PyRosettaCluster."""
++    _n_tasks: int = 3
++    _n_protocols: int = 2
++    _n_retries_per_protocol: int = 2  # 3 attempts total
++    _count_marker: str = "."
++    _counter_filename_template: str = "protocol_number-{protocol_number}__task-{task}__retries.txt"
++    _sep = "*" * 60
++
++    @classmethod
++    def setUpClass(cls):
++        pyrosetta.distributed.init(
++            options="-run:constant_seed 1 -multithreading:total_threads 1",
++            extra_options="-out:level 200",
++            set_logging_handler="logging",
++        )
++        cls.workdir = tempfile.TemporaryDirectory()
++        with warnings.catch_warnings():
++            # Catch 'ResourceWarning: unclosed <socket.socket ...' from distributed/node.py:235
++            # Catch 'UserWarning: Port 8787 is already in use' from distributed/node.py:240
++            # Catch 'DeprecationWarning: `np.bool8` is a deprecated alias for `np.bool_`.  (Deprecated NumPy 1.24)' from bokeh/core/property/primitive.py:37
++            # Catch 'DeprecationWarning: pkg_resources is deprecated as an API.' from jupyter_server_proxy/config.py:10
++            warnings.simplefilter("ignore", category=ResourceWarning)
++            warnings.simplefilter("ignore", category=UserWarning)
++            warnings.simplefilter("ignore", category=DeprecationWarning)
++            cls.cluster_1 = LocalCluster(
++                n_workers=1, # Must be 1 for `RetriesTest` unit tests, otherwise tasks run concurrently and test logic will fail
++                threads_per_worker=1, # Must be 1 for `RetriesTest` unit tests, otherwise tasks run concurrently and test logic will fail
++                dashboard_address=None,
++                local_directory=cls.workdir.name,
++            )
++        cls.client_1 = Client(cls.cluster_1)
++        cls.default_instance_kwargs = dict(
++            tasks=RetriesTest.create_tasks,
++            input_packed_pose=io.pose_from_sequence("TEST/TASK/RETRIES"),
++            seeds=None,
++            decoy_ids=None,
++            client=None,
++            clients=[cls.client_1],
++            scheduler=None,
++            scratch_dir=cls.workdir.name,
++            cores=None,
++            processes=None,
++            memory=None,
++            min_workers=1,
++            max_workers=1,
++            nstruct=1,
++            dashboard_address=None,
++            compressed=True,
++            logging_level="WARNING",
++            scorefile_name="scores.json",
++            project_name="PyRosettaCluster_Tests",
++            simulation_name=uuid.uuid4().hex,
++            environment=None,
++            simulation_records_in_scorefile=True,
++            decoy_dir_name="decoys",
++            logs_dir_name="logs",
++            ignore_errors=False, # Never ignore errors for `RetriesTest` test case
++            timeout=0.5,
++            max_delay_time=0.5,
++            sha1=None,
++            dry_run=False,
++            save_all=False,
++            system_info=None,
++            pyrosetta_build=None,
++            filter_results=True, # Protocols return non-empty PackedPose when succeeding
++            norm_task_options=None,
++            output_init_file=None,
++            output_decoy_types=[".pdb"],
++            output_scorefile_types=[".json"],
++            security=False,
++            max_nonce=99999,
++        )
++        print(f"{RetriesTest._sep} Begin testing PyRosettaCluster().distribute(retries=...) {RetriesTest._sep}")
++
++    @classmethod
++    def tearDownClass(cls):
++        # Note: During dask client/cluster shutdown, dask worker processes may still have in-flight tasks
++        # or scheduled retries, which can lead to emitted warnings like:
++        #   - "distributed.worker.state_machine - WARNING - Async instruction for <Task cancelled ...> ended with CancelledError"
++        #   - "UserWarning: semaphore_tracker: There appear to be ... leaked semaphores to clean up at shutdown"
++        # These warnings are expected from the `RetriesTest` test case, and do not indicate unit test failures.
++        cls.client_1.close()
++        cls.cluster_1.close()
++        time.sleep(3) # Allow logging messages from worker processes to flush
++        cls.workdir.cleanup()
++        print(f"{RetriesTest._sep} End testing PyRosettaCluster().distribute(retries=...) {RetriesTest._sep}")
++
++    @staticmethod
++    def create_tasks():
++        for i in range(RetriesTest._n_tasks):
++            yield {
++                "extra_options": "-ex1 -multithreading:total_threads 1",
++                "set_logging_handler": "logging",
++                "task": i,
++                "max_retries": RetriesTest._n_retries_per_protocol,
++                "count_marker": RetriesTest._count_marker,
++                "counter_filename_template": RetriesTest._counter_filename_template,
++            }
++
++    @staticmethod
++    def attempt_counter_protocol(**kwargs):
++        output_path = kwargs["PyRosettaCluster_output_path"]
++        protocol_number = kwargs["PyRosettaCluster_protocol_number"]
++        task = kwargs["task"]
++        max_retries = kwargs["max_retries"]
++        max_attempts = max_retries + 1 # Plus one, since retries only occur after the initial attempt
++        count_marker = kwargs["count_marker"]
++        counter_filename_template = kwargs["counter_filename_template"]
++        counter_file = os.path.join(
++            output_path,
++            counter_filename_template.format(protocol_number=protocol_number, task=task),
++        )
++        # Log new attempt
++        with open(counter_file, "a") as f:
++            total_attempts = f.write(count_marker)
++        # Get total attempts, including this attempt
++        with open(counter_file, "r") as f:
++            total_attempts = f.read().count(count_marker)
++
++        return task, total_attempts, max_attempts
++
++    @staticmethod
++    def my_protocol(packed_pose, **kwargs):
++        return packed_pose, kwargs
++
++    @staticmethod
++    def protocol_with_intentional_error(packed_pose, **kwargs):
++        task, total_attempts, max_attempts = RetriesTest.attempt_counter_protocol(**kwargs)
++        # Always raise error
++        raise IntentionalError(f"Task {task} intentionally raised error on attempt {total_attempts}/{max_attempts}")
++
++    @staticmethod
++    def protocol_succeeds_on_last_retry(packed_pose, **kwargs):
++        task, total_attempts, max_attempts = RetriesTest.attempt_counter_protocol(**kwargs)
++        if total_attempts == max_attempts: # Succeed on last retry
++            print(f"Protocol `protocol_succeeds_on_last_retry` succeeding on last attempt ({total_attempts}/{max_attempts})!")
++            return packed_pose
++        else: # Fail if not on last retry
++            raise IntentionalError(f"Task {task} intentionally raised error on attempt {total_attempts}/{max_attempts}")
++
++    def test_retries_persistent_errors(self):
++        """Test retries of protocols with persistent errors."""
++        protocols = [RetriesTest.protocol_with_intentional_error] * RetriesTest._n_protocols
++        output_path = os.path.join(self.workdir.name, "outputs_persistent_errors")
++        prc = PyRosettaCluster(
++            **self.default_instance_kwargs,
++            **{"output_path": output_path},
++        )
++        with self.assertRaises(WorkerError):
++            prc.distribute(
++                protocols=protocols,
++                clients_indices=[0] * RetriesTest._n_protocols,
++                resources=None,
++                priorities=None,
++                retries=RetriesTest._n_retries_per_protocol,
++            )
++        # Only one counter file should have the maximum attempts, but because submitted tasks
++        # run asynchronously in a potentially shuffled order, we must find which one
++        counter_files = glob.glob(
++            os.path.join(output_path, RetriesTest._counter_filename_template.format(protocol_number="*", task="*"))
++        )
++        task_total_attempts_dict = {}
++        for counter_file in counter_files:
++            basename_split = os.path.basename(counter_file).split("__")
++            protocol_number = int(list(filter(lambda x: x.startswith("protocol_number"), basename_split))[0].split("-")[-1])
++            self.assertEqual(protocol_number, 0, msg="Only protocol number 0 should have been run!")
++            task = int(list(filter(lambda x: x.startswith("task"), basename_split))[0].split("-")[-1])
++            self.assertIn(task, tuple(range(RetriesTest._n_tasks)), msg="Task is out of task range!")
++            with open(counter_file, "r") as f:
++                total_attempts = f.read().count(RetriesTest._count_marker)
++            task_total_attempts_dict[task] = total_attempts
++        task_with_max_attempts, max_attempts = sorted(task_total_attempts_dict.items(), key=lambda kv: kv[1], reverse=True)[0]
++        self.assertEqual(max_attempts, RetriesTest._n_retries_per_protocol + 1, msg="Maximum number of task attempts failed.")
++        for task, attempts in task_total_attempts_dict.items():
++            if task != task_with_max_attempts:
++                self.assertLess(
++                    attempts,
++                    max_attempts,
++                    msg=(
++                        f"Task {task} with {attempts} attempts must have less attempts "
++                        f"than task {task_with_max_attempts} with maximum attempts {max_attempts}."
++                    ),
++                )
++        print("Unit test with protocols raising intentional errors passed successfully!")
++
++    def test_retries_succeed_on_last_retry(self):
++        """Test retries of protocols that succeed on last retry."""
++        protocols = [RetriesTest.protocol_succeeds_on_last_retry] * RetriesTest._n_protocols
++        output_path = os.path.join(self.workdir.name, "outputs_protocols_succeed_on_last_retry")
++        PyRosettaCluster(
++            **self.default_instance_kwargs,
++            **{"output_path": output_path},
++        ).distribute(
++            protocols=protocols,
++            clients_indices=[0] * RetriesTest._n_protocols,
++            resources=None,
++            priorities=None,
++            retries=[RetriesTest._n_retries_per_protocol] * RetriesTest._n_protocols,
++        )
++        for protocol_number in range(RetriesTest._n_protocols):
++            for task in range(RetriesTest._n_tasks):
++                counter_file = os.path.join(
++                    output_path,
++                    RetriesTest._counter_filename_template.format(protocol_number=protocol_number, task=task),
++                )
++                self.assertTrue(os.path.isfile(counter_file), msg=f"Retries counter file does not exist: {counter_file}")
++                with open(counter_file, "r") as f:
++                    total_attempts = f.read().count(RetriesTest._count_marker)
++                self.assertEqual(total_attempts, RetriesTest._n_retries_per_protocol + 1, msg="Number of task attempts failed.")
++        print("Unit test with protocols succeeding only on last retry passed successfully!")
++
++    def test_no_retries(self):
++        """Test no retries of a failed protocol."""
++        protocols = [RetriesTest.protocol_with_intentional_error] * RetriesTest._n_protocols
++        output_path = os.path.join(self.workdir.name, "outputs_protocols_no_retries")
++        prc = PyRosettaCluster(
++            **self.default_instance_kwargs,
++            **{"output_path": output_path},
++        )
++        with self.assertRaises(WorkerError):
++            prc.distribute(
++                protocols=protocols,
++                clients_indices=[0] * RetriesTest._n_protocols,
++                resources=None,
++                priorities=None,
++                retries=None, # Automatically uses the `dask.distributed` default of 0
++            )
++        # Because submitted tasks run asynchronously in a potentially shuffled order,
++        # only one task should have been run
++        tasks_run_counter = 0
++        for protocol_number in range(RetriesTest._n_protocols):
++            for task in range(RetriesTest._n_tasks):
++                counter_file = os.path.join(
++                    output_path,
++                    RetriesTest._counter_filename_template.format(protocol_number=protocol_number, task=task),
++                )
++                if os.path.isfile(counter_file):
++                    with open(counter_file, "r") as f:
++                        total_attempts = f.read().count(RetriesTest._count_marker)
++                    self.assertEqual(total_attempts, 1, msg="Number of task attempts failed.")
++                    tasks_run_counter += 1
++        self.assertEqual(tasks_run_counter, 1, msg=f"Unexpected number of tasks run: {tasks_run_counter}")
++        print("Unit test with no retries passed successfully!")
++
++    def test_retries_api(self):
++        """Test retries API."""
++        protocols = [RetriesTest.my_protocol] * RetriesTest._n_protocols
++        clients_indices = [0] * RetriesTest._n_protocols
++        output_path = os.path.join(self.workdir.name, "outputs_protocols_retries_api")
++        produce(
++            **self.default_instance_kwargs,
++            **dict(
++                output_path=f"{output_path}_1",
++                protocols=protocols,
++                clients_indices=clients_indices,
++                resources=None,
++                priorities=None,
++                retries=tuple(range(0, RetriesTest._n_protocols * 10, 10)), # Test different values in tuple
++            )
++        )
++        run(
++            **self.default_instance_kwargs,
++            **dict(
++                output_path=f"{output_path}_2",
++                protocols=protocols,
++                clients_indices=clients_indices,
++                resources=None,
++                priorities=None,
++                retries=list(reversed(range(RetriesTest._n_protocols))), # Test different values in list
++            )
++        )
++        prc_iterator = iterate(
++            **self.default_instance_kwargs,
++            **dict(
++                output_path=f"{output_path}_3",
++                protocols=protocols,
++                clients_indices=clients_indices,
++                resources=None,
++                priorities=None,
++                retries=set(range(RetriesTest._n_protocols)), # Test validation error with set
++            )
++        )
++        with self.assertRaises(ValueError) as ex:
++            _ = list(prc_iterator)
++        self.assertIn(
++            "The `retries` keyword argument parameter must be of type `int`, `list`, or `tuple`.",
++            str(ex.exception),
++            msg="Incorrect error message."
++        )
++        prc_generator = PyRosettaCluster(
++            **self.default_instance_kwargs,
++            output_path=f"{output_path}_4",
++        ).generate(
++            protocols=protocols,
++            clients_indices=clients_indices,
++            resources=None,
++            priorities=None,
++            retries=list(range(RetriesTest._n_protocols + 1)), # Test validation error with different size
++        )
++        with self.assertRaises(ValueError) as ex:
++            _ = list(prc_generator)
++        self.assertIn(
++            "The `retries` keyword argument parameter must have the same length as the number of user-defined PyRosetta protocols!",
++            str(ex.exception),
++            msg="Incorrect error message."
++        )
++        prc = PyRosettaCluster(
++            **self.default_instance_kwargs,
++            output_path=f"{output_path}_5",
++        )
++        with self.assertRaises(ValueError) as ex:
++            prc.distribute(
++                protocols=protocols,
++                clients_indices=clients_indices,
++                resources=None,
++                priorities=None,
++                retries=-1, # Test validation error with negative integer
++            )
++        self.assertIn(
++            "If the `retries` keyword argument parameter is of type `int`, it must be greater than or equal to 0.",
++            str(ex.exception),
++            msg="Incorrect error message."
++        )
++        with self.assertRaises(ValueError) as ex:
++            produce(
++                **self.default_instance_kwargs,
++                **dict(
++                    output_path=f"{output_path}_6",
++                    protocols=protocols,
++                    clients_indices=clients_indices,
++                    resources=None,
++                    priorities=None,
++                    retries=1.0, # Test validation error with float
++                )
++            )
++        self.assertIn(
++            "The `retries` keyword argument parameter must be of type `int`, `list`, or `tuple`.",
++            str(ex.exception),
++            msg="Incorrect error message."
++        )
++        print("Unit test for retries API passed successfully!")
++
++
+ # if __name__ == "__main__":
+ #     unittest.main(verbosity=2)
+diff --git a/source/src/python/PyRosetta/src/test/T900_distributed.py b/source/src/python/PyRosetta/src/test/T900_distributed.py
+index 856e96bce29..1fb7af1bb92 100644
+--- a/source/src/python/PyRosetta/src/test/T900_distributed.py
++++ b/source/src/python/PyRosetta/src/test/T900_distributed.py
+@@ -89,6 +89,10 @@ def e(cmd):
+     "pyrosetta.tests.distributed.cluster.test_smoke.IOTest.test_io",
+     "pyrosetta.tests.distributed.cluster.test_smoke.TestInitFileSigner.test_init_file_signer",
+     "pyrosetta.tests.distributed.cluster.test_smoke.PrioritiesTest.test_priorities",
++    "pyrosetta.tests.distributed.cluster.test_smoke.RetriesTest.test_retries_persistent_errors",
++    "pyrosetta.tests.distributed.cluster.test_smoke.RetriesTest.test_retries_succeed_on_last_retry",
++    "pyrosetta.tests.distributed.cluster.test_smoke.RetriesTest.test_no_retries",
++    "pyrosetta.tests.distributed.cluster.test_smoke.RetriesTest.test_retries_api",
+     "pyrosetta.tests.distributed.cluster.test_logging.LoggingTest.test_logging",
+     "pyrosetta.tests.distributed.cluster.test_reproducibility.TestReproducibility.test_reproducibility_minimizer_nstruct",
+     "pyrosetta.tests.distributed.cluster.test_reproducibility.TestReproducibility.test_reproducibility_minimizer_nstruct_filter_results",

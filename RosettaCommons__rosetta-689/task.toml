@@ -1,0 +1,67 @@
+version = "1.0"
+
+[task]
+name = "default/RosettaCommons__rosetta-689"
+description = "Apply Rule of Zero to disulfide energy neighbor iterators"
+
+[metadata]
+difficulty = "medium"
+category = "bugfix"
+keywords = [
+    "rosetta",
+    "pr_diff",
+]
+
+[metadata.repo2env]
+pipeline = "pr_diff"
+pipeline_version = "0.3.0"
+repo = "RosettaCommons/rosetta"
+ref = "b8e64ecdc0338b77c231760f7f9bdcd4d500a240"
+reference = "https://github.com/RosettaCommons/rosetta/pull/689"
+source_access = "auto"
+built_at = "2026-11-15T22:35:02.611125+00:00"
+reward_kinds = [
+    "diff_similarity",
+]
+spec_version = "0.2.0"
+content_hash = "sha256:e1e67af32e98a5b12c41a46069b9595bac48d72f644cdca64b6f1aed09401059"
+
+[metadata.repo2env.pr_diff]
+pr_merged_at = "2026-05-13T00:03:29Z"
+diff_format = "unified"
+context_files = [
+    "source/src/core/scoring/disulfides/CentroidDisulfideEnergyContainer.cc",
+    "source/src/core/scoring/disulfides/CentroidDisulfideEnergyContainer.hh",
+    "source/src/core/scoring/disulfides/DisulfideMatchingEnergyContainer.cc",
+    "source/src/core/scoring/disulfides/DisulfideMatchingEnergyContainer.hh",
+    "source/src/core/scoring/disulfides/FullatomDisulfideEnergyContainer.cc",
+    "source/src/core/scoring/disulfides/FullatomDisulfideEnergyContainer.hh",
+]
+
+[metadata.repo2env.reward_calibration]
+baseline_reward = 0.0
+loc_changed = 48
+difficulty = "medium"
+
+[metadata.repo2env.evaluation]
+schema_version = "1"
+status = "unverified"
+stage = "generation"
+reason_codes = [
+    "validation_not_run",
+]
+detail = "Generated task; validation has not been established."
+provenance = "unknown"
+evidence = []
+
+[metadata.repo2env.reproducibility]
+mode = "local_only"
+image_ref = "python:3.12-slim"
+image_tag = "python:3.12-slim"
+image_visibility = "private"
+
+[agent]
+timeout_sec = 1800.0
+
+[verifier]
+timeout_sec = 300.0

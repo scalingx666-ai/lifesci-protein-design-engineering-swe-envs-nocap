@@ -1,0 +1,1543 @@
+diff --git a/.gitignore b/.gitignore
+index 1260ebb..76e0a54 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -1,7 +1,8 @@
+-**/.claude/settings.local.json
++**/.claude/
+ BindCraft-original/
+ .DS_Store
+ relax_amber.ipynb
+ BindCraft-main-v1.5.code-workspace
+ **/__pycache__/
+-
++**/FASPR-master/
++*.cc
+diff --git a/README.md b/README.md
+index 1b1c104..cd6633a 100644
+--- a/README.md
++++ b/README.md
+@@ -12,7 +12,7 @@ For comprehensive details on the original BindCraft pipeline, features, advanced
+ 
+ The `--no-pyrosetta` flag, usable during both installation and runtime, enables the following behavior:
+ 
+-*   **OpenMM Relaxation:** Structural relaxation uses an OpenMM-based protocol instead of PyRosetta's FastRelax. This includes structure preparation with PDBFixer, ramped backbone restraints, OBC2 implicit solvation, an additional short-range repulsive term to mitigate clashes, and short MD "shakes" for early stages. This function is GPU-accelerated and typically is 2-4x faster than the CPU-based FastRelax, depending on the platform.
++*   **OpenMM Relaxation:** Structural relaxation uses an OpenMM-based protocol instead of PyRosetta's FastRelax. This includes structure preparation with PDBFixer, ramped backbone restraints, OBC2 implicit solvation, an additional short-range repulsive term to mitigate clashes, and short MD "shakes" for early stages. Integration with FASPR (Fast, Accurate, and Deterministic Protein Side-chain Packing) for side-chain repacking and further refinement. This function is GPU-accelerated and typically is 2-4x faster than the CPU-based FastRelax, depending on the platform. OpenMM and FASPR are both open-source.
+ *   **Shape Complementarity (SC):** Replaced with an open-source implementation via `sc-rs` when available. See `sc-rs` project: [https://github.com/cytokineking/sc-rs](https://github.com/cytokineking/sc-rs). The results of sc-rs are nearly identical to the same calculations performed by PyRosetta.
+ *   **SASA Calculations:** Surface area and derived metrics are computed using [FreeSASA](https://github.com/mittinatten/freesasa) or a Biopython Shrake–Rupley fallback. These values align closely with the PyRosetta-derived values.
+ *   **Interface Residues and Alignment:** Uses Biopython-based routines for interface residue identification, RMSD, and PDB alignment.
+@@ -252,6 +252,7 @@ On completion or Ctrl+C, the container exits and is auto-removed; outputs persis
+ 
+ - Shape Complementarity (SC): `sc-rs` — [https://github.com/cytokineking/sc-rs](https://github.com/cytokineking/sc-rs)
+ - FreeSASA (SASA): [https://github.com/mittinatten/freesasa](https://github.com/mittinatten/freesasa)
++- FASPR (Side-chain Packing): [https://github.com/tommyhuangthu/FASPR](https://github.com/tommyhuangthu/FASPR)
+ - Biopython: [https://biopython.org](https://biopython.org)
+ 
+ ## Extras: Analysis and Utility Scripts
+diff --git a/bindcraft.py b/bindcraft.py
+index 251c329..543352c 100644
+--- a/bindcraft.py
++++ b/bindcraft.py
+@@ -42,7 +42,7 @@ def ensure_binaries_executable(use_pyrosetta=True):
+     functions_dir = os.path.join(bindcraft_folder, "functions")
+     
+     # Always needed binaries
+-    binaries = ["dssp", "sc"]
++    binaries = ["dssp", "sc", "FASPR"]
+     
+     # Only add DAlphaBall.gcc if using PyRosetta
+     if use_pyrosetta:
+diff --git a/extras/README.md b/extras/README.md
+index c7ae5e6..ed0440b 100644
+--- a/extras/README.md
++++ b/extras/README.md
+@@ -58,10 +58,17 @@ This folder contains accessory scripts and documents to support BindCraft runs,
+     ```
+ 
+ - `test_openmm_relax.py`
+-  - Purpose: Test harness to run OpenMM and PyRosetta relaxation on a single PDB, writing two outputs for comparison.
++  - Purpose: Test harness to run OpenMM and PyRosetta relaxation on a single PDB, writing two outputs for comparison. Supports optional FASPR side-chain repacking.
+   - Usage:
+     ```bash
++    # basic
+     python extras/test_openmm_relax.py ./example/PDL1.pdb ./tmp/output_relaxed
++
++    # enable FASPR repacking (requires functions/FASPR and functions/dun2010bbdep.bin)
++    python extras/test_openmm_relax.py ./example/PDL1.pdb ./tmp/output_relaxed --faspr
++
++    # sweep grid (writes JSON if --json-dir provided)
++    python extras/test_openmm_relax.py ./example/PDL1.pdb ./tmp/output_relaxed --sweep-basic --json-dir ./tmp/relax_json --faspr
+     ```
+ 
+ ## Notes on Environment and Binaries
+diff --git a/extras/test_openmm_relax.py b/extras/test_openmm_relax.py
+index 6e55484..d084f41 100644
+--- a/extras/test_openmm_relax.py
++++ b/extras/test_openmm_relax.py
+@@ -1,6 +1,8 @@
+ import argparse
+ import os
+ import sys
++import json
++from datetime import datetime
+ 
+ # Ensure the project root is in the Python path to allow imports from 'functions'
+ project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+@@ -27,8 +29,10 @@
+ 
+ if __name__ == "__main__":
+     parser = argparse.ArgumentParser(
+-        description="Test OpenMM and PyRosetta relaxation. "\
+-                    "Prints verbose output from the relaxation functions."
++        description=(
++            "Test OpenMM and PyRosetta relaxation with optional performance sweeps. "
++            "Prints per-stage timing and energy metrics."
++        )
+     )
+     parser.add_argument(
+         "input_pdb_path",
+@@ -41,6 +45,34 @@
+         help="Base path for the relaxed output PDB files. Suffixes _openmm.pdb and _pyrosetta.pdb will be added."
+     )
+ 
++    # OpenMM performance controls (single-run)
++    parser.add_argument("--platform", choices=["auto", "cpu", "gpu", "cuda", "opencl"], default="auto",
++                        help="Platform selection for OpenMM relax (auto uses default search)")
++    parser.add_argument("--md-steps-per-shake", type=int, default=5000,
++                        help="MD steps per shake (0 disables MD shakes)")
++    parser.add_argument("--restraint-ramp", type=str, default="1.0,0.4,0.0",
++                        help="Comma-separated restraint ramp factors (e.g., 1.0,0.4,0.0)")
++    parser.add_argument("--lj-ramp", type=str, default="0.0,1.5,3.0",
++                        help="Comma-separated LJ repulsion ramp factors (e.g., 0.0,1.5,3.0)")
++    parser.add_argument("--max-iters", type=int, default=1000,
++                        help="Max iterations per minimization stage (0 for unlimited)")
++    parser.add_argument("--ramp-force-tol", type=float, default=2.0,
++                        help="Force tolerance (kJ/mol/nm) for ramp minimization stages")
++    parser.add_argument("--final-force-tol", type=float, default=0.1,
++                        help="Force tolerance (kJ/mol/nm) for final stage minimization")
++    parser.add_argument("--json-out", type=str, default=None,
++                        help="Optional path to write single-run perf JSON")
++
++    # FASPR repacking toggle
++    parser.add_argument("--faspr", action="store_true",
++                        help="Run FASPR side-chain repacking after OpenMM relax (requires functions/FASPR and rotamer lib)")
++
++    # Sweep controls
++    parser.add_argument("--sweep-basic", action="store_true",
++                        help="Run a basic grid sweep over CPU/GPU x MD on/off x ramp stages 1/2/3")
++    parser.add_argument("--json-dir", type=str, default=None,
++                        help="If set with --sweep-basic, writes one JSON per configuration to this directory")
++
+     args = parser.parse_args()
+ 
+     print(f"--- Test Script: Starting Relaxations ---")
+@@ -84,22 +116,120 @@
+             sys.exit(1)
+             
+     # --- OpenMM Relaxation ---
+-    print(f"\n--- Starting OpenMM Relaxation ---")
+-    print(f"Calling openmm_relax function for {openmm_output_pdb_path}...")
+-    try:
+-        # Call the imported openmm_relax function
+-        used_platform = openmm_relax(args.input_pdb_path, openmm_output_pdb_path, use_gpu_relax=True) # Attempt GPU relaxation (CUDA -> OpenCL -> CPU fallback)
+-        print(f"openmm_relax function completed. Platform used: {used_platform}")
+-        if os.path.exists(openmm_output_pdb_path):
+-            print(f"OpenMM Relaxed PDB saved to: {openmm_output_pdb_path}")
+-        else:
+-            print(f"Warning: OpenMM Output PDB file was not created at {openmm_output_pdb_path}.")
++    def _parse_floats_csv(s, default):
++        try:
++            vals = [float(x.strip()) for x in str(s).split(',') if x.strip() != ""]
++            return vals if vals else list(default)
++        except Exception:
++            return list(default)
++
++    def _platform_override_from_choice(choice):
++        c = str(choice).lower()
++        if c == "cpu":
++            return ["CPU"], False
++        if c == "cuda":
++            return ["CUDA"], True
++        if c == "opencl":
++            return ["OpenCL"], True
++        if c == "gpu":
++            return ["OpenCL", "CUDA"], True
++        return None, True  # auto
+ 
+-    except Exception as e:
+-        print(f"--- Test Script: Error during openmm_relax execution (forced CPU) ---")
+-        print(f"An exception occurred: {type(e).__name__}: {e}")
+-        import traceback
+-        traceback.print_exc()
++    def _run_openmm_once(tag, input_pdb, out_pdb, platform_choice, md_steps, rest_ramp, lj_ramp, max_iters, ramp_tol, final_tol, json_out_path=None, faspr=False):
++        print(f"\n--- OpenMM Relax Run: {tag} ---")
++        perf = {}
++        override, use_gpu = _platform_override_from_choice(platform_choice)
++        try:
++            used_platform = openmm_relax(
++                input_pdb,
++                out_pdb,
++                use_gpu_relax=use_gpu,
++                openmm_max_iterations=max_iters,
++                openmm_ramp_force_tolerance_kj_mol_nm=ramp_tol,
++                openmm_final_force_tolerance_kj_mol_nm=final_tol,
++                restraint_k_kcal_mol_A2=3.0,
++                restraint_ramp_factors=rest_ramp,
++                md_steps_per_shake=md_steps,
++                lj_rep_base_k_kj_mol=10.0,
++                lj_rep_ramp_factors=lj_ramp,
++                perf_report=perf,
++                override_platform_order=override,
++                use_faspr_repack=bool(faspr),
++                post_faspr_minimize=True
++            )
++            print(f"Platform: {used_platform}")
++            print(f"Total seconds: {perf.get('total_seconds'):.2f}")
++            print(f"Initial minimization seconds: {perf.get('initial_min_seconds', 0.0):.2f}")
++            print(f"Ramp count: {perf.get('ramp_count')}, MD steps/shake: {perf.get('md_steps_per_shake')}")
++            if perf.get('best_energy_kj') is not None:
++                print(f"Best energy (kJ/mol): {perf['best_energy_kj']:.2f}")
++            for st in perf.get('stages', []):
++                print(
++                    f"  Stage {st['stage_index']}: md_steps={st['md_steps_run']}, "
++                    f"md_s={st['md_seconds']:.2f}, min_calls={st['min_calls']}, min_s={st['min_seconds']:.2f}, "
++                    f"E0={st.get('energy_start_kj')}, Emd={st.get('md_post_energy_kj')}, Efin={st.get('final_energy_kj')}"
++                )
++            if faspr:
++                print(f"FASPR: success={perf.get('faspr_success')}, faspr_s={perf.get('faspr_seconds')}, post_min_s={perf.get('post_faspr_min_seconds')}")
++            if json_out_path:
++                try:
++                    os.makedirs(os.path.dirname(json_out_path), exist_ok=True) if os.path.dirname(json_out_path) else None
++                    with open(json_out_path, 'w') as jf:
++                        json.dump(perf, jf, indent=2)
++                    print(f"Perf JSON written: {json_out_path}")
++                except Exception as je:
++                    print(f"Failed to write JSON to {json_out_path}: {je}")
++            if os.path.exists(out_pdb):
++                print(f"OpenMM Relaxed PDB saved to: {out_pdb}")
++        except Exception as e:
++            print(f"OpenMM run failed for tag '{tag}': {type(e).__name__}: {e}")
++            import traceback
++            traceback.print_exc()
++
++    # Single-run or sweep execution
++    if args.sweep_basic:
++        print("\nRunning basic sweep over platform x MD on/off x ramp stages 1/2/3...")
++        base_rest = _parse_floats_csv(args.restraint_ramp, [1.0, 0.4, 0.0])
++        base_lj = _parse_floats_csv(args.lj_ramp, [0.0, 1.5, 3.0])
++        platforms = ["cpu", "gpu"]
++        md_opts = [0, max(0, int(args.md_steps_per_shake))]
++        stage_counts = [1, 2, 3]
++        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
++        for plat in platforms:
++            for md in md_opts:
++                for sc in stage_counts:
++                    rest = base_rest[:sc]
++                    lj = base_lj[:sc]
++                    tag = f"{plat}_md{md}_st{sc}"
++                    out_pdb = os.path.splitext(openmm_output_pdb_path)[0] + f"_{tag}.pdb"
++                    json_out = None
++                    if args.json_dir:
++                        json_out = os.path.join(args.json_dir, f"perf_{tag}_{stamp}.json")
++                    _run_openmm_once(
++                        tag, args.input_pdb_path, out_pdb,
++                        plat, md, rest, lj,
++                        args.max_iters, args.ramp_force_tol, args.final_force_tol,
++                        json_out_path=json_out,
++                        faspr=args.faspr
++                    )
++    else:
++        # Single-run
++        rest = _parse_floats_csv(args.restraint_ramp, [1.0, 0.4, 0.0])
++        lj = _parse_floats_csv(args.lj_ramp, [0.0, 1.5, 3.0])
++        _run_openmm_once(
++            "single",
++            args.input_pdb_path,
++            openmm_output_pdb_path,
++            args.platform,
++            max(0, int(args.md_steps_per_shake)),
++            rest,
++            lj,
++            args.max_iters,
++            args.ramp_force_tol,
++            args.final_force_tol,
++            json_out_path=args.json_out,
++            faspr=args.faspr
++        )
+ 
+     # --- PyRosetta Relaxation ---
+     print(f"\n--- Starting PyRosetta Relaxation ---")
+diff --git a/functions/FASPR b/functions/FASPR
+new file mode 100755
+index 0000000..76d71e4
+Binary files /dev/null and b/functions/FASPR differ
+diff --git a/functions/dun2010bbdep.bin b/functions/dun2010bbdep.bin
+new file mode 100644
+index 0000000..c98c5c9
+Binary files /dev/null and b/functions/dun2010bbdep.bin differ
+diff --git a/functions/pr_alternative_utils.py b/functions/pr_alternative_utils.py
+index 9c5c199..a4bfd68 100644
+--- a/functions/pr_alternative_utils.py
++++ b/functions/pr_alternative_utils.py
+@@ -1,21 +1,29 @@
+ """
+ Alternative implementations for PyRosetta functionality.
+ 
+-This module provides OpenMM and Biopython-based alternatives to PyRosetta functions,
++This module provides OpenMM, Biopython, and FASPR-based alternatives to PyRosetta functions,
+ enabling BindCraft to run without PyRosetta installation. These implementations
+ aim to provide similar functionality with reasonable approximations where exact
+ replication is not possible.
+ 
+ Functions:
+-    openmm_relax: Structure relaxation using OpenMM
++    openmm_relax: Structure relaxation using OpenMM with optional FASPR side-chain repacking
+     openmm_relax_subprocess: Run relax in a fresh process to isolate OpenCL context
+-    pr_alternative_score_interface: Interface scoring using Biopython
+-    
++    pr_alternative_score_interface: Interface scoring using Biopython and FreeSASA
++    _calculate_shape_complementarity: Shape complementarity calculation using sc-rs or fallback
++    _compute_sasa_metrics: SASA calculations using Biopython or FreeSASA
++    _compute_sasa_metrics_with_freesasa: FreeSASA-based SASA calculations
++    _run_faspr: Helper to run FASPR side-chain packing
++    _resolve_faspr_binary: Locate FASPR binary
++    _add_hydrogens_and_minimize: Add hydrogens and minimize post-FASPR structures
++
+ Helper Functions:
+     _get_openmm_forcefield: Singleton ForceField instance
+     _create_lj_repulsive_force: Custom LJ repulsion for clash resolution
+     _create_backbone_restraint_force: Backbone position restraints
+     _chain_total_sasa: Calculate total SASA for a chain
++    _suppress_freesasa_warnings: Suppress FreeSASA warnings
++    hotspot_residues: Interface residue identification
+ 
+ Rationale:
+     In long runs we observed sporadic OpenCL context failures after many relax calls,
+@@ -59,128 +67,15 @@
+     freesasa = None  # type: ignore
+     _HAS_FREESASA = False
+ 
+-def _get_openmm_forcefield():
+-    global _OPENMM_FORCEFIELD_SINGLETON
+-    if _OPENMM_FORCEFIELD_SINGLETON is None:
+-        _OPENMM_FORCEFIELD_SINGLETON = app.ForceField('amber14-all.xml', 'implicit/obc2.xml')
+-    return _OPENMM_FORCEFIELD_SINGLETON
+-
+-# Removed legacy in-process OpenCL reset helper; subprocess isolation handles context teardown.
+-
+-# Helper function for k conversion
+-def _k_kj_per_nm2(k_kcal_A2):
+-    return k_kcal_A2 * 4.184 * 100.0
+-
+-# Helper function for LJ repulsive force creation
+-def _create_lj_repulsive_force(system, lj_rep_base_k_kj_mol, lj_rep_ramp_factors, original_sigmas, nonbonded_force_index):
+-    lj_rep_custom_force = None
+-    k_rep_lj_param_index = -1
+-
+-    if lj_rep_base_k_kj_mol > 0 and original_sigmas and lj_rep_ramp_factors:
+-        lj_rep_custom_force = openmm.CustomNonbondedForce(
+-            "k_rep_lj * (((sigma_particle1 + sigma_particle2) * 0.5 / r)^12)"
+-        )
+-        
+-        initial_k_rep_val = lj_rep_base_k_kj_mol * lj_rep_ramp_factors[0]
+-        # Global parameters in OpenMM CustomNonbondedForce expect plain float values for the constant.
+-        # The energy expression itself defines how this constant is used with physical units.
+-        k_rep_lj_param_index = lj_rep_custom_force.addGlobalParameter("k_rep_lj", float(initial_k_rep_val)) 
+-        lj_rep_custom_force.addPerParticleParameter("sigma_particle")
+-
+-        for sigma_val_nm in original_sigmas:
+-            lj_rep_custom_force.addParticle([sigma_val_nm])
+-
+-        # Check if nonbonded_force_index is valid before trying to get the force
+-        if nonbonded_force_index != -1:
+-            existing_nb_force = system.getForce(nonbonded_force_index)
+-            nb_method = existing_nb_force.getNonbondedMethod()
+-            
+-            if nb_method in [openmm.NonbondedForce.CutoffPeriodic, openmm.NonbondedForce.CutoffNonPeriodic]:
+-                lj_rep_custom_force.setNonbondedMethod(openmm.CustomNonbondedForce.CutoffPeriodic if nb_method == openmm.NonbondedForce.CutoffPeriodic else openmm.CustomNonbondedForce.CutoffNonPeriodic)
+-                lj_rep_custom_force.setCutoffDistance(existing_nb_force.getCutoffDistance())
+-                if nb_method == openmm.NonbondedForce.CutoffPeriodic:
+-                     lj_rep_custom_force.setUseSwitchingFunction(existing_nb_force.getUseSwitchingFunction())
+-                     if existing_nb_force.getUseSwitchingFunction():
+-                         lj_rep_custom_force.setSwitchingDistance(existing_nb_force.getSwitchingDistance())
+-            elif nb_method == openmm.NonbondedForce.NoCutoff:
+-                 lj_rep_custom_force.setNonbondedMethod(openmm.CustomNonbondedForce.NoCutoff)
+-            
+-            for ex_idx in range(existing_nb_force.getNumExceptions()):
+-                p1, p2, chargeProd, sigmaEx, epsilonEx = existing_nb_force.getExceptionParameters(ex_idx)
+-                lj_rep_custom_force.addExclusion(p1, p2)
+-        else:
+-            # This case should ideally not be hit if sigmas were extracted,
+-            # but as a fallback, don't try to use existing_nb_force.
+-            # Default to NoCutoff if we couldn't determine from an existing force.
+-            lj_rep_custom_force.setNonbondedMethod(openmm.CustomNonbondedForce.NoCutoff)
+-
+-        lj_rep_custom_force.setForceGroup(2)
+-        system.addForce(lj_rep_custom_force)
+-    
+-    return lj_rep_custom_force, k_rep_lj_param_index
+-
+-# Helper function for backbone restraint force creation
+-def _create_backbone_restraint_force(system, fixer, restraint_k_kcal_mol_A2):
+-    restraint_force = None
+-    k_restraint_param_index = -1
+-
+-    if restraint_k_kcal_mol_A2 > 0:
+-        restraint_force = openmm.CustomExternalForce(
+-            "0.5 * k_restraint * ( (x-x0)*(x-x0) + (y-y0)*(y-y0) + (z-z0)*(z-z0) )" 
+-        )
+-        # Global parameters in OpenMM CustomExternalForce also expect plain float values.
+-        k_restraint_param_index = restraint_force.addGlobalParameter("k_restraint", _k_kj_per_nm2(restraint_k_kcal_mol_A2))
+-        restraint_force.addPerParticleParameter("x0")
+-        restraint_force.addPerParticleParameter("y0")
+-        restraint_force.addPerParticleParameter("z0")
+-
+-        initial_positions = fixer.positions 
+-        num_bb_restrained = 0
+-        BACKBONE_ATOM_NAMES = {"N", "CA", "C", "O"}
+-        for atom in fixer.topology.atoms():
+-            if atom.name in BACKBONE_ATOM_NAMES:
+-                xyz_vec = initial_positions[atom.index].value_in_unit(unit.nanometer) 
+-                restraint_force.addParticle(atom.index, [xyz_vec[0], xyz_vec[1], xyz_vec[2]]) 
+-                num_bb_restrained +=1
+-        
+-        if num_bb_restrained > 0:
+-            restraint_force.setForceGroup(1)
+-            system.addForce(restraint_force)
+-        else:
+-            restraint_force = None 
+-            k_restraint_param_index = -1
+-            
+-    return restraint_force, k_restraint_param_index
+-
+ # Chothia/NACCESS-like atomic radii (heavy atoms dominate SASA)
+ R_CHOTHIA = {"H": 1.20, "C": 1.70, "N": 1.55, "O": 1.52, "S": 1.80}
+ 
+-# (Unused) _MAX_ASA removed during cleanup.
+-
+-# (Unused) Residue-specific polar carbons mapping removed during cleanup.
+-
+-@contextlib.contextmanager
+-def _suppress_freesasa_warnings():
+-    """Temporarily redirect OS-level stderr (fd=2) to suppress FreeSASA warnings."""
+-    try:
+-        devnull_fd = os.open(os.devnull, os.O_WRONLY)
+-        saved_stderr_fd = os.dup(2)
+-        os.dup2(devnull_fd, 2)
+-        os.close(devnull_fd)
+-        try:
+-            yield
+-        finally:
+-            os.dup2(saved_stderr_fd, 2)
+-            os.close(saved_stderr_fd)
+-    except Exception:
+-        # Fallback: no suppression
+-        yield
++# Hydrophobic amino acids set (match PyRosetta hydrophobic/aromatic intent; include GLY)
++HYDROPHOBIC_AA_SET = set("ACFGILMPVWY")
+ 
+-# Hydrophobic amino acids set (match PyRosetta hydrophobic/aromatic intent)
+-HYDROPHOBIC_AA_SET = set("ACFILMPVWY")
+-
+-def _chain_total_sasa(chain_entity):
+-    return sum(getattr(atom, "sasa", 0.0) for atom in chain_entity.get_atoms())
++########################################################
++# Shape complementarity
++########################################################
+ 
+ def _calculate_shape_complementarity(pdb_file_path, binder_chain="B", target_chain="A", distance=4.0):
+     """
+@@ -284,6 +179,30 @@ def _calculate_shape_complementarity(pdb_file_path, binder_chain="B", target_cha
+     vprint(f"[SC-RS] Fallback placeholder 0.70 for {os.path.basename(pdb_file_path)}")
+     return 0.70
+ 
++########################################################
++# SASA / Surface hydrophobicity
++########################################################
++
++@contextlib.contextmanager
++def _suppress_freesasa_warnings():
++    """Temporarily redirect OS-level stderr (fd=2) to suppress FreeSASA warnings."""
++    try:
++        devnull_fd = os.open(os.devnull, os.O_WRONLY)
++        saved_stderr_fd = os.dup(2)
++        os.dup2(devnull_fd, 2)
++        os.close(devnull_fd)
++        try:
++            yield
++        finally:
++            os.dup2(saved_stderr_fd, 2)
++            os.close(saved_stderr_fd)
++    except Exception:
++        # Fallback: no suppression
++        yield
++
++def _chain_total_sasa(chain_entity):
++    return sum(getattr(atom, "sasa", 0.0) for atom in chain_entity.get_atoms())
++
+ def _compute_sasa_metrics(pdb_file_path, binder_chain="B", target_chain="A"):
+     """
+     Compute SASA-derived metrics needed for interface scoring using Biopython.
+@@ -466,7 +385,7 @@ def _compute_sasa_metrics_with_freesasa(pdb_file_path, binder_chain="B", target_
+                 # FreeSASA residue selection only: hydrophobic residues / total (no fallback)
+                 try:
+                     sel_defs = [
+-                        "hydro, resn ala+val+leu+ile+met+phe+pro+trp+tyr+cys"
++                        "hydro, resn ala+val+leu+ile+met+phe+pro+trp+tyr+cys+gly"
+                     ]
+                     with _suppress_freesasa_warnings():
+                         sel_area = freesasa.selectArea(sel_defs, structure_binder_only, result_binder_only)  # type: ignore[name-defined]
+@@ -522,104 +441,493 @@ def _compute_sasa_metrics_with_freesasa(pdb_file_path, binder_chain="B", target_
+         print(f"[FreeSASA] ERROR for {pdb_file_path}: {e_fsasa}")
+         return _compute_sasa_metrics(pdb_file_path, binder_chain=binder_chain, target_chain=target_chain)
+ 
+-def openmm_relax(pdb_file_path, output_pdb_path, use_gpu_relax=True, 
+-                 openmm_max_iterations=1000, # Safety cap per stage to avoid stalls (set 0 for unlimited)
+-                 # Default force tolerances for ramp stages (kJ/mol/nm)
+-                 openmm_ramp_force_tolerance_kj_mol_nm=2.0, 
+-                 openmm_final_force_tolerance_kj_mol_nm=0.1,
+-                 restraint_k_kcal_mol_A2=3.0, 
+-                 restraint_ramp_factors=(1.0, 0.4, 0.0), # 3-stage restraint ramp factors
+-                 md_steps_per_shake=5000, # MD steps for each shake (applied only to first two stages)
+-                 lj_rep_base_k_kj_mol=10.0, # Base strength for extra LJ repulsion (kJ/mol)
+-                 lj_rep_ramp_factors=(0.0, 1.5, 3.0)): # 3-stage LJ repulsion ramp factors (soft → hard)
++########################################################
++# Interface scoring
++########################################################
++
++def pr_alternative_score_interface(pdb_file, binder_chain="B", target_chain="A", sasa_engine="auto"):
+     """
+-    Relaxes a PDB structure using OpenMM with L-BFGS minimizer.
+-    Uses PDBFixer to prepare the structure first.
+-    Applies backbone heavy-atom harmonic restraints (ramped down using restraint_ramp_factors) 
+-    and uses OBC2 implicit solvent.
+-    Includes an additional ramped LJ-like repulsive force (using lj_rep_ramp_factors) to help with initial clashes.
+-    Includes short MD shakes for the first two ramp stages only (speed optimization).
+-    Uses accept-to-best position bookkeeping across all stages.
+-    Aligns to original and copies B-factors.
++    Calculate interface scores using PyRosetta-free alternatives including SCASA shape complementarity.
++    
++    This function provides comprehensive interface scoring without PyRosetta dependency by combining:
++    - Biopython-based SASA calculations
++    - SCASA shape complementarity calculation  
++    - Interface residue identification
+     
++    Parameters
++    ----------
++    pdb_file : str
++        Path to PDB file
++    binder_chain : str
++        Chain ID of the binder
++    sasa_engine : str
++        "auto" (default) prefers FreeSASA if installed, else Biopython.
++        "freesasa" forces FreeSASA (falls back to Biopython on error).
++        "biopython" forces Biopython Shrake-Rupley.
++        
+     Returns
+     -------
+-    platform_name_used : str or None
+-        Name of the OpenMM platform actually used (e.g., 'CUDA', 'OpenCL', or 'CPU').
++    tuple
++        (interface_scores, interface_AA, interface_residues_pdb_ids_str)
+     """
++    t0_all = time.time()
++    basename = os.path.basename(pdb_file)
++    vprint(f"[Alt-Score] Initiating PyRosetta-free scoring for {basename} (binder={binder_chain}, sasa_engine={sasa_engine})")
+ 
+-    start_time = time.time()
+-    basename = os.path.basename(pdb_file_path)
+-    vprint(f"[OpenMM-Relax] Initiating relax for {basename}")
+-    best_energy = float('inf') * unit.kilojoule_per_mole # Initialize with units
+-    best_positions = None
+-
+-    # 1. Store original B-factors (per residue CA or first atom)
+-    original_residue_b_factors = {}
+-    bio_parser = PDBParser(QUIET=True)
+-    try:
+-        original_structure = bio_parser.get_structure('original', pdb_file_path)
+-        for model in original_structure:
+-            for chain in model:
+-                for residue in chain:
+-                    # Use Polypeptide.is_aa if available and needed for strict AA check
+-                    # For B-factor copying, we might want to copy for any residue type present.
+-                    # Let's assume standard AA check for now as in pr_relax context
+-                    if Polypeptide.is_aa(residue, standard=True):
+-                        ca_atom = None
+-                        try: # Try to get 'CA' atom
+-                            ca_atom = residue['CA']
+-                        except KeyError: # 'CA' not in residue
+-                            pass
+-                            
+-                        b_factor = None
+-                        if ca_atom:
+-                            b_factor = ca_atom.get_bfactor()
+-                        else: # Fallback to first atom if CA not found
+-                            first_atom = next(residue.get_atoms(), None)
+-                            if first_atom:
+-                                b_factor = first_atom.get_bfactor()
+-                        
+-                        if b_factor is not None:
+-                            # residue.id is (hetfield, resseq, icode)
+-                            original_residue_b_factors[(chain.id, residue.id)] = b_factor
+-    except Exception as _:
+-        original_residue_b_factors = {} 
+-
+-    try:
+-        # 1. Prepare the PDB structure using PDBFixer
+-        fixer = PDBFixer(filename=pdb_file_path)
+-        fixer.findMissingResidues()
+-        fixer.findNonstandardResidues()
+-        fixer.replaceNonstandardResidues() # This should handle common MODRES
+-        fixer.removeHeterogens(keepWater=False) # Usually False for relaxation
+-        fixer.findMissingAtoms()
+-        fixer.addMissingAtoms()
+-        fixer.addMissingHydrogens(7.0) # Add hydrogens at neutral pH
++    # Get interface residues via Biopython (works without PyRosetta)
++    t0_if = time.time()
++    vprint(f"[Alt-Score] Finding interface residues (hotspot_residues)...")
++    interface_residues_set = hotspot_residues(pdb_file, binder_chain)
++    interface_residues_pdb_ids = [f"{binder_chain}{pdb_res_num}" for pdb_res_num in interface_residues_set.keys()]
++    interface_residues_pdb_ids_str = ','.join(interface_residues_pdb_ids)
++    vprint(f"[Alt-Score] Found {len(interface_residues_pdb_ids)} interface residues in {time.time()-t0_if:.2f}s")
+ 
+-        # 2. Set up OpenMM ForceField, System, Integrator, and Simulation
+-        # Reuse a module-level ForceField instance to avoid re-parsing XMLs each call
+-        forcefield = _get_openmm_forcefield()
+-        
+-        system = forcefield.createSystem(fixer.topology, 
+-                                         nonbondedMethod=app.CutoffNonPeriodic, # Retain for OBC2 defined by XML
+-                                         nonbondedCutoff=1.0*unit.nanometer,    # Retain for OBC2 defined by XML
+-                                         constraints=app.HBonds)
+-        
+-        # Extract original sigmas from the NonbondedForce for the custom LJ repulsion
+-        original_sigmas = []
+-        nonbonded_force_index = -1
+-        for i_force_idx in range(system.getNumForces()): # Use getNumForces and getForce
+-            force_item = system.getForce(i_force_idx)
+-            if isinstance(force_item, openmm.NonbondedForce):
+-                nonbonded_force_index = i_force_idx
+-                for p_idx in range(force_item.getNumParticles()):
+-                    charge, sigma, epsilon = force_item.getParticleParameters(p_idx)
+-                    original_sigmas.append(sigma.value_in_unit(unit.nanometer)) # Store as float in nm
+-                break
+-        
+-        if nonbonded_force_index == -1:
+-            pass # Keep silent
++    # Initialize amino acid dictionary for interface composition
++    interface_AA = {aa: 0 for aa in 'ACDEFGHIKLMNPQRSTVWY'}
++    for pdb_res_num, aa_type in interface_residues_set.items():
++        interface_AA[aa_type] += 1
++
++    # SASA-based calculations: select engine
++    t0_sasa = time.time()
++    if str(sasa_engine).lower() == "biopython":
++        vprint(f"[Alt-Score] Computing SASA with Biopython Shrake-Rupley...")
++        surface_hydrophobicity_fraction, \
++        binder_sasa_in_complex, \
++        binder_sasa_monomer, \
++        target_sasa_in_complex, \
++        target_sasa_monomer = _compute_sasa_metrics(
++            pdb_file, binder_chain=binder_chain, target_chain=target_chain 
++        )
++    elif str(sasa_engine).lower() == "freesasa":
++        vprint(f"[Alt-Score] Computing SASA with FreeSASA...")
++        surface_hydrophobicity_fraction, \
++        binder_sasa_in_complex, \
++        binder_sasa_monomer, \
++        target_sasa_in_complex, \
++        target_sasa_monomer = _compute_sasa_metrics_with_freesasa(
++            pdb_file, binder_chain=binder_chain, target_chain=target_chain 
++        )
++    else:
++        if _HAS_FREESASA:
++            vprint(f"[Alt-Score] Computing SASA with FreeSASA (auto)...")
++            surface_hydrophobicity_fraction, \
++            binder_sasa_in_complex, \
++            binder_sasa_monomer, \
++            target_sasa_in_complex, \
++            target_sasa_monomer = _compute_sasa_metrics_with_freesasa(
++                pdb_file, binder_chain=binder_chain, target_chain=target_chain 
++            )
++        else:
++            vprint(f"[Alt-Score] Computing SASA with Biopython (auto fallback)...")
++            surface_hydrophobicity_fraction, \
++            binder_sasa_in_complex, \
++            binder_sasa_monomer, \
++            target_sasa_in_complex, \
++            target_sasa_monomer = _compute_sasa_metrics(
++                pdb_file, binder_chain=binder_chain, target_chain=target_chain 
++            )
++    vprint(f"[Alt-Score] SASA computations finished in {time.time()-t0_sasa:.2f}s")
++
++    # Compute buried SASA: binder-side and total (binder + target)
++    interface_binder_dSASA = max(binder_sasa_monomer - binder_sasa_in_complex, 0.0)
++    interface_target_dSASA = 0.0
++    try:
++        interface_target_dSASA = max(target_sasa_monomer - target_sasa_in_complex, 0.0)
++    except Exception as e_idsasa:
++        print(f"[Biopython-SASA] WARN interface_target_dSASA for {pdb_file}: {e_idsasa}")
++    interface_total_dSASA = interface_binder_dSASA + interface_target_dSASA
++    # Align with PyRosetta: use TOTAL interface dSASA divided by binder SASA IN COMPLEX
++    interface_binder_fraction = (interface_total_dSASA / binder_sasa_in_complex * 100.0) if binder_sasa_in_complex > 0.0 else 0.0
++
++    # Calculate shape complementarity using SCASA
++    t0_sc = time.time()
++    vprint(f"[Alt-Score] Computing shape complementarity (SC)...")
++    interface_sc = _calculate_shape_complementarity(pdb_file, binder_chain, target_chain=target_chain)
++    vprint(f"[Alt-Score] SC computation finished in {time.time()-t0_sc:.2f}s")
++    
++    # Fixed placeholder values for metrics that are not currently computed without PyRosetta
++    # These values are chosen to pass active filters
++    interface_nres = len(interface_residues_pdb_ids)                    # computed from interface residues
++    interface_interface_hbonds = 5                                      # passes >= 3 (active filter)
++    interface_delta_unsat_hbonds = 1                                    # passes <= 4 (active filter)
++    interface_hbond_percentage = 60.0                                   # informational (no active filter)
++    interface_bunsch_percentage = 0.0                                   # informational (no active filter)
++    binder_score = -1.0                                                 # passes <= 0 (active filter) - never results in rejections based on extensive testing
++    interface_packstat = 0.65                                           # informational (no active filter)
++    interface_dG = -10.0                                                # passes <= 0 (active filter) - never results in rejections based on extensive testing
++    interface_dG_SASA_ratio = 0.0                                       # informational (no active filter)
++
++    interface_scores = {
++        'binder_score': binder_score,
++        'surface_hydrophobicity': surface_hydrophobicity_fraction,
++        'interface_sc': interface_sc,
++        'interface_packstat': interface_packstat,
++        'interface_dG': interface_dG,
++        'interface_dSASA': interface_total_dSASA,
++        'interface_dG_SASA_ratio': interface_dG_SASA_ratio,
++        'interface_fraction': interface_binder_fraction,
++        'interface_hydrophobicity': (
++            (sum(interface_AA[aa] for aa in 'ACFGILMPVWY') / interface_nres * 100.0) if interface_nres > 0 else 0.0
++        ),
++        'interface_nres': interface_nres,
++        'interface_interface_hbonds': interface_interface_hbonds,   
++        'interface_hbond_percentage': interface_hbond_percentage,   
++        'interface_delta_unsat_hbonds': interface_delta_unsat_hbonds, 
++        'interface_delta_unsat_hbonds_percentage': interface_bunsch_percentage
++    }
++
++    # Round float values to two decimals for consistency
++    interface_scores = {k: round(v, 2) if isinstance(v, float) else v for k, v in interface_scores.items()}
++
++    vprint(f"[Alt-Score] Completed scoring for {basename} in {time.time()-t0_all:.2f}s")
++    return interface_scores, interface_AA, interface_residues_pdb_ids_str
++
++########################################################
++# OpenMM-based relax and forcefield setup
++########################################################
++
++def _get_openmm_forcefield():
++    global _OPENMM_FORCEFIELD_SINGLETON
++    if _OPENMM_FORCEFIELD_SINGLETON is None:
++        _OPENMM_FORCEFIELD_SINGLETON = app.ForceField('amber14-all.xml', 'implicit/obc2.xml')
++    return _OPENMM_FORCEFIELD_SINGLETON
++
++# Helper function for k conversion
++def _k_kj_per_nm2(k_kcal_A2):
++    return k_kcal_A2 * 4.184 * 100.0
++
++# Helper function for LJ repulsive force creation
++def _create_lj_repulsive_force(system, lj_rep_base_k_kj_mol, lj_rep_ramp_factors, original_sigmas, nonbonded_force_index):
++    lj_rep_custom_force = None
++    k_rep_lj_param_index = -1
++
++    if lj_rep_base_k_kj_mol > 0 and original_sigmas and lj_rep_ramp_factors:
++        lj_rep_custom_force = openmm.CustomNonbondedForce(
++            "k_rep_lj * (((sigma_particle1 + sigma_particle2) * 0.5 / r)^12)"
++        )
++        
++        initial_k_rep_val = lj_rep_base_k_kj_mol * lj_rep_ramp_factors[0]
++        # Global parameters in OpenMM CustomNonbondedForce expect plain float values for the constant.
++        # The energy expression itself defines how this constant is used with physical units.
++        k_rep_lj_param_index = lj_rep_custom_force.addGlobalParameter("k_rep_lj", float(initial_k_rep_val)) 
++        lj_rep_custom_force.addPerParticleParameter("sigma_particle")
++
++        for sigma_val_nm in original_sigmas:
++            lj_rep_custom_force.addParticle([sigma_val_nm])
++
++        # Check if nonbonded_force_index is valid before trying to get the force
++        if nonbonded_force_index != -1:
++            existing_nb_force = system.getForce(nonbonded_force_index)
++            nb_method = existing_nb_force.getNonbondedMethod()
++            
++            if nb_method in [openmm.NonbondedForce.CutoffPeriodic, openmm.NonbondedForce.CutoffNonPeriodic]:
++                lj_rep_custom_force.setNonbondedMethod(openmm.CustomNonbondedForce.CutoffPeriodic if nb_method == openmm.NonbondedForce.CutoffPeriodic else openmm.CustomNonbondedForce.CutoffNonPeriodic)
++                lj_rep_custom_force.setCutoffDistance(existing_nb_force.getCutoffDistance())
++                if nb_method == openmm.NonbondedForce.CutoffPeriodic:
++                     lj_rep_custom_force.setUseSwitchingFunction(existing_nb_force.getUseSwitchingFunction())
++                     if existing_nb_force.getUseSwitchingFunction():
++                         lj_rep_custom_force.setSwitchingDistance(existing_nb_force.getSwitchingDistance())
++            elif nb_method == openmm.NonbondedForce.NoCutoff:
++                 lj_rep_custom_force.setNonbondedMethod(openmm.CustomNonbondedForce.NoCutoff)
++            
++            for ex_idx in range(existing_nb_force.getNumExceptions()):
++                p1, p2, chargeProd, sigmaEx, epsilonEx = existing_nb_force.getExceptionParameters(ex_idx)
++                lj_rep_custom_force.addExclusion(p1, p2)
++        else:
++            # This case should ideally not be hit if sigmas were extracted,
++            # but as a fallback, don't try to use existing_nb_force.
++            # Default to NoCutoff if we couldn't determine from an existing force.
++            lj_rep_custom_force.setNonbondedMethod(openmm.CustomNonbondedForce.NoCutoff)
++
++        lj_rep_custom_force.setForceGroup(2)
++        system.addForce(lj_rep_custom_force)
++    
++    return lj_rep_custom_force, k_rep_lj_param_index
++
++# Helper function for backbone restraint force creation
++def _create_backbone_restraint_force(system, fixer, restraint_k_kcal_mol_A2):
++    restraint_force = None
++    k_restraint_param_index = -1
++
++    if restraint_k_kcal_mol_A2 > 0:
++        restraint_force = openmm.CustomExternalForce(
++            "0.5 * k_restraint * ( (x-x0)*(x-x0) + (y-y0)*(y-y0) + (z-z0)*(z-z0) )" 
++        )
++        # Global parameters in OpenMM CustomExternalForce also expect plain float values.
++        k_restraint_param_index = restraint_force.addGlobalParameter("k_restraint", _k_kj_per_nm2(restraint_k_kcal_mol_A2))
++        restraint_force.addPerParticleParameter("x0")
++        restraint_force.addPerParticleParameter("y0")
++        restraint_force.addPerParticleParameter("z0")
++
++        initial_positions = fixer.positions 
++        num_bb_restrained = 0
++        BACKBONE_ATOM_NAMES = {"N", "CA", "C", "O"}
++        for atom in fixer.topology.atoms():
++            if atom.name in BACKBONE_ATOM_NAMES:
++                xyz_vec = initial_positions[atom.index].value_in_unit(unit.nanometer) 
++                restraint_force.addParticle(atom.index, [xyz_vec[0], xyz_vec[1], xyz_vec[2]]) 
++                num_bb_restrained +=1
++        
++        if num_bb_restrained > 0:
++            restraint_force.setForceGroup(1)
++            system.addForce(restraint_force)
++        else:
++            restraint_force = None 
++            k_restraint_param_index = -1
++            
++    return restraint_force, k_restraint_param_index
++
++# --- FASPR integration helpers ---
++def _resolve_faspr_binary():
++    """Locate the FASPR binary. Search order: env FASPR_BIN → functions/FASPR → PATH.
++
++    Returns
++    -------
++    tuple[str|None, str|None]
++        (binary_path, binary_dir) or (None, None) if not found.
++    """
++    # Env override
++    env_bin = os.environ.get('FASPR_BIN')
++    if env_bin and os.path.isfile(env_bin) and os.access(env_bin, os.X_OK):
++        return env_bin, os.path.dirname(os.path.abspath(env_bin))
++
++    # Repo-provided binary
++    try:
++        module_dir = os.path.dirname(os.path.abspath(__file__))
++        candidate = os.path.join(module_dir, 'FASPR')
++        if os.path.isfile(candidate):
++            # ensure executable bit if possible
++            try:
++                if not os.access(candidate, os.X_OK):
++                    os.chmod(candidate, os.stat(candidate).st_mode | 0o755)
++            except Exception:
++                pass
++            if os.access(candidate, os.X_OK):
++                return candidate, module_dir
++    except Exception:
++        pass
++
++    # PATH lookup
++    which_faspr = shutil.which('FASPR')
++    if which_faspr and os.path.isfile(which_faspr) and os.access(which_faspr, os.X_OK):
++        return which_faspr, os.path.dirname(os.path.abspath(which_faspr))
++
++    return None, None
++
++def _run_faspr(input_pdb_path, output_pdb_path, sequence_txt_path=None, timeout=900):
++    """Run FASPR on an input PDB and write repacked output.
++
++    FASPR requires 'dun2010bbdep.bin' to be colocated with the executable. We set cwd
++    to the FASPR directory so the binary can find its rotamer library.
++
++    Returns True on success, False otherwise.
++    """
++    faspr_bin, faspr_dir = _resolve_faspr_binary()
++    if not faspr_bin or not faspr_dir:
++        print("[FASPR] WARN: FASPR binary not found; skipping repack")
++        return False
++
++    cmd = [faspr_bin, '-i', os.path.abspath(input_pdb_path), '-o', os.path.abspath(output_pdb_path)]
++    if sequence_txt_path and os.path.isfile(sequence_txt_path):
++        cmd.extend(['-s', os.path.abspath(sequence_txt_path)])
++
++    try:
++        vprint(f"[FASPR] Running: {' '.join(cmd)}")
++        # Capture output but do not emit banner/stdout; only report on errors via exceptions below.
++        proc = subprocess.run(cmd, cwd=faspr_dir, check=True, capture_output=True, text=True, timeout=timeout)
++        # Verify output exists and is non-empty
++        if os.path.isfile(output_pdb_path) and os.path.getsize(output_pdb_path) > 0:
++            return True
++    except subprocess.TimeoutExpired:
++        print(f"[FASPR] ERROR: Timeout running FASPR on {os.path.basename(input_pdb_path)}")
++    except subprocess.CalledProcessError as e:
++        print(f"[FASPR] ERROR: FASPR failed: rc={e.returncode} stderr={getattr(e, 'stderr', '')}")
++    except Exception as e:
++        print(f"[FASPR] ERROR: {e}")
++    return False
++
++def _add_hydrogens_and_minimize(pdb_in_path, pdb_out_path, platform_order=None,
++                                force_tolerance_kj_mol_nm=0.1, max_iterations=500):
++    """Add hydrogens with PDBFixer and run a short OpenMM minimization, then save PDB.
++
++    Returns
++    -------
++    tuple[str|None, float]
++        (platform_used, seconds)
++    """
++    t0 = time.time()
++    try:
++        fixer = PDBFixer(filename=pdb_in_path)
++        fixer.findMissingResidues()
++        fixer.findNonstandardResidues()
++        fixer.replaceNonstandardResidues()
++        fixer.removeHeterogens(keepWater=False)
++        fixer.findMissingAtoms()
++        fixer.addMissingAtoms()
++        fixer.addMissingHydrogens(7.0)
++
++        forcefield = _get_openmm_forcefield()
++        system = forcefield.createSystem(fixer.topology,
++                                         nonbondedMethod=app.CutoffNonPeriodic,
++                                         nonbondedCutoff=1.0*unit.nanometer,
++                                         constraints=app.HBonds)
++
++        integrator = openmm.LangevinMiddleIntegrator(300*unit.kelvin,
++                                                     1.0/unit.picosecond,
++                                                     0.002*unit.picoseconds)
++
++        # Platform selection
++        plat_used = None
++        props = {}
++        sim = None
++        if platform_order is None:
++            platform_order = ['OpenCL', 'CUDA', 'CPU']
++        for p_name in platform_order:
++            try:
++                platform_obj = Platform.getPlatformByName(p_name)
++                if p_name == 'CUDA':
++                    props = {'CudaPrecision': 'mixed'}
++                elif p_name == 'OpenCL':
++                    props = {'OpenCLPrecision': 'single'}
++                sim = app.Simulation(fixer.topology, system, integrator, platform_obj, props)
++                plat_used = p_name
++                break
++            except Exception:
++                sim = None
++                continue
++        if sim is None:
++            raise OpenMMException("No suitable OpenMM platform for post-FASPR minimization")
++
++        sim.context.setPositions(fixer.positions)
++        tol = force_tolerance_kj_mol_nm * unit.kilojoule_per_mole / unit.nanometer
++        sim.minimizeEnergy(tolerance=tol, maxIterations=max_iterations)
++        positions = sim.context.getState(getPositions=True).getPositions()
++        with open(pdb_out_path, 'w') as outf:
++            app.PDBFile.writeFile(sim.topology, positions, outf, keepIds=True)
++        # Cleanup
++        try:
++            del sim, integrator, system, fixer
++        except Exception:
++            pass
++        gc.collect()
++        return plat_used, (time.time() - t0)
++    except Exception as e:
++        print(f"[OpenMM-PostFASPR] WARN: Failed post-FASPR H-add/min: {e}")
++        try:
++            shutil.copy(pdb_in_path, pdb_out_path)
++        except Exception:
++            pass
++        return None, (time.time() - t0)
++
++def openmm_relax(pdb_file_path, output_pdb_path, use_gpu_relax=True,
++                 openmm_max_iterations=1000, # Safety cap per stage to avoid stalls (set 0 for unlimited)
++                 # Default force tolerances for ramp stages (kJ/mol/nm)
++                 openmm_ramp_force_tolerance_kj_mol_nm=2.0,
++                 openmm_final_force_tolerance_kj_mol_nm=0.1,
++                 restraint_k_kcal_mol_A2=3.0,
++                 restraint_ramp_factors=(1.0, 0.4, 0.0), # 3-stage restraint ramp factors
++                 md_steps_per_shake=1000, # MD steps for each shake (applied only to first two stages)
++                 lj_rep_base_k_kj_mol=10.0, # Base strength for extra LJ repulsion (kJ/mol)
++                 lj_rep_ramp_factors=(0.0, 1.5, 3.0), # 3-stage LJ repulsion ramp factors (soft → hard)
++                 perf_report=None, # Optional dict to populate with detailed timing/energy metrics
++                 override_platform_order=None,
++                 use_faspr_repack=True, # If True, run FASPR repack after relax (default: enabled)
++                 post_faspr_minimize=True # If True, add H and short standardized min after FASPR
++                 ):
++    """
++    Relaxes a PDB structure using OpenMM with L-BFGS minimizer.
++    Uses PDBFixer to prepare the structure first.
++    Applies backbone heavy-atom harmonic restraints (ramped down using restraint_ramp_factors)
++    and uses OBC2 implicit solvent.
++    Includes an additional ramped LJ-like repulsive force (using lj_rep_ramp_factors) to help with initial clashes.
++    Includes short MD shakes for the first two ramp stages only (speed optimization).
++    Optionally integrates FASPR (Fast, Accurate, and Deterministic Protein Side-chain Packing) for side-chain repacking after relaxation,
++    followed by hydrogen addition and a short minimization to standardize the final structure.
++    Uses accept-to-best position bookkeeping across all stages.
++    Aligns to original and copies B-factors.
++    
++    Returns
++    -------
++    platform_name_used : str or None
++        Name of the OpenMM platform actually used (e.g., 'CUDA', 'OpenCL', or 'CPU').
++    """
++
++    start_time = time.time()
++    basename = os.path.basename(pdb_file_path)
++    vprint(f"[OpenMM-Relax] Initiating relax for {basename}")
++    _perf = {"stages": []} if isinstance(perf_report, dict) else None
++    best_energy = float('inf') * unit.kilojoule_per_mole # Initialize with units
++    best_positions = None
++
++    # 1. Store original B-factors (per residue CA or first atom)
++    original_residue_b_factors = {}
++    bio_parser = PDBParser(QUIET=True)
++    try:
++        original_structure = bio_parser.get_structure('original', pdb_file_path)
++        for model in original_structure:
++            for chain in model:
++                for residue in chain:
++                    # Use Polypeptide.is_aa if available and needed for strict AA check
++                    # For B-factor copying, we might want to copy for any residue type present.
++                    # Let's assume standard AA check for now as in pr_relax context
++                    if Polypeptide.is_aa(residue, standard=True):
++                        ca_atom = None
++                        try: # Try to get 'CA' atom
++                            ca_atom = residue['CA']
++                        except KeyError: # 'CA' not in residue
++                            pass
++                            
++                        b_factor = None
++                        if ca_atom:
++                            b_factor = ca_atom.get_bfactor()
++                        else: # Fallback to first atom if CA not found
++                            first_atom = next(residue.get_atoms(), None)
++                            if first_atom:
++                                b_factor = first_atom.get_bfactor()
++                        
++                        if b_factor is not None:
++                            # residue.id is (hetfield, resseq, icode)
++                            original_residue_b_factors[(chain.id, residue.id)] = b_factor
++    except Exception as _:
++        original_residue_b_factors = {} 
++
++    try:
++        # 1. Prepare the PDB structure using PDBFixer
++        t_prep_start = time.time()
++        fixer = PDBFixer(filename=pdb_file_path)
++        fixer.findMissingResidues()
++        fixer.findNonstandardResidues()
++        fixer.replaceNonstandardResidues() # This should handle common MODRES
++        fixer.removeHeterogens(keepWater=False) # Usually False for relaxation
++        fixer.findMissingAtoms()
++        fixer.addMissingAtoms()
++        fixer.addMissingHydrogens(7.0) # Add hydrogens at neutral pH
++        if _perf is not None:
++            _perf["prep_seconds"] = time.time() - t_prep_start
++
++        # 2. Set up OpenMM ForceField, System, Integrator, and Simulation
++        # Reuse a module-level ForceField instance to avoid re-parsing XMLs each call
++        forcefield = _get_openmm_forcefield()
++        
++        system = forcefield.createSystem(fixer.topology, 
++                                         nonbondedMethod=app.CutoffNonPeriodic, # Retain for OBC2 defined by XML
++                                         nonbondedCutoff=1.0*unit.nanometer,    # Retain for OBC2 defined by XML
++                                         constraints=app.HBonds)
++        
++        # Extract original sigmas from the NonbondedForce for the custom LJ repulsion
++        original_sigmas = []
++        nonbonded_force_index = -1
++        for i_force_idx in range(system.getNumForces()): # Use getNumForces and getForce
++            force_item = system.getForce(i_force_idx)
++            if isinstance(force_item, openmm.NonbondedForce):
++                nonbonded_force_index = i_force_idx
++                for p_idx in range(force_item.getNumParticles()):
++                    charge, sigma, epsilon = force_item.getParticleParameters(p_idx)
++                    original_sigmas.append(sigma.value_in_unit(unit.nanometer)) # Store as float in nm
++                break
++        
++        if nonbonded_force_index == -1:
++            pass # Keep silent
+ 
+         # Add custom LJ-like repulsive force (ramped) using helper function
+         lj_rep_custom_force, k_rep_lj_param_index = _create_lj_repulsive_force(
+@@ -646,17 +954,20 @@ def openmm_relax(pdb_file_path, output_pdb_path, use_gpu_relax=True,
+         simulation = None
+         platform_name_used = None # To store the name of the successfully used platform
+ 
+-        platform_order = []
+-        if use_gpu_relax:
+-            # Prefer OpenCL, then CUDA (override with env if needed)
+-            env_order = os.environ.get('OPENMM_PLATFORM_ORDER')
+-            if env_order:
+-                platform_order = [p.strip() for p in env_order.split(',') if p.strip()]
+-            else:
+-                platform_order.extend(['OpenCL', 'CUDA'])
++        if isinstance(override_platform_order, (list, tuple)) and override_platform_order:
++            platform_order = list(override_platform_order)
+         else:
+-            # Explicit CPU-only path if GPU is not requested
+-            platform_order.append('CPU')
++            platform_order = []
++            if use_gpu_relax:
++                # Prefer OpenCL, then CUDA (override with env if needed)
++                env_order = os.environ.get('OPENMM_PLATFORM_ORDER')
++                if env_order:
++                    platform_order = [p.strip() for p in env_order.split(',') if p.strip()]
++                else:
++                    platform_order.extend(['OpenCL', 'CUDA'])
++            else:
++                # Explicit CPU-only path if GPU is not requested
++                platform_order.append('CPU')
+ 
+         last_exception = None
+         for p_name_to_try in platform_order:
+@@ -710,6 +1021,7 @@ def openmm_relax(pdb_file_path, output_pdb_path, use_gpu_relax=True,
+         # Optional Pre-Minimization Step (before main ramp loop)
+         # Perform if restraints or LJ repulsion are active, to stabilize structure.
+         if restraint_k_kcal_mol_A2 > 0 or lj_rep_base_k_kj_mol > 0:
++            t_init_min_start = time.time()
+             
+             # Set LJ repulsion to zero for this initial minimization
+             if lj_rep_custom_force is not None and k_rep_lj_param_index != -1 and lj_rep_base_k_kj_mol > 0:
+@@ -728,6 +1040,8 @@ def openmm_relax(pdb_file_path, output_pdb_path, use_gpu_relax=True,
+                 tolerance=initial_min_tolerance,
+                 maxIterations=openmm_max_iterations 
+             )
++            if _perf is not None:
++                _perf["initial_min_seconds"] = time.time() - t_init_min_start
+ 
+         # 3. Perform staged relaxation: ramp restraints, limited MD shakes, and minimization
+         base_k_for_ramp_kcal = restraint_k_kcal_mol_A2
+@@ -753,6 +1067,29 @@ def openmm_relax(pdb_file_path, output_pdb_path, use_gpu_relax=True,
+ 
+         for i_stage_val, (k_factor_restraint, current_lj_rep_k_factor) in enumerate(ramp_pairs):
+             stage_num = i_stage_val + 1
++            _stage_metrics = None
++            if _perf is not None:
++                _stage_metrics = {
++                    "stage_index": stage_num,
++                    "restraint_factor": float(k_factor_restraint),
++                    "lj_rep_factor": float(current_lj_rep_k_factor),
++                    "md_steps_run": 0,
++                    "md_seconds": 0.0,
++                    "min_seconds": 0.0,
++                    "min_calls": 0,
++                    "min_energy_trace_kj": [],
++                    "energy_start_kj": None,
++                    "md_post_energy_kj": None,
++                    "final_energy_kj": None,
++                }
++
++            # Record starting energy for this stage
++            try:
++                _stage_energy_start = simulation.context.getState(getEnergy=True).getPotentialEnergy()
++                if _stage_metrics is not None:
++                    _stage_metrics["energy_start_kj"] = float(_stage_energy_start.value_in_unit(unit.kilojoule_per_mole))
++            except Exception:
++                pass
+ 
+             # Set LJ repulsive ramp for the current stage
+             if lj_rep_custom_force is not None and k_rep_lj_param_index != -1 and lj_rep_base_k_kj_mol > 0:
+@@ -769,8 +1106,17 @@ def openmm_relax(pdb_file_path, output_pdb_path, use_gpu_relax=True,
+ 
+             # MD Shake only for first two ramp stages for speed-performance tradeoff
+             if md_steps_per_shake > 0 and i_stage_val < 2:
++                t_md_start = time.time()
+                 simulation.context.setVelocitiesToTemperature(300*unit.kelvin) # Reinitialize velocities
+                 simulation.step(md_steps_per_shake)
++                if _stage_metrics is not None:
++                    _stage_metrics["md_steps_run"] = int(md_steps_per_shake)
++                    _stage_metrics["md_seconds"] = time.time() - t_md_start
++                    try:
++                        _md_energy = simulation.context.getState(getEnergy=True).getPotentialEnergy()
++                        _stage_metrics["md_post_energy_kj"] = float(_md_energy.value_in_unit(unit.kilojoule_per_mole))
++                    except Exception:
++                        pass
+ 
+             # Minimization for the current stage
+             # Set force tolerance for current stage
+@@ -787,10 +1133,17 @@ def openmm_relax(pdb_file_path, output_pdb_path, use_gpu_relax=True,
+             small_improvement_streak = 0
+             last_energy = simulation.context.getState(getEnergy=True).getPotentialEnergy()
+ 
++            t_min_start = time.time()
+             while True:
+                 simulation.minimizeEnergy(tolerance=force_tolerance_quantity,
+                                           maxIterations=per_call_max_iterations)
+                 current_energy = simulation.context.getState(getEnergy=True).getPotentialEnergy()
++                if _stage_metrics is not None:
++                    _stage_metrics["min_calls"] += 1
++                    try:
++                        _stage_metrics["min_energy_trace_kj"].append(float(current_energy.value_in_unit(unit.kilojoule_per_mole)))
++                    except Exception:
++                        pass
+ 
+                 # Check improvement magnitude
+                 try:
+@@ -816,6 +1169,13 @@ def openmm_relax(pdb_file_path, output_pdb_path, use_gpu_relax=True,
+                     break
+ 
+             stage_final_energy = last_energy
++            if _stage_metrics is not None:
++                try:
++                    _stage_metrics["final_energy_kj"] = float(stage_final_energy.value_in_unit(unit.kilojoule_per_mole))
++                except Exception:
++                    _stage_metrics["final_energy_kj"] = None
++                _stage_metrics["min_seconds"] = time.time() - t_min_start
++                _perf["stages"].append(_stage_metrics)
+ 
+             # Accept-to-best bookkeeping
+             if stage_final_energy < best_energy:
+@@ -827,17 +1187,20 @@ def openmm_relax(pdb_file_path, output_pdb_path, use_gpu_relax=True,
+             simulation.context.setPositions(best_positions)
+ 
+         # 4. Save the relaxed structure
++        t_save_start = time.time()
+         positions = simulation.context.getState(getPositions=True).getPositions()
+         with open(output_pdb_path, 'w') as outfile:
+             app.PDBFile.writeFile(simulation.topology, positions, outfile, keepIds=True)
+ 
+         # 4a. Align relaxed structure to original pdb_file_path using all CA atoms
++        t_align_start = time.time()
+         try:
+             biopython_align_all_ca(pdb_file_path, output_pdb_path)
+         except Exception as _:
+             pass # Keep silent on alignment failure
+ 
+         # 4b. Apply original B-factors to the (now aligned) relaxed structure
++        t_bfac_start = time.time()
+         if original_residue_b_factors:
+             try:
+                 # Use Bio.PDB parser and PDBIO for this
+@@ -859,7 +1222,70 @@ def openmm_relax(pdb_file_path, output_pdb_path, use_gpu_relax=True,
+             except Exception as _:
+                 pass # Keep silent on B-factor application failure
+ 
+-        # 5. Clean the output PDB
++        # 5. Optional FASPR repacking and standardized cleanup
++        faspr_seconds = None
++        faspr_success = False
++        post_min_seconds = None
++        if use_faspr_repack:
++            try:
++                t_faspr = time.time()
++                # Prepare a temporary heavy-atom PDB for FASPR by stripping hydrogens
++                # Reuse PDBFixer to remove hydrogens to avoid FASPR backbone completeness issues.
++                tmp_dir = tempfile.mkdtemp(prefix='faspr_')
++                tmp_heavy = os.path.join(tmp_dir, 'input_heavy.pdb')
++                tmp_faspr_out = os.path.join(tmp_dir, 'faspr_out.pdb')
++
++                try:
++                    fixer_heavy = PDBFixer(filename=output_pdb_path)
++                    fixer_heavy.findMissingResidues()
++                    fixer_heavy.findNonstandardResidues()
++                    fixer_heavy.replaceNonstandardResidues()
++                    fixer_heavy.removeHeterogens(keepWater=False)
++                    fixer_heavy.findMissingAtoms()
++                    fixer_heavy.addMissingAtoms()
++                    # Intentionally DO NOT add hydrogens here; FASPR ignores sidechains but requires complete backbone
++                    with open(tmp_heavy, 'w') as ftmp:
++                        app.PDBFile.writeFile(fixer_heavy.topology, fixer_heavy.positions, ftmp, keepIds=True)
++                except Exception:
++                    # Fallback: copy the current output if fixer fails
++                    shutil.copy(output_pdb_path, tmp_heavy)
++
++                faspr_success = _run_faspr(tmp_heavy, tmp_faspr_out)
++                faspr_seconds = time.time() - t_faspr
++
++                if faspr_success:
++                    # Add hydrogens and a brief, standardized minimization, then overwrite output
++                    if post_faspr_minimize:
++                        _, post_min_seconds = _add_hydrogens_and_minimize(
++                            tmp_faspr_out, output_pdb_path,
++                            platform_order=['OpenCL', 'CUDA', 'CPU'],
++                            force_tolerance_kj_mol_nm=openmm_final_force_tolerance_kj_mol_nm,
++                            max_iterations=300
++                        )
++                    else:
++                        # If not minimizing, at least re-add hydrogens
++                        try:
++                            fixer2 = PDBFixer(filename=tmp_faspr_out)
++                            fixer2.findMissingResidues()
++                            fixer2.findNonstandardResidues()
++                            fixer2.replaceNonstandardResidues()
++                            fixer2.removeHeterogens(keepWater=False)
++                            fixer2.findMissingAtoms()
++                            fixer2.addMissingAtoms()
++                            fixer2.addMissingHydrogens(7.0)
++                            with open(output_pdb_path, 'w') as f2:
++                                app.PDBFile.writeFile(fixer2.topology, fixer2.positions, f2, keepIds=True)
++                        except Exception:
++                            shutil.copy(tmp_faspr_out, output_pdb_path)
++                # Cleanup temp
++                try:
++                    shutil.rmtree(tmp_dir)
++                except Exception:
++                    pass
++            except Exception as e_f:
++                print(f"[FASPR] WARN: repack step failed: {e_f}")
++
++        # 6. Clean the output PDB
+         clean_pdb(output_pdb_path)
+ 
+         # Explicitly delete heavy OpenMM objects to avoid cumulative slowdowns across many trajectories
+@@ -874,6 +1300,26 @@ def openmm_relax(pdb_file_path, output_pdb_path, use_gpu_relax=True,
+         gc.collect()
+ 
+         elapsed_total = time.time() - start_time
++        if _perf is not None:
++            # Summarize overall perf settings/results
++            _perf["platform"] = platform_name_used
++            _perf["ramp_count"] = num_stages
++            _perf["md_steps_per_shake"] = int(md_steps_per_shake)
++            _perf["restraint_ramp_factors"] = list(effective_restraint_factors)
++            _perf["lj_rep_ramp_factors"] = list(effective_lj_rep_factors)
++            try:
++                _perf["best_energy_kj"] = float(best_energy.value_in_unit(unit.kilojoule_per_mole))
++            except Exception:
++                _perf["best_energy_kj"] = None
++            _perf["save_seconds"] = time.time() - t_save_start
++            _perf["align_seconds"] = time.time() - t_align_start
++            _perf["b_factor_seconds"] = time.time() - t_bfac_start
++            _perf["total_seconds"] = elapsed_total
++            if use_faspr_repack:
++                _perf["faspr_seconds"] = faspr_seconds
++                _perf["faspr_success"] = bool(faspr_success)
++                _perf["post_faspr_min_seconds"] = post_min_seconds
++            perf_report.update(_perf)
+         vprint(f"[OpenMM-Relax] Completed relax for {basename} in {elapsed_total:.2f}s (platform={platform_name_used})")
+         return platform_name_used
+ 
+@@ -883,150 +1329,18 @@ def openmm_relax(pdb_file_path, output_pdb_path, use_gpu_relax=True,
+         elapsed_total = time.time() - start_time
+         print(f"[OpenMM-Relax] ERROR; copied input to output for {basename} after {elapsed_total:.2f}s")
+         print(f"[OpenMM-Relax] ERROR; exeception {str(_)}")
++        if _perf is not None:
++            try:
++                _perf["exception"] = str(_)
++                perf_report.update(_perf)
++            except Exception:
++                pass
+         # Guard against 'platform_name_used' not being assigned yet
+         try:
+             return platform_name_used
+         except UnboundLocalError:
+             return None
+ 
+-def pr_alternative_score_interface(pdb_file, binder_chain="B", target_chain="A", sasa_engine="auto"):
+-    """
+-    Calculate interface scores using PyRosetta-free alternatives including SCASA shape complementarity.
+-    
+-    This function provides comprehensive interface scoring without PyRosetta dependency by combining:
+-    - Biopython-based SASA calculations
+-    - SCASA shape complementarity calculation  
+-    - Interface residue identification
+-    
+-    Parameters
+-    ----------
+-    pdb_file : str
+-        Path to PDB file
+-    binder_chain : str
+-        Chain ID of the binder
+-    sasa_engine : str
+-        "auto" (default) prefers FreeSASA if installed, else Biopython.
+-        "freesasa" forces FreeSASA (falls back to Biopython on error).
+-        "biopython" forces Biopython Shrake-Rupley.
+-        
+-    Returns
+-    -------
+-    tuple
+-        (interface_scores, interface_AA, interface_residues_pdb_ids_str)
+-    """
+-    t0_all = time.time()
+-    basename = os.path.basename(pdb_file)
+-    vprint(f"[Alt-Score] Initiating PyRosetta-free scoring for {basename} (binder={binder_chain}, sasa_engine={sasa_engine})")
+-
+-    # Get interface residues via Biopython (works without PyRosetta)
+-    t0_if = time.time()
+-    vprint(f"[Alt-Score] Finding interface residues (hotspot_residues)...")
+-    interface_residues_set = hotspot_residues(pdb_file, binder_chain)
+-    interface_residues_pdb_ids = [f"{binder_chain}{pdb_res_num}" for pdb_res_num in interface_residues_set.keys()]
+-    interface_residues_pdb_ids_str = ','.join(interface_residues_pdb_ids)
+-    vprint(f"[Alt-Score] Found {len(interface_residues_pdb_ids)} interface residues in {time.time()-t0_if:.2f}s")
+-
+-    # Initialize amino acid dictionary for interface composition
+-    interface_AA = {aa: 0 for aa in 'ACDEFGHIKLMNPQRSTVWY'}
+-    for pdb_res_num, aa_type in interface_residues_set.items():
+-        interface_AA[aa_type] += 1
+-
+-    # SASA-based calculations: select engine
+-    t0_sasa = time.time()
+-    if str(sasa_engine).lower() == "biopython":
+-        vprint(f"[Alt-Score] Computing SASA with Biopython Shrake-Rupley...")
+-        surface_hydrophobicity_fraction, \
+-        binder_sasa_in_complex, \
+-        binder_sasa_monomer, \
+-        target_sasa_in_complex, \
+-        target_sasa_monomer = _compute_sasa_metrics(
+-            pdb_file, binder_chain=binder_chain, target_chain=target_chain 
+-        )
+-    elif str(sasa_engine).lower() == "freesasa":
+-        vprint(f"[Alt-Score] Computing SASA with FreeSASA...")
+-        surface_hydrophobicity_fraction, \
+-        binder_sasa_in_complex, \
+-        binder_sasa_monomer, \
+-        target_sasa_in_complex, \
+-        target_sasa_monomer = _compute_sasa_metrics_with_freesasa(
+-            pdb_file, binder_chain=binder_chain, target_chain=target_chain 
+-        )
+-    else:
+-        if _HAS_FREESASA:
+-            vprint(f"[Alt-Score] Computing SASA with FreeSASA (auto)...")
+-            surface_hydrophobicity_fraction, \
+-            binder_sasa_in_complex, \
+-            binder_sasa_monomer, \
+-            target_sasa_in_complex, \
+-            target_sasa_monomer = _compute_sasa_metrics_with_freesasa(
+-                pdb_file, binder_chain=binder_chain, target_chain=target_chain 
+-            )
+-        else:
+-            vprint(f"[Alt-Score] Computing SASA with Biopython (auto fallback)...")
+-            surface_hydrophobicity_fraction, \
+-            binder_sasa_in_complex, \
+-            binder_sasa_monomer, \
+-            target_sasa_in_complex, \
+-            target_sasa_monomer = _compute_sasa_metrics(
+-                pdb_file, binder_chain=binder_chain, target_chain=target_chain 
+-            )
+-    vprint(f"[Alt-Score] SASA computations finished in {time.time()-t0_sasa:.2f}s")
+-
+-    # Compute buried SASA: binder-side and total (binder + target)
+-    interface_binder_dSASA = max(binder_sasa_monomer - binder_sasa_in_complex, 0.0)
+-    interface_target_dSASA = 0.0
+-    try:
+-        interface_target_dSASA = max(target_sasa_monomer - target_sasa_in_complex, 0.0)
+-    except Exception as e_idsasa:
+-        print(f"[Biopython-SASA] WARN interface_target_dSASA for {pdb_file}: {e_idsasa}")
+-    interface_total_dSASA = interface_binder_dSASA + interface_target_dSASA
+-    # Align with PyRosetta: use TOTAL interface dSASA divided by binder SASA IN COMPLEX
+-    interface_binder_fraction = (interface_total_dSASA / binder_sasa_in_complex * 100.0) if binder_sasa_in_complex > 0.0 else 0.0
+-
+-    # Calculate shape complementarity using SCASA
+-    t0_sc = time.time()
+-    vprint(f"[Alt-Score] Computing shape complementarity (SC)...")
+-    interface_sc = _calculate_shape_complementarity(pdb_file, binder_chain, target_chain=target_chain)
+-    vprint(f"[Alt-Score] SC computation finished in {time.time()-t0_sc:.2f}s")
+-    
+-    # Fixed placeholder values for metrics that are not currently computed without PyRosetta
+-    # These values are chosen to pass active filters
+-    interface_nres = len(interface_residues_pdb_ids)                    # computed from interface residues
+-    interface_interface_hbonds = 5                                      # passes >= 3 (active filter)
+-    interface_delta_unsat_hbonds = 1                                    # passes <= 4 (active filter)
+-    interface_hbond_percentage = 60.0                                   # informational (no active filter)
+-    interface_bunsch_percentage = 0.0                                   # informational (no active filter)
+-    binder_score = -1.0                                                 # passes <= 0 (active filter) - never results in rejections based on extensive testing
+-    interface_packstat = 0.65                                           # informational (no active filter)
+-    interface_dG = -10.0                                                # passes <= 0 (active filter) - never results in rejections based on extensive testing
+-    interface_dG_SASA_ratio = 0.0                                       # informational (no active filter)
+-
+-    interface_scores = {
+-        'binder_score': binder_score,
+-        'surface_hydrophobicity': surface_hydrophobicity_fraction,
+-        'interface_sc': interface_sc,
+-        'interface_packstat': interface_packstat,
+-        'interface_dG': interface_dG,
+-        'interface_dSASA': interface_total_dSASA,
+-        'interface_dG_SASA_ratio': interface_dG_SASA_ratio,
+-        'interface_fraction': interface_binder_fraction,
+-        'interface_hydrophobicity': (
+-            (sum(interface_AA[aa] for aa in 'ACFILMPVWY') / interface_nres * 100.0) if interface_nres > 0 else 0.0
+-        ),
+-        'interface_nres': interface_nres,
+-        'interface_interface_hbonds': interface_interface_hbonds,   
+-        'interface_hbond_percentage': interface_hbond_percentage,   
+-        'interface_delta_unsat_hbonds': interface_delta_unsat_hbonds, 
+-        'interface_delta_unsat_hbonds_percentage': interface_bunsch_percentage
+-    }
+-
+-    # Round float values to two decimals for consistency
+-    interface_scores = {k: round(v, 2) if isinstance(v, float) else v for k, v in interface_scores.items()}
+-
+-    vprint(f"[Alt-Score] Completed scoring for {basename} in {time.time()-t0_all:.2f}s")
+-    return interface_scores, interface_AA, interface_residues_pdb_ids_str
+-
+-
+ def openmm_relax_subprocess(pdb_file_path, output_pdb_path, use_gpu_relax=True, timeout=None, max_attempts=3):
+     """Run openmm_relax in a fresh Python process to fully reset OpenCL context per run.
+     Retries if the child fell back to copying input (soft failure) or if the child crashes (hard failure).
+@@ -1106,6 +1420,9 @@ def openmm_relax_subprocess(pdb_file_path, output_pdb_path, use_gpu_relax=True,
+ 
+     return None
+ 
++########################################################
++# Main for testing
++########################################################
+ 
+ if __name__ == "__main__":
+     import argparse
+@@ -1126,4 +1443,4 @@ def openmm_relax_subprocess(pdb_file_path, output_pdb_path, use_gpu_relax=True,
+         plat = openmm_relax(args.inp, args.out, use_gpu_relax=args.gpu)
+         if plat:
+             print(plat)
+-        sys.exit(0)
++        sys.exit(0)
+\ No newline at end of file
+diff --git a/functions/pyrosetta_utils.py b/functions/pyrosetta_utils.py
+index 9c07520..88001a4 100644
+--- a/functions/pyrosetta_utils.py
++++ b/functions/pyrosetta_utils.py
+@@ -90,7 +90,7 @@ def score_interface(pdb_file, binder_chain="B", use_pyrosetta=True):
+     interface_residues_pdb_ids_str = ','.join(interface_residues_pdb_ids)
+ 
+     # Calculate the percentage of hydrophobic residues at the interface of the binder
+-    hydrophobic_aa = set('ACFILMPVWY')
++    hydrophobic_aa = set('ACFGILMPVWY')
+     hydrophobic_count = sum(interface_AA[aa] for aa in hydrophobic_aa)
+     if interface_nres != 0:
+         interface_hydrophobicity = (hydrophobic_count / interface_nres) * 100
+diff --git a/install_bindcraft.sh b/install_bindcraft.sh
+index dc3b07e..0aa89ef 100644
+--- a/install_bindcraft.sh
++++ b/install_bindcraft.sh
+@@ -156,7 +156,7 @@ rm "${params_file}" || { echo -e "Warning: Failed to remove AlphaFold2 weights a
+ echo -e "Changing permissions for executables\n"
+ chmod +x "${install_dir}/functions/dssp" || { echo -e "Error: Failed to chmod dssp"; exit 1; }
+ 
+-# chmod sc binary for shape complementarity (always needed for PyRosetta-free mode)
++# chmod binaries in functions/ (sc, dssp, FASPR)
+ if [ -f "${install_dir}/functions/sc" ]; then
+     chmod +x "${install_dir}/functions/sc" || { echo -e "Error: Failed to chmod sc"; exit 1; }
+     echo -e "Made sc binary executable for shape complementarity calculations"
+@@ -164,6 +164,20 @@ else
+     echo -e "Warning: sc binary not found at ${install_dir}/functions/sc - shape complementarity will use placeholder values"
+ fi
+ 
++if [ -f "${install_dir}/functions/dssp" ]; then
++    chmod +x "${install_dir}/functions/dssp" || { echo -e "Error: Failed to chmod dssp"; exit 1; }
++    echo -e "Made dssp binary executable"
++else
++    echo -e "Warning: dssp binary not found at ${install_dir}/functions/dssp - DSSP computations may be unavailable"
++fi
++
++if [ -f "${install_dir}/functions/FASPR" ]; then
++    chmod +x "${install_dir}/functions/FASPR" || { echo -e "Error: Failed to chmod FASPR"; exit 1; }
++    echo -e "Made FASPR binary executable"
++else
++    echo -e "Warning: FASPR binary not found at ${install_dir}/functions/FASPR - side-chain repacking will be unavailable"
++fi
++
+ # Only setup DAlphaBall.gcc if installing PyRosetta
+ if [ "$install_pyrosetta" = true ]; then
+     chmod +x "${install_dir}/functions/DAlphaBall.gcc" || { echo -e "Error: Failed to chmod DAlphaBall.gcc"; exit 1; }

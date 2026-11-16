@@ -1,0 +1,774 @@
+diff --git a/.github/actions/cubin-packs/action.yml b/.github/actions/cubin-packs/action.yml
+new file mode 100644
+index 00000000..15baa7bf
+--- /dev/null
++++ b/.github/actions/cubin-packs/action.yml
+@@ -0,0 +1,25 @@
++# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
++# SPDX-License-Identifier: Apache-2.0
++name: Fetch the CUBIN packs
++description: >
++  Pull the LFS-tracked CUBIN packs and nothing else, so a job that needs them
++  does not pay for the whole LFS store and no workflow repeats the pattern.
++
++runs:
++  using: composite
++  steps:
++    # One home for the pattern. `.gitattributes` is the source of truth -- it is
++    # what marks these paths as LFS, and tests/contract/test_build_contract.py
++    # asserts the line -- and a copy that drifts from it fails quietly: the pull
++    # matches nothing, the packs stay pointers, and the error surfaces later as
++    # "is a Git LFS pointer" rather than as a stale glob.
++    #
++    # Callers check out with `lfs: false` and keep their credentials: this is an
++    # internal repo and the pull authenticates with the header checkout leaves in
++    # the local git config.
++    - shell: bash
++      env:
++        PACKS: cpp/kernels/cutedsl_*/cubins/packs/*.tar.xz
++      run: |
++        git lfs pull --include="${PACKS}"
++        echo "materialized $(git lfs ls-files -I "${PACKS}" | wc -l) packs"
+diff --git a/.github/actions/prek/action.yml b/.github/actions/prek/action.yml
+new file mode 100644
+index 00000000..1903c108
+--- /dev/null
++++ b/.github/actions/prek/action.yml
+@@ -0,0 +1,56 @@
++# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
++# SPDX-License-Identifier: Apache-2.0
++name: Set up prek
++description: >
++  Install the prek pinned in requirements-dev.txt and restore its hook
++  environments, so a job runs the same hook versions a contributor gets from
++  `pip install -e '.[dev]'`.
++
++inputs:
++  cache:
++    description: >
++      Restore and save the hook environments. Worth it for a job that builds
++      every hook in prek.toml; for one that builds a single hook the round trip
++      costs about what the build does.
++    default: 'true'
++
++runs:
++  using: composite
++  steps:
++    # requirements-dev.txt owns the pin; reading it here keeps CI from drifting
++    # away from what `.[dev]` installs.
++    - name: Resolve the pinned prek version
++      id: pin
++      shell: bash
++      run: |
++        version=$(sed -n 's/^prek==\([^ #]*\).*/\1/p' requirements-dev.txt)
++        if [[ -z "${version}" ]]; then
++          echo "::error file=requirements-dev.txt::no 'prek==<version>' pin found"
++          exit 1
++        fi
++        echo "version=${version}" >>"${GITHUB_OUTPUT}"
++
++    - uses: ./.github/actions/python
++
++    # prek builds one environment per hook repo under its cache root. Keying on
++    # prek.toml means a bumped `rev` builds fresh environments instead of reusing
++    # the ones pinned to the old revision, and `restore-keys` then hands that
++    # build the environments for the hooks that did *not* move -- prek's cache is
++    # keyed per repo+rev on disk, so a partial restore is additive, never stale.
++    # Without it, editing one `exclude` line rebuilds all nine.
++    - uses: actions/cache@v6
++      if: inputs.cache == 'true'
++      with:
++        path: ~/.cache/prek
++        key: prek-${{ runner.os }}-${{ steps.pin.outputs.version }}-${{ hashFiles('prek.toml') }}
++        restore-keys: |
++          prek-${{ runner.os }}-${{ steps.pin.outputs.version }}-
++
++    # Through the environment, never interpolated into the script: this value is
++    # read out of the pull request's own requirements-dev.txt, and `${{ }}`
++    # expands before bash ever sees it.
++    # https://docs.github.com/en/actions/reference/security/secure-use
++    - shell: bash
++      env:
++        PREK_VERSION: ${{ steps.pin.outputs.version }}
++      run: pip install "prek==${PREK_VERSION}"
+diff --git a/.github/actions/python/action.yml b/.github/actions/python/action.yml
+new file mode 100644
+index 00000000..71620e8f
+--- /dev/null
++++ b/.github/actions/python/action.yml
+@@ -0,0 +1,30 @@
++# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
++# SPDX-License-Identifier: Apache-2.0
++name: Set up Python
++description: >
++  Install the oldest Python pyproject.toml supports, so every job agrees on one
++  interpreter and none of them repeats the version.
++
++runs:
++  using: composite
++  steps:
++    # The floor, not `python-version-file: pyproject.toml`. That input resolves a
++    # range to the *highest* match, and `requires-python` is ">=3.12,<4.0", so it
++    # would build the extension against whatever 3.x the runner ships. The wheel
++    # this repo publishes is cp312 -- docker/Dockerfile builds it on
++    # nvcr.io/nvidia/pytorch, whose python is 3.12 -- and a gate that compiles a
++    # different ABI than the one shipped is not the gate docs/dev.md promises.
++    - name: Resolve the requires-python floor
++      id: floor
++      shell: bash
++      run: |
++        version=$(sed -n 's/^requires-python *= *"[^0-9]*\([0-9]*\.[0-9]*\).*/\1/p' pyproject.toml)
++        if [[ -z "${version}" ]]; then
++          echo "::error file=pyproject.toml::no 'requires-python' floor found"
++          exit 1
++        fi
++        echo "version=${version}" >>"${GITHUB_OUTPUT}"
++
++    - uses: actions/setup-python@v7
++      with:
++        python-version: ${{ steps.floor.outputs.version }}
+diff --git a/.github/scripts/check-dco.sh b/.github/scripts/check-dco.sh
+new file mode 100755
+index 00000000..becb26be
+--- /dev/null
++++ b/.github/scripts/check-dco.sh
+@@ -0,0 +1,88 @@
++#!/usr/bin/env bash
++# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
++# SPDX-License-Identifier: Apache-2.0
++#
++# Licensed under the Apache License, Version 2.0 (the "License");
++# you may not use this file except in compliance with the License.
++# You may obtain a copy of the License at
++#
++# http://www.apache.org/licenses/LICENSE-2.0
++#
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS,
++# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++# See the License for the specific language governing permissions and
++# limitations under the License.
++
++# Enforce the Developer Certificate of Origin on every commit a pull request
++# adds: each needs a Signed-off-by trailer carrying the author's own address,
++# which is what `git commit -s` writes. See CONTRIBUTING.md.
++#
++# Usage: check-dco.sh <base-sha> <head-sha>
++set -euo pipefail
++
++if (($# != 2)); then
++  echo "usage: check-dco.sh <base-sha> <head-sha>" >&2
++  exit 2
++fi
++base="$1"
++head="$2"
++
++# The base of a pull request is the tip of the target branch, which moves on
++# without the branch. Only commits after the fork point belong to this PR, so
++# ask git where the two diverged rather than diffing against the tip.
++if ! merge_base="$(git merge-base "${base}" "${head}")"; then
++  echo "cannot find a merge base for ${base} and ${head} -- was the branch" \
++    "checked out with fetch-depth: 0?" >&2
++  exit 2
++fi
++
++# --no-merges: a merge from the target branch carries no contribution of its
++# own, and the merge commits GitHub itself writes are never signed off.
++#
++# Read in a `while` over a process substitution rather than `mapfile`, which
++# bash 3.2 -- what macOS still ships, and what a contributor testing this
++# locally runs -- does not have.
++checked=0
++failed=0
++while read -r sha; do
++  checked=$((checked + 1))
++  author_email="$(git show --no-patch --format='%ae' "${sha}")"
++  subject="$(git show --no-patch --format='%s' "${sha}")"
++  # Trailers only. A "Signed-off-by:" written into the middle of a commit body
++  # is prose, and git does not treat it as a sign-off either.
++  signoffs="$(git show --no-patch --format='%(trailers:key=Signed-off-by,valueonly)' "${sha}")"
++  if grep -qiF "<${author_email}>" <<<"${signoffs}"; then
++    echo "ok    ${sha:0:12} ${subject}"
++    continue
++  fi
++  failed=1
++  echo "FAIL  ${sha:0:12} ${subject}"
++  if [[ -z "${signoffs//[[:space:]]/}" ]]; then
++    echo "        no Signed-off-by trailer"
++  else
++    echo "        signed off by ${signoffs//$'\n'/, }, but authored by <${author_email}>"
++  fi
++done < <(git rev-list --no-merges "${merge_base}..${head}")
++
++if ((checked == 0)); then
++  echo "no commits to check between ${merge_base:0:12} and ${head:0:12}"
++  exit 0
++fi
++((failed)) || exit 0
++
++cat >&2 <<EOF
++
++Every commit must carry a Signed-off-by trailer matching its author address,
++certifying the Developer Certificate of Origin (https://developercertificate.org/).
++
++Set the identity git records, then sign off the whole branch:
++
++  git config user.name "Your Name"
++  git config user.email "your@email.com"
++  git rebase --signoff ${merge_base:0:12}
++  git push --force-with-lease
++
++New commits pick it up from \`git commit -s\`. See CONTRIBUTING.md.
++EOF
++exit 1
+diff --git a/.github/scripts/check-pr-title.sh b/.github/scripts/check-pr-title.sh
+new file mode 100755
+index 00000000..60600eb9
+--- /dev/null
++++ b/.github/scripts/check-pr-title.sh
+@@ -0,0 +1,73 @@
++#!/usr/bin/env bash
++# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
++# SPDX-License-Identifier: Apache-2.0
++#
++# Licensed under the Apache License, Version 2.0 (the "License");
++# you may not use this file except in compliance with the License.
++# You may obtain a copy of the License at
++#
++# http://www.apache.org/licenses/LICENSE-2.0
++#
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS,
++# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++# See the License for the specific language governing permissions and
++# limitations under the License.
++
++# Check a pull-request title against the Conventional Commits rule prek's
++# commit-msg hook applies to commit messages. PRs are squash-merged with
++# `squash_merge_commit_title = PR_TITLE`, so this title is the subject of the
++# commit that lands on main -- the same gate, moved to where it will be read.
++# The repo setting is load-bearing: the `COMMIT_OR_PR_TITLE` default would use
++# the branch's own subject whenever a PR carries exactly one commit, and that
++# subject is linted only by the commit-msg hook, which is opt-in.
++#
++# The check is prek itself, so commitizen's version and configuration stay
++# single-sourced in prek.toml and pyproject.toml. AGENTS.md allows an optional
++# tracker reference in front of the summary; commitizen anchors its pattern at
++# the start of the message and would reject one, so strip it first.
++#
++# Usage: check-pr-title.sh "<title>"
++set -euo pipefail
++
++if (($# != 1)); then
++  echo "usage: check-pr-title.sh <title>" >&2
++  exit 2
++fi
++title="$1"
++
++# `[PROJ-123]` (JIRA key) or `[5123456]` (NVBug ID), and the space behind it.
++summary="${title}"
++if [[ "${summary}" =~ ^\[([A-Za-z][A-Za-z0-9]*-)?[0-9]+\][[:space:]]*(.*)$ ]]; then
++  summary="${BASH_REMATCH[2]}"
++fi
++
++# commitizen reads the message from a file, the way the commit-msg hook feeds it
++# .git/COMMIT_EDITMSG.
++message_file="$(mktemp)"
++trap 'rm -f "${message_file}"' EXIT
++printf '%s\n' "${summary}" >"${message_file}"
++
++echo "checking title: ${title}"
++if [[ "${summary}" != "${title}" ]]; then
++  echo "tracker reference stripped, checking: ${summary}"
++fi
++
++if prek run commitizen --stage commit-msg --commit-msg-filename "${message_file}"; then
++  exit 0
++fi
++
++cat >&2 <<'EOF'
++
++The pull request title must be a Conventional Commits subject, optionally
++preceded by a tracker reference:
++
++  feat: add a triangle-attention fallback for sm80
++  fix(pipeline): stop dropping the last MSA row
++  [PROJ-123] docs: describe the CUBIN pack layout
++
++Types: build, bump, chore, ci, docs, feat, fix, perf, refactor, revert, style,
++test. Append `!` before the colon for a breaking change. See AGENTS.md and
++docs/coding.md, and edit the title -- this check re-runs on its own.
++EOF
++exit 1
+diff --git a/.github/workflows/blossom-ci.yml b/.github/workflows/blossom-ci.yml
+new file mode 100644
+index 00000000..bda410f4
+--- /dev/null
++++ b/.github/workflows/blossom-ci.yml
+@@ -0,0 +1,173 @@
++# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
++# SPDX-License-Identifier: Apache-2.0
++#
++# The bridge to internal CI. GitHub owns the trigger, the authorization and the
++# result; everything that needs a GPU, the internal registry or a secret runs on
++# the Blossom Jenkins master behind the firewall.
++#
++# A maintainer comments `/build-ci` on a pull request. `Authorization` checks the
++# actor against the list below and then against Blossom's own database plus Duo
++# MFA; `Vulnerability scan` runs the security scan on the PR head; `Job trigger`
++# webhooks Jenkins; Jenkins calls back with `workflow_dispatch`, which is what
++# `Upload log` answers.
++#
++# This chain is advisory, never a required check: it only reports once someone
++# asks for it, so requiring it would block every pull request until a maintainer
++# types the command. See .ai.dump/github-prep/plan.md for the full split.
++#
++# The comment is the only trigger, and it is also the API: `gh pr comment <n>
++# --body '/build-ci'` fires the same event with the same `github.actor`, so a
++# script can start a run without anyone opening a browser. The Run workflow
++# button is *not* a second trigger -- see `Upload log` below.
++name: Blossom-CI
++
++on:
++  issue_comment:
++    types: [created]
++  # Jenkins dispatches this back at the end of the run to publish its log.
++  workflow_dispatch:
++    inputs:
++      platform:
++        description: 'runs-on argument'
++        required: false
++      args:
++        description: 'argument'
++        required: false
++
++# The repository default is `read`, so the scopes `blossom-ci` needs have to be
++# named. They are not documented -- it is an opaque binary on the self-hosted
++# runner -- so this is read off what it demonstrably does: post a commit status
++# on the pull request head, and comment the Jenkins log link back. Narrow it
++# further once a run has succeeded and the audit log shows what it really used;
++# widen it only against a specific failure, never speculatively.
++permissions:
++  contents: read
++  statuses: write
++  pull-requests: write
++
++# No `concurrency:` either. Cancelling a superseded run would drop the callback
++# that publishes the Jenkins log while the Jenkins job itself keeps running.
++
++jobs:
++  # Two gates, in this order: the allowlist decides who may spend GPU hours, and
++  # `blossom-ci` AUTH then re-checks the actor against Blossom's own database and
++  # Duo MFA. Onboarding is therefore two steps either way -- the variable below,
++  # and the Blossom service desk. Someone added here but not there gets past the
++  # first gate and is stopped at the second.
++  #
++  # The list lives in the repository variable `BLOSSOM_AUTHORIZED_USERS`
++  # (Settings -> Secrets and variables -> Actions -> Variables), holding a JSON
++  # array of GitHub logins. It is seeded from the `bioir` team but is not the
++  # team: approving a run spends GPU hours on internal hardware, and not every
++  # maintainer needs that. Expect the two lists to diverge, and do not wire this
++  # to team membership.
++  #
++  #     ["letientai299", "thanhnamitit", ...]
++  #
++  # A variable, not a secret: `secrets` is not one of the contexts available to
++  # a job-level `if:`, and `vars` is.
++  # https://docs.github.com/actions/reference/workflows-and-actions/contexts#context-availability
++  #
++  # `|| '[]'` makes an unset variable fail closed -- nobody is authorized --
++  # rather than erroring on every comment. A malformed value still errors, which
++  # is what should happen to a typo in an authorization list.
++  Authorization:
++    name: Authorization
++    runs-on: blossom
++    # Short by design. This job talks to the Blossom database and Duo; if that
++    # round trip has not finished in five minutes it is broken, not slow, and
++    # the self-hosted runner has one executor to spare.
++    timeout-minutes: 5
++    outputs:
++      args: ${{ env.args }}
++
++    # `github.event.issue.pull_request` is what distinguishes a comment on a PR
++    # from a comment on an issue; without it the job starts on issues and fails
++    # with no ref to check out.
++    if: |
++      github.event.issue.pull_request &&
++      github.event.comment.body == '/build-ci' &&
++      contains(fromJSON(vars.BLOSSOM_AUTHORIZED_USERS || '[]'), github.actor)
++    steps:
++      - name: Check if comment is issued by authorized person
++        run: blossom-ci
++        env:
++          OPERATION: 'AUTH'
++          REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
++          REPO_KEY_DATA: ${{ secrets.BLOSSOM_KEY }}
++
++  Vulnerability-scan:
++    name: Vulnerability scan
++    needs: [Authorization]
++    runs-on: ubuntu-latest
++    timeout-minutes: 30
++    steps:
++      # The pull request head, named by the Authorization output rather than by
++      # the event, so the scan reads the code the maintainer approved for a run.
++      #
++      # No `lfs: true`: the tracked binaries are CUBIN packs, sample MSAs and
++      # structures -- 88.2 MB the scan does not read. It looks at declared
++      # dependencies and source.
++      - name: Checkout code
++        uses: actions/checkout@v7
++        with:
++          # Nothing here talks to the remote after checkout, and this is the one
++          # job that runs unreviewed contributor code.
++          persist-credentials: false
++          repository: ${{ fromJson(needs.Authorization.outputs.args).repo }}
++          ref: ${{ fromJson(needs.Authorization.outputs.args).ref }}
++
++      - name: Run blossom action
++        # SHA-pinned like every third-party action here, per NVIDIA ProdSec.
++        # The sibling repos all track `@main`; if Blossom SRE says the action
++        # must move in lockstep with their server side, this reverts to `@main`
++        # in one line.
++        uses: NVIDIA/blossom-action@2b0c950b993808dc31f80a1ccc32615902e39032 # main, 2026-07-13
++        env:
++          REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
++          REPO_KEY_DATA: ${{ secrets.BLOSSOM_KEY }}
++        with:
++          args1: ${{ fromJson(needs.Authorization.outputs.args).args1 }}
++          args2: ${{ fromJson(needs.Authorization.outputs.args).args2 }}
++          args3: ${{ fromJson(needs.Authorization.outputs.args).args3 }}
++
++  # CI_SERVER holds one `<jenkins-url>@<job-name>` pair, which is why one
++  # command maps to one Jenkins job. What that job runs is decided on the
++  # Jenkins side, not here.
++  Job-trigger:
++    name: Start ci job
++    needs: [Vulnerability-scan]
++    runs-on: blossom
++    # The webhook out, not the Jenkins run behind it. Jenkins owns its own
++    # timeout; this job is done once the trigger is acknowledged.
++    timeout-minutes: 5
++    steps:
++      - name: Start ci job
++        run: blossom-ci
++        env:
++          OPERATION: 'START-CI-JOB'
++          CI_SERVER: ${{ secrets.CI_SERVER }}
++          REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
++
++  # The callback half: Jenkins finishes, dispatches this workflow, and this job
++  # publishes the log link onto the pull request. It is deliberately not part of
++  # the chain above -- it runs on a different event.
++  #
++  # `workflow_dispatch` is Jenkins' channel back, not a way for a human to start
++  # a run: the three jobs above need the `args` that `blossom-ci` AUTH builds
++  # from the comment payload, and a dispatch carries no comment. But the Run
++  # workflow button appears for anyone with write access all the same, so guard
++  # on the payload Jenkins always sends -- otherwise a curious click starts a job
++  # on the self-hosted runner with nothing to post.
++  Upload-Log:
++    name: Upload log
++    runs-on: blossom
++    timeout-minutes: 5
++    if: github.event_name == 'workflow_dispatch' && github.event.inputs.args
++    steps:
++      - name: Jenkins log for pull request ${{ fromJson(github.event.inputs.args).pr }} (click here)
++        run: blossom-ci
++        env:
++          OPERATION: 'POST-PROCESSING'
++          CI_SERVER: ${{ secrets.CI_SERVER }}
++          REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+new file mode 100644
+index 00000000..7546627b
+--- /dev/null
++++ b/.github/workflows/ci.yml
+@@ -0,0 +1,81 @@
++# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
++# SPDX-License-Identifier: Apache-2.0
++#
++# The two gates that run on every push and need nothing but a checkout: the
++# hooks prek.toml pins, and the slice of the suite that needs no GPU, no CUDA
++# driver and no built extension. The wheel is wheel.yml, kept apart because it
++# is the only one worth starting by hand.
++#
++# Everything heavier runs on internal hardware through Blossom, which a
++# maintainer has to ask for by comment -- this is the signal a contributor gets
++# without waiting.
++name: CI
++
++on:
++  pull_request:
++  push:
++    branches: [main]
++
++concurrency:
++  group: ${{ github.workflow }}-${{ github.ref }}
++  # Only for pull requests: a superseded push to a branch is wasted work, but
++  # cancelling a run on main would leave that commit with no result.
++  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
++
++permissions:
++  contents: read
++
++jobs:
++  # Named `prek`, not `style`: the job name is the context the ruleset requires.
++  prek:
++    name: prek
++    runs-on: ubuntu-latest
++    timeout-minutes: 10
++    steps:
++      # No `lfs: true` and no submodules. Every hook reads text: the LFS-tracked
++      # binaries and the 3rdparty trees are either excluded in prek.toml or match
++      # no hook's file types, so the pointer files left behind are never opened.
++      # Nothing here talks to the remote after checkout, so drop the token too.
++      - uses: actions/checkout@v7
++        with:
++          persist-credentials: false
++      - uses: ./.github/actions/prek
++      - run: prek run --all-files --show-diff-on-failure --color=always
++
++  contract:
++    name: contract
++    runs-on: ubuntu-latest
++    timeout-minutes: 10
++    steps:
++      # The LFS content is load-bearing, but only a slice of it.
++      # test_committed_corpus_materializes materializes the real committed CUBIN
++      # packs and says why: "An LFS pointer or a corrupt pack fails here, not at
++      # pip install time." Verified by rewriting the packs as pointers -- the
++      # test fails with "is a Git LFS pointer", which is it doing its job.
++      #
++      # `lfs: true` would fetch every object in the repo, measured at 88.2 MB
++      # against the 2.5 MB of packs these suites read; the rest is sample MSAs
++      # and structures nothing here opens. So fetch the packs by pattern.
++      #
++      # The credentials stay: this is an internal repo, and `git lfs pull` below
++      # authenticates with the header checkout leaves in the local git config.
++      #
++      # No submodules: neither suite imports bionemo_ir or reads 3rdparty/.
++      - uses: actions/checkout@v7
++        with:
++          lfs: false
++      - uses: ./.github/actions/cubin-packs
++
++      - uses: ./.github/actions/python
++
++      # requirements-dev.txt owns the floor, the same way the prek action reads
++      # its pin, so a bump there moves CI with it. `shell: bash` sets pipefail,
++      # which turns a pattern that stops matching into a failed step rather than
++      # a silent no-op install.
++      - name: Install the declared pytest
++        shell: bash
++        run: grep -E '^pytest[<>=!~]' requirements-dev.txt | pip install -r /dev/stdin
++
++      # Nothing here imports torch or the package itself, so there is no install
++      # step and no build. tests/pytest.ini supplies the options.
++      - run: pytest tests/contract tests/cubin
+diff --git a/.github/workflows/pr.yml b/.github/workflows/pr.yml
+new file mode 100644
+index 00000000..096f199d
+--- /dev/null
++++ b/.github/workflows/pr.yml
+@@ -0,0 +1,66 @@
++# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
++# SPDX-License-Identifier: Apache-2.0
++#
++# Checks on the pull request itself rather than its diff: the title, which
++# becomes the squashed commit subject, and the sign-off CONTRIBUTING.md
++# requires on every commit.
++name: Pull request
++
++on:
++  pull_request:
++    # `edited` so retitling a PR re-runs the title check; without it a rejected
++    # title stays red after the author fixes it. Both jobs share this list, so
++    # each carries an `if` for the events it has nothing to say about -- a job
++    # skipped by a conditional reports success and satisfies a required check.
++    # https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/collaborating-on-repositories-with-code-quality-features/troubleshooting-required-status-checks
++    types: [opened, edited, reopened, synchronize]
++
++concurrency:
++  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
++  cancel-in-progress: true
++
++permissions:
++  contents: read
++
++jobs:
++  title:
++    name: Title
++    runs-on: ubuntu-latest
++    timeout-minutes: 10
++    # `edited` also fires on a body edit, which cannot change the title.
++    if: github.event.action != 'edited' || github.event.changes.title
++    steps:
++      - uses: actions/checkout@v7
++        with:
++          persist-credentials: false
++      # No hook cache: this builds commitizen's environment and nothing else,
++      # and saving one environment costs about what building it does.
++      - uses: ./.github/actions/prek
++        with:
++          cache: 'false'
++      # Through the environment, never interpolated into the script: a PR title
++      # is untrusted input and `${{ }}` expands before bash ever sees it.
++      # https://docs.github.com/en/actions/reference/security/secure-use
++      - env:
++          PR_TITLE: ${{ github.event.pull_request.title }}
++        run: .github/scripts/check-pr-title.sh "${PR_TITLE}"
++
++  dco:
++    name: DCO
++    runs-on: ubuntu-latest
++    timeout-minutes: 10
++    # The commits only change on synchronize; the rest re-check the same range.
++    if: github.event.action != 'edited'
++    steps:
++      # The full history. The check walks the range this branch adds to the
++      # base, and a shallow clone carries neither end of it. The default ref is
++      # the merge commit, whose parents are exactly the two SHAs below, so both
++      # are present without asking for either by name.
++      - uses: actions/checkout@v7
++        with:
++          fetch-depth: 0
++          persist-credentials: false
++      - env:
++          BASE_SHA: ${{ github.event.pull_request.base.sha }}
++          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
++        run: .github/scripts/check-dco.sh "${BASE_SHA}" "${HEAD_SHA}"
+diff --git a/.github/workflows/wheel.yml b/.github/workflows/wheel.yml
+new file mode 100644
+index 00000000..f69ec991
+--- /dev/null
++++ b/.github/workflows/wheel.yml
+@@ -0,0 +1,128 @@
++# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
++# SPDX-License-Identifier: Apache-2.0
++#
++# Builds the wheel, which needs no GPU and no driver. `cpp/CMakeLists.txt`
++# declares `LANGUAGES CXX ASM`, so nvcc compiles nothing here -- the kernels are
++# precompiled CUBINs assembled in as `.incbin` shards, and the only CUDA
++# dependency is `CUDA::cuda_driver`, resolved against the libcuda stub the
++# toolkit ships. Nothing links PyTorch.
++#
++# Its own file rather than a third job in ci.yml, because it is the one gate
++# worth starting by hand: `workflow_dispatch` builds a wheel from any branch or
++# tag and leaves it as an artifact, with no pull request to open first.
++name: Wheel
++
++on:
++  pull_request:
++  push:
++    branches: [main]
++  # The Run workflow button, and `gh workflow run Wheel --ref <branch>`. Nothing
++  # in this file reads the pull_request payload, so it needs no inputs. It only
++  # appears once this file is on the default branch.
++  workflow_dispatch:
++
++concurrency:
++  group: ${{ github.workflow }}-${{ github.ref }}
++  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
++
++permissions:
++  contents: read
++
++jobs:
++  wheel:
++    name: wheel
++    runs-on: ubuntu-latest
++    timeout-minutes: 20
++    steps:
++      # `lfs: true` would pull every LFS object in the repo -- measured at
++      # 88.2 MB, of which the 36 CUBIN packs are 2.5 MB. The build reads only
++      # the packs, so fetch only those. The credentials stay for the same reason
++      # as in ci.yml: `git lfs pull` needs them on an internal repo.
++      - uses: actions/checkout@v7
++        with:
++          lfs: false
++      - uses: ./.github/actions/cubin-packs
++
++      - uses: ./.github/actions/python
++
++      # Not a literal, for the same reason the Python floor is not one. `setup.py`
++      # turns the toolkit's `nvcc --version` into the wheel's `+cuXYZ` local
++      # version segment, so a toolkit chosen independently of the runtime image
++      # publishes a wheel labelled for a CUDA no other build path here produces.
++      # docker/Dockerfile's RUNTIME_TAG is where that version is declared.
++      - name: Resolve the CUDA version from the runtime image tag
++        id: cuda
++        shell: bash
++        run: |
++          version=$(sed -n 's/^ARG RUNTIME_TAG=\([0-9]*\.[0-9]*\.[0-9]*\).*/\1/p' docker/Dockerfile)
++          if [[ -z "${version}" ]]; then
++            echo "::error file=docker/Dockerfile::no 'ARG RUNTIME_TAG=<x.y.z>-...' found"
++            exit 1
++          fi
++          echo "version=${version}" >>"${GITHUB_OUTPUT}"
++
++      # Headers and the libcuda stub, nothing more. `setup.py` reads the
++      # toolkit version for the wheel's `+cuXYZ` local version segment, so nvcc
++      # has to be on PATH rather than just the headers being present.
++      #
++      # The only third-party action here, so it is pinned to a commit rather
++      # than a tag, which is what NVIDIA ProdSec asks for and what NVIDIA/warp
++      # does across its workflows. The org allowlist carries
++      # `jimver/cuda-toolkit@*`, which a SHA satisfies.
++      #
++      # There is no first-party alternative: NVIDIA publishes no setup-CUDA
++      # action. The org pattern is to run the job inside `nvcr.io/nvidia/cuda`
++      # (NVIDIA-BioNeMo/nvMolKit does exactly that), which does not fit here --
++      # that image ships neither git-lfs for the packs above nor a Python the
++      # setup-python tool cache recognises.
++      - uses: Jimver/cuda-toolkit@b8bf9c6c28f8a92fbb04dcfcaee872e60c57462d # v0.2.36
++        with:
++          cuda: ${{ steps.cuda.outputs.version }}
++          method: network
++          sub-packages: '["nvcc", "cudart"]'
++
++      - name: Build the wheel
++        run: |
++          pip install --upgrade build
++          python -m build --wheel
++          ls -l dist/
++
++      # Prove the extension in the wheel actually loads, not just that it
++      # compiled. Two things make this fiddly:
++      #
++      # - The module is loaded straight from its file rather than as
++      #   `bionemo_ir.libs._cutedsl_kernels`, because that would execute
++      #   `bionemo_ir/__init__.py`, which imports torch. Nothing in this job
++      #   installs torch and the extension does not link it.
++      # - At load time the shared object wants a real `libcuda.so.1`, which a
++      #   runner with no GPU has not got. Point the loader at the toolkit's
++      #   stub, the same trick the repo's own CPU harness uses.
++      - name: Load the extension out of the wheel
++        run: |
++          mkdir -p /tmp/cudastub
++          ln -sf "${CUDA_PATH}/lib64/stubs/libcuda.so" /tmp/cudastub/libcuda.so.1
++          LD_LIBRARY_PATH="/tmp/cudastub:${LD_LIBRARY_PATH:-}" python - <<'PY'
++          import glob, importlib.util, tempfile, zipfile
++
++          wheel = glob.glob("dist/*.whl")[0]
++          unpacked = tempfile.mkdtemp()
++          zipfile.ZipFile(wheel).extractall(unpacked)
++
++          found = glob.glob(f"{unpacked}/bionemo_ir/libs/_cutedsl_kernels*.so")
++          if not found:
++              raise SystemExit(f"{wheel} carries no _cutedsl_kernels extension")
++
++          spec = importlib.util.spec_from_file_location("_cutedsl_kernels", found[0])
++          module = importlib.util.module_from_spec(spec)
++          spec.loader.exec_module(module)
++          print(f"loaded {found[0].removeprefix(unpacked)} from {wheel}")
++          PY
++
++      # A month, not the 90-day default: this is a debugging aid and a dispatch
++      # deliverable, not a release artifact.
++      - uses: actions/upload-artifact@v7
++        with:
++          name: wheel-${{ github.sha }}
++          path: dist/*.whl
++          if-no-files-found: error
++          retention-days: 30

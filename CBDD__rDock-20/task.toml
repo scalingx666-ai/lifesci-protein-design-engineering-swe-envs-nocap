@@ -1,0 +1,68 @@
+version = "1.0"
+
+[task]
+name = "default/CBDD__rDock-20"
+description = "add github workflow for multiple distro builds"
+
+[metadata]
+difficulty = "medium"
+category = "bugfix"
+keywords = [
+    "rDock",
+    "pr_diff",
+]
+
+[metadata.repo2env]
+pipeline = "pr_diff"
+pipeline_version = "0.3.0"
+repo = "CBDD/rDock"
+ref = "562ee9581fa1688cc9756f895ab33b5f470f13ba"
+reference = "https://github.com/CBDD/rDock/pull/20"
+source_access = "auto"
+built_at = "2026-11-16T05:55:03.997487+00:00"
+reward_kinds = [
+    "diff_similarity",
+]
+spec_version = "0.2.0"
+content_hash = "sha256:732c36ac423a6fdfe2d1cbb5727de9f4c283ab0085c2af4cdbb866f1c37f3419"
+
+[metadata.repo2env.pr_diff]
+pr_merged_at = "2023-05-08T23:28:06Z"
+diff_format = "unified"
+context_files = [
+    ".github/docker/Dockerfile.centos-stream8",
+    ".github/docker/Dockerfile.debian-10",
+    ".github/docker/Dockerfile.debian-11",
+    ".github/docker/Dockerfile.ubuntu-20.04",
+    ".github/docker/Dockerfile.ubuntu-22.04",
+    ".github/workflows/build_generic.yml",
+    ".github/workflows/build_matrix.yml",
+]
+
+[metadata.repo2env.reward_calibration]
+baseline_reward = 0.0
+loc_changed = 69
+difficulty = "medium"
+
+[metadata.repo2env.evaluation]
+schema_version = "1"
+status = "unverified"
+stage = "generation"
+reason_codes = [
+    "validation_not_run",
+]
+detail = "Generated task; validation has not been established."
+provenance = "unknown"
+evidence = []
+
+[metadata.repo2env.reproducibility]
+mode = "local_only"
+image_ref = "python:3.12-slim"
+image_tag = "python:3.12-slim"
+image_visibility = "private"
+
+[agent]
+timeout_sec = 1800.0
+
+[verifier]
+timeout_sec = 300.0

@@ -1,0 +1,141 @@
+diff --git a/biopython_utils.py b/biopython_utils.py
+index 35b3f5e..2cf9e2b 100644
+--- a/biopython_utils.py
++++ b/biopython_utils.py
+@@ -1,10 +1,9 @@
+ import os
+ import math
+ import numpy as np
+-from collections import defaultdict
+ from scipy.spatial import cKDTree
+ from Bio import BiopythonWarning
+-from Bio.PDB import PDBParser, DSSP, Selection, Polypeptide, PDBIO, Select, Chain, Superimposer
++from Bio.PDB import PDBParser, Selection, Superimposer
+ from Bio.SeqUtils.ProtParam import ProteinAnalysis
+ from Bio.PDB.Selection import unfold_entities
+ from Bio.PDB.Polypeptide import is_aa
+@@ -180,67 +179,4 @@ def hotspot_residues(trajectory_pdb, binder_chain="B", atom_distance_cutoff=4.0)
+                 target_residue = target_atoms[close_idx].get_parent()
+                 interacting_residues[binder_residue.id[1]] = aa_single_letter
+ 
+-    return interacting_residues
+-
+-# calculate secondary structure percentage of design
+-def calc_ss_percentage(pdb_file, advanced_settings, chain_id="B", atom_distance_cutoff=4.0):
+-    # Parse the structure
+-    parser = PDBParser(QUIET=True)
+-    structure = parser.get_structure('protein', pdb_file)
+-    model = structure[0]  # Consider only the first model in the structure
+-
+-    # Calculate DSSP for the model
+-    dssp = DSSP(model, pdb_file, dssp=advanced_settings["dssp_path"])
+-
+-    # Prepare to count residues
+-    ss_counts = defaultdict(int)
+-    ss_interface_counts = defaultdict(int)
+-    plddts_interface = []
+-    plddts_ss = []
+-
+-    # Get chain and interacting residues once
+-    chain = model[chain_id]
+-    interacting_residues = set(hotspot_residues(pdb_file, chain_id, atom_distance_cutoff).keys())
+-
+-    for residue in chain:
+-        residue_id = residue.id[1]
+-        if (chain_id, residue_id) in dssp:
+-            ss = dssp[(chain_id, residue_id)][2]  # Get the secondary structure
+-            ss_type = 'loop'
+-            if ss in ['H', 'G', 'I']:
+-                ss_type = 'helix'
+-            elif ss == 'E':
+-                ss_type = 'sheet'
+-
+-            ss_counts[ss_type] += 1
+-
+-            if ss_type != 'loop':
+-                # calculate secondary structure normalised pLDDT
+-                avg_plddt_ss = sum(atom.bfactor for atom in residue) / len(residue)
+-                plddts_ss.append(avg_plddt_ss)
+-
+-            if residue_id in interacting_residues:
+-                ss_interface_counts[ss_type] += 1
+-
+-                # calculate interface pLDDT
+-                avg_plddt_residue = sum(atom.bfactor for atom in residue) / len(residue)
+-                plddts_interface.append(avg_plddt_residue)
+-
+-    # Calculate percentages
+-    total_residues = sum(ss_counts.values())
+-    total_interface_residues = sum(ss_interface_counts.values())
+-
+-    percentages = calculate_percentages(total_residues, ss_counts['helix'], ss_counts['sheet'])
+-    interface_percentages = calculate_percentages(total_interface_residues, ss_interface_counts['helix'], ss_interface_counts['sheet'])
+-
+-    i_plddt = round(sum(plddts_interface) / len(plddts_interface) / 100, 2) if plddts_interface else 0
+-    ss_plddt = round(sum(plddts_ss) / len(plddts_ss) / 100, 2) if plddts_ss else 0
+-
+-    return (*percentages, *interface_percentages, i_plddt, ss_plddt)
+-
+-def calculate_percentages(total, helix, sheet):
+-    helix_percentage = round((helix / total) * 100,2) if total > 0 else 0
+-    sheet_percentage = round((sheet / total) * 100,2) if total > 0 else 0
+-    loop_percentage = round(((total - helix - sheet) / total) * 100,2) if total > 0 else 0
+-
+-    return helix_percentage, sheet_percentage, loop_percentage
+\ No newline at end of file
++    return interacting_residues
+\ No newline at end of file
+diff --git a/tests/README.md b/tests/README.md
+index 4a18b23..4ab6e81 100644
+--- a/tests/README.md
++++ b/tests/README.md
+@@ -12,7 +12,6 @@ silently change residue selection, interface detection, or scoring.
+ Covered today (all CPU-only, run on a laptop in seconds):
+ 
+ - `biopython_utils.set_range` — hotspot/mask range parsing
+-- `biopython_utils.calculate_percentages` — secondary-structure fractions
+ - `biopython_utils.validate_design_sequence` — composition notes
+ - `biopython_utils.calculate_clash_score` — clash counting (real PDB fixtures)
+ - `biopython_utils.hotspot_residues` — interface detection (synthetic complex)
+diff --git a/tests/test_biopython_utils.py b/tests/test_biopython_utils.py
+index 0f11e55..5a1aaac 100644
+--- a/tests/test_biopython_utils.py
++++ b/tests/test_biopython_utils.py
+@@ -1,8 +1,8 @@
+ """Tests for the GPU-free helpers in biopython_utils.py.
+ 
+ Covers hotspot/mask range parsing (``set_range``, inclusive of both endpoints),
+-secondary-structure fraction arithmetic, sequence-composition notes, clash
+-counting, interface detection, and CA-RMSD superposition.
++sequence-composition notes, clash counting, interface detection, and CA-RMSD
++superposition.
+ """
+ import pytest
+ 
+@@ -42,26 +42,6 @@ def test_order_preserved(self):
+         assert bu.set_range("90-92,10") == [90, 91, 92, 10]
+ 
+ 
+-# ---------------------------------------------------------------------------
+-# calculate_percentages -- pure arithmetic for secondary-structure fractions
+-# ---------------------------------------------------------------------------
+-class TestCalculatePercentages:
+-    def test_basic_split(self):
+-        # total=10, helix=5, sheet=3 -> loop=2
+-        assert bu.calculate_percentages(10, 5, 3) == (50.0, 30.0, 20.0)
+-
+-    def test_zero_total_is_safe(self):
+-        assert bu.calculate_percentages(0, 0, 0) == (0, 0, 0)
+-
+-    def test_all_helix(self):
+-        assert bu.calculate_percentages(4, 4, 0) == (100.0, 0.0, 0.0)
+-
+-    def test_rounding_to_two_decimals(self):
+-        # 1/3 -> 33.33
+-        h, s, l = bu.calculate_percentages(3, 1, 1)
+-        assert h == 33.33 and s == 33.33 and l == 33.33
+-
+-
+ # ---------------------------------------------------------------------------
+ # validate_design_sequence -- composition notes for a designed sequence
+ # ---------------------------------------------------------------------------

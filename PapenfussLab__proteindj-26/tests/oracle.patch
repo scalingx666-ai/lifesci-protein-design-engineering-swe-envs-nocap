@@ -1,0 +1,20 @@
+diff --git a/main.nf b/main.nf
+index de3e03c..c2fe423 100644
+--- a/main.nf
++++ b/main.nf
+@@ -837,7 +837,7 @@ def getAdvancedSettingsPath(bc_design_protocol, bc_template_protocol) {
+         case "default":
+             designProtocolTag = "default_4stage_multimer"
+             break
+-        case "beta-sheet":
++        case "betasheet":
+             designProtocolTag = "betasheet_4stage_multimer"
+             break
+         case "peptide":
+@@ -1004,4 +1004,4 @@ def validateFileNaming(pdbFiles, jsonFiles = null, validationType = 'fold_seq')
+     }
+     
+     return validationResults
+-}
+\ No newline at end of file
++}

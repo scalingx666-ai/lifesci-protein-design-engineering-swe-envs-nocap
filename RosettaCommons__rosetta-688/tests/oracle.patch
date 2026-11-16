@@ -1,0 +1,280 @@
+diff --git a/source/src/core/conformation/signals/ConnectionEvent.hh b/source/src/core/conformation/signals/ConnectionEvent.hh
+index aa38e44f4c5..f2f89436524 100644
+--- a/source/src/core/conformation/signals/ConnectionEvent.hh
++++ b/source/src/core/conformation/signals/ConnectionEvent.hh
+@@ -86,30 +86,7 @@ struct ConnectionEvent { // do not derive from GeneralEvent
+ 	{}
+ 
+ 
+-	/// @brief copy constructor
+-	inline
+-	ConnectionEvent( ConnectionEvent const & rval ) :
+-		conformation( rval.conformation ),
+-		tag( rval.tag )
+-	{}
+-
+-
+-	/// @brief default destructor
+-	inline
+-	virtual
+-	~ConnectionEvent() {}
+-
+-
+-	/// @brief copy assignment
+-	inline
+-	ConnectionEvent &
+-	operator =( ConnectionEvent const & rval ) {
+-		if ( this != &rval ) {
+-			conformation = rval.conformation;
+-			tag = rval.tag;
+-		}
+-		return *this;
+-	}
++	virtual ~ConnectionEvent() = default;
+ 
+ 
+ 	/// @brief the Conformation firing the signal
+diff --git a/source/src/core/conformation/signals/GeneralEvent.hh b/source/src/core/conformation/signals/GeneralEvent.hh
+index d2c046c5dad..d8d3b0854ce 100644
+--- a/source/src/core/conformation/signals/GeneralEvent.hh
++++ b/source/src/core/conformation/signals/GeneralEvent.hh
+@@ -59,28 +59,7 @@ struct GeneralEvent {
+ 	{}
+ 
+ 
+-	/// @brief copy constructor
+-	inline
+-	GeneralEvent( GeneralEvent const & rval ) :
+-		conformation( rval.conformation )
+-	{}
+-
+-
+-	/// @brief default destructor
+-	inline
+-	virtual
+-	~GeneralEvent() {}
+-
+-
+-	/// @brief copy assignment
+-	inline
+-	GeneralEvent &
+-	operator =( GeneralEvent const & rval ) {
+-		if ( this != &rval ) {
+-			conformation = rval.conformation;
+-		}
+-		return *this;
+-	}
++	virtual ~GeneralEvent() = default;
+ 
+ 
+ 	/// @brief the Conformation firing the signal
+diff --git a/source/src/core/conformation/signals/IdentityEvent.hh b/source/src/core/conformation/signals/IdentityEvent.hh
+index aaeb61ce57c..1f03d04578c 100644
+--- a/source/src/core/conformation/signals/IdentityEvent.hh
++++ b/source/src/core/conformation/signals/IdentityEvent.hh
+@@ -84,35 +84,6 @@ struct IdentityEvent : public GeneralEvent {
+ 	{}
+ 
+ 
+-	/// @brief copy constructor
+-	inline
+-	IdentityEvent( IdentityEvent const & rval ) :
+-		Super( rval ),
+-		tag( rval.tag ),
+-		position( rval.position ),
+-		residue( rval.residue )
+-	{}
+-
+-
+-	/// @brief default destructor
+-	inline
+-	~IdentityEvent() override {}
+-
+-
+-	/// @brief copy assignment
+-	inline
+-	IdentityEvent &
+-	operator =( IdentityEvent const & rval ) {
+-		if ( this != &rval ) {
+-			Super::operator =( rval );
+-			tag = rval.tag;
+-			position = rval.position;
+-			residue = rval.residue;
+-		}
+-		return *this;
+-	}
+-
+-
+ 	/// @brief tag indicating type of identity change
+ 	Tag tag;
+ 
+diff --git a/source/src/core/conformation/signals/XYZEvent.hh b/source/src/core/conformation/signals/XYZEvent.hh
+index 3d3e667b87b..a8eda497f1c 100644
+--- a/source/src/core/conformation/signals/XYZEvent.hh
++++ b/source/src/core/conformation/signals/XYZEvent.hh
+@@ -59,29 +59,6 @@ struct XYZEvent : public GeneralEvent {
+ 	{}
+ 
+ 
+-	/// @brief copy constructor
+-	inline
+-	XYZEvent( XYZEvent const & rval ) :
+-		Super( rval )
+-	{}
+-
+-
+-	/// @brief copy assignment
+-	inline
+-	XYZEvent &
+-	operator =( XYZEvent const & rval ) {
+-		if ( this != &rval ) {
+-			Super::operator =( rval );
+-		}
+-		return *this;
+-	}
+-
+-
+-	/// @brief default destructor
+-	inline
+-	~XYZEvent() override {}
+-
+-
+ };
+ 
+ 
+diff --git a/source/src/core/pose/signals/ConformationEvent.hh b/source/src/core/pose/signals/ConformationEvent.hh
+index 7e06bc65460..a27e3a5d229 100644
+--- a/source/src/core/pose/signals/ConformationEvent.hh
++++ b/source/src/core/pose/signals/ConformationEvent.hh
+@@ -57,29 +57,6 @@ struct ConformationEvent : public GeneralEvent {
+ 	{}
+ 
+ 
+-	/// @brief copy constructor
+-	inline
+-	ConformationEvent( ConformationEvent const & rval ) :
+-		Super( rval )
+-	{}
+-
+-
+-	/// @brief default destructor
+-	inline
+-	~ConformationEvent() override {}
+-
+-
+-	/// @brief copy assignment
+-	inline
+-	ConformationEvent &
+-	operator =( ConformationEvent const & rval ) {
+-		if ( this != &rval ) {
+-			Super::operator =( rval );
+-		}
+-		return *this;
+-	}
+-
+-
+ };
+ 
+ 
+diff --git a/source/src/core/pose/signals/DestructionEvent.hh b/source/src/core/pose/signals/DestructionEvent.hh
+index df526456361..db47f334fbf 100644
+--- a/source/src/core/pose/signals/DestructionEvent.hh
++++ b/source/src/core/pose/signals/DestructionEvent.hh
+@@ -49,28 +49,7 @@ struct DestructionEvent { // do not derive from GeneralEvent
+ 	{}
+ 
+ 
+-	/// @brief copy constructor
+-	inline
+-	DestructionEvent( DestructionEvent const & rval ) :
+-		pose( rval.pose )
+-	{}
+-
+-
+-	/// @brief default destructor
+-	inline
+-	virtual
+-	~DestructionEvent() {}
+-
+-
+-	/// @brief copy assignment
+-	inline
+-	DestructionEvent &
+-	operator =( DestructionEvent const & rval ) {
+-		if ( this != &rval ) {
+-			pose = rval.pose;
+-		}
+-		return *this;
+-	}
++	virtual ~DestructionEvent() = default;
+ 
+ 
+ 	/// @brief the Pose firing the signal
+diff --git a/source/src/core/pose/signals/EnergyEvent.hh b/source/src/core/pose/signals/EnergyEvent.hh
+index 1769209892e..89a5fbe4f74 100644
+--- a/source/src/core/pose/signals/EnergyEvent.hh
++++ b/source/src/core/pose/signals/EnergyEvent.hh
+@@ -56,29 +56,6 @@ struct EnergyEvent : public GeneralEvent {
+ 	{}
+ 
+ 
+-	/// @brief copy constructor
+-	inline
+-	EnergyEvent( EnergyEvent const & rval ) :
+-		Super( rval )
+-	{}
+-
+-
+-	/// @brief default destructor
+-	inline
+-	~EnergyEvent() override {}
+-
+-
+-	/// @brief copy assignment
+-	inline
+-	EnergyEvent &
+-	operator =( EnergyEvent const & rval ) {
+-		if ( this != &rval ) {
+-			Super::operator =( rval );
+-		}
+-		return *this;
+-	}
+-
+-
+ };
+ 
+ 
+diff --git a/source/src/core/pose/signals/GeneralEvent.hh b/source/src/core/pose/signals/GeneralEvent.hh
+index 999dc293f75..7d045629457 100644
+--- a/source/src/core/pose/signals/GeneralEvent.hh
++++ b/source/src/core/pose/signals/GeneralEvent.hh
+@@ -61,28 +61,7 @@ struct GeneralEvent {
+ 	{}
+ 
+ 
+-	/// @brief copy constructor
+-	inline
+-	GeneralEvent( GeneralEvent const & rval ) :
+-		pose( rval.pose )
+-	{}
+-
+-
+-	/// @brief default destructor
+-	inline
+-	virtual
+-	~GeneralEvent() {}
+-
+-
+-	/// @brief copy assignment
+-	inline
+-	GeneralEvent &
+-	operator =( GeneralEvent const & rval ) {
+-		if ( this != &rval ) {
+-			pose = rval.pose;
+-		}
+-		return *this;
+-	}
++	virtual ~GeneralEvent() = default;
+ 
+ 
+ 	/// @brief the Pose firing the signal

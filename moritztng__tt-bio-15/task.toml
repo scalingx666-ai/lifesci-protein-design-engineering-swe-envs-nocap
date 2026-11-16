@@ -1,0 +1,64 @@
+version = "1.0"
+
+[task]
+name = "default/moritztng__tt-bio-15"
+description = "protenix: expose per-chain-pair ipTM"
+
+[metadata]
+difficulty = "medium"
+category = "bugfix"
+keywords = [
+    "tt-bio",
+    "pr_diff",
+]
+
+[metadata.repo2env]
+pipeline = "pr_diff"
+pipeline_version = "0.3.0"
+repo = "moritztng/tt-bio"
+ref = "6ef0721e6b052fb02ee8491b8c16a10b47b415be"
+reference = "https://github.com/moritztng/tt-bio/pull/15"
+source_access = "auto"
+built_at = "2026-11-16T04:26:49.955985+00:00"
+reward_kinds = [
+    "diff_similarity",
+]
+spec_version = "0.2.0"
+content_hash = "sha256:b46f1c504f6439f59ee8e745e5e2b8b82e7a832ba299b1fa336dd1139b9a7fd0"
+
+[metadata.repo2env.pr_diff]
+pr_merged_at = "2026-09-18T17:15:52Z"
+diff_format = "unified"
+context_files = [
+    "tests/test_chain_pair_iptm.py",
+    "tt_bio/protenix.py",
+    "tt_bio/worker.py",
+]
+
+[metadata.repo2env.reward_calibration]
+baseline_reward = 0.0
+loc_changed = 80
+difficulty = "medium"
+
+[metadata.repo2env.evaluation]
+schema_version = "1"
+status = "unverified"
+stage = "generation"
+reason_codes = [
+    "validation_not_run",
+]
+detail = "Generated task; validation has not been established."
+provenance = "unknown"
+evidence = []
+
+[metadata.repo2env.reproducibility]
+mode = "local_only"
+image_ref = "python:3.12-slim"
+image_tag = "python:3.12-slim"
+image_visibility = "private"
+
+[agent]
+timeout_sec = 1800.0
+
+[verifier]
+timeout_sec = 300.0

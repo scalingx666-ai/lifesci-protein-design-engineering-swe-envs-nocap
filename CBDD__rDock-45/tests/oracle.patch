@@ -1,0 +1,34 @@
+diff --git a/.github/workflows/build_matrix.yml b/.github/workflows/build_matrix.yml
+index aef3f1a0..744210d7 100644
+--- a/.github/workflows/build_matrix.yml
++++ b/.github/workflows/build_matrix.yml
+@@ -39,4 +39,27 @@ jobs:
+     uses: ./.github/workflows/build_generic.yml
+     with:
+       distribution: ${{ matrix.distribution }}
+-      compiler: ${{ matrix.compiler }}
+\ No newline at end of file
++      compiler: ${{ matrix.compiler }}
++  
++  release:
++    needs: build
++    if: github.ref == 'refs/heads/main' && github.event_name != 'schedule'
++    runs-on: ubuntu-latest
++
++    steps:
++    - uses: actions/checkout@v3  # probably not needed, but just in case
++    - name: Download artifacts
++      uses: actions/download-artifact@v3
++      with:
++        path: artifacts/
++
++    - name: Set version
++      id: set_version
++      run: echo "RELEASE_VERSION=$(date +%y.%m).${{ github.event.number }}" >> "$GITHUB_OUTPUT"
++
++    - name: Create release
++      uses: actions/create-release@v1
++      with:
++        tag_name: ${{ steps.set_version.outputs.RELEASE_VERSION }}
++        release_name: Release ${{ steps.set_version.outputs.RELEASE_VERSION }}
++        artifacts: artifacts/

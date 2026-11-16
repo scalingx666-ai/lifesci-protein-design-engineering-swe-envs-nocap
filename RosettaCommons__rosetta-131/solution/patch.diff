@@ -1,0 +1,107 @@
+diff --git a/source/src/core/scoring/lkball/LK_BallInfo.cc b/source/src/core/scoring/lkball/LK_BallInfo.cc
+index 84991eefb51..3b014a5cf40 100644
+--- a/source/src/core/scoring/lkball/LK_BallInfo.cc
++++ b/source/src/core/scoring/lkball/LK_BallInfo.cc
+@@ -110,6 +110,12 @@ WaterBuilder::WaterBuilder(
+ 	runtime_assert( atom1 != atom2 && atom1 != atom3 && atom2 != atom3 );
+ }
+ 
++bool WaterBuilder::operator==(WaterBuilder const&o) const
++{
++	return atom1_ == o.atom1_ && atom2_ == o.atom2_ && atom3_ == o.atom3_ && xyz_local_ == o.xyz_local_;
++}
++
++
+ Vector
+ WaterBuilder::build( conformation::Residue const & rsd ) const
+ {
+diff --git a/source/src/core/scoring/lkball/LK_BallInfo.hh b/source/src/core/scoring/lkball/LK_BallInfo.hh
+index b5bbac5d752..d280a4eaac2 100644
+--- a/source/src/core/scoring/lkball/LK_BallInfo.hh
++++ b/source/src/core/scoring/lkball/LK_BallInfo.hh
+@@ -45,6 +45,11 @@
+ #include <cereal/types/polymorphic.fwd.hpp>
+ #endif // SERIALIZATION
+ 
++#ifdef PYROSETTA
++#include <utility/vector1.hh>
++#endif
++
++
+ namespace core {
+ namespace scoring {
+ namespace lkball {
+@@ -64,6 +69,7 @@ typedef utility::fixedsizearray1< Real, 2 > AtomWeights;
+ /// @details  Stores the internal coordinates of an ideal water position
+ class WaterBuilder {
+ public:
++	WaterBuilder() = default;
+ 	WaterBuilder(
+ 		Vector const & water,
+ 		conformation::Residue const & rsd,
+@@ -72,6 +78,8 @@ public:
+ 		Size const atom3
+ 	);
+ 
++	bool operator==(WaterBuilder const&) const;
++
+ 	Vector
+ 	build( conformation::Residue const & rsd ) const;
+ 
+@@ -352,5 +360,10 @@ typedef utility::pointer::shared_ptr< LKB_RotamerSetInfo > LKB_RotamerSetInfoOP;
+ CEREAL_FORCE_DYNAMIC_INIT( core_scoring_lkball_LK_BallInfo )
+ #endif // SERIALIZATION
+ 
++#ifdef PYROSETTA
++template class utility::vector1< core::scoring::lkball::WaterBuilder >;
++#endif
++
++
+ 
+ #endif
+diff --git a/source/src/python/PyRosetta/src/test/T150_core.misc.lkball.py b/source/src/python/PyRosetta/src/test/T150_core.misc.lkball.py
+new file mode 100644
+index 00000000000..5cf5edad28e
+--- /dev/null
++++ b/source/src/python/PyRosetta/src/test/T150_core.misc.lkball.py
+@@ -0,0 +1,40 @@
++#!/usr/bin/env python
++# :noTabs=true:
++# -*- coding: utf-8 -*-
++
++# (c) Copyright Rosetta Commons Member Institutions.
++# (c) This file is part of the Rosetta software suite and is made available under license.
++# (c) The Rosetta software is developed by the contributing members of the Rosetta Commons.
++# (c) For more information, see http://www.rosettacommons.org. Questions about this can be
++# (c) addressed to University of Washington CoMotion, email: license@uw.edu.
++
++## @file   T150_core.misc.lkball.py
++## @brief  Tests for bindings in core::scoring::lkball namespaces
++## @author Jack Maguire and Sergey Lyskov
++
++from __future__ import print_function
++
++import pyrosetta
++import pyrosetta.rosetta as rosetta
++
++import pyrosetta
++from pyrosetta import *
++from pyrosetta.rosetta import core
++
++pyrosetta.init()
++
++sfxn = get_score_function()
++
++pose = pose_from_sequence("NNN")
++sfxn.score( pose )
++
++restype = pose.residue(2).type()
++
++singleton = core.scoring.lkball.LKBallDatabase.get_instance()
++
++water_builder_4_restype = singleton.get_water_builder_for_restype(restype)
++
++water_builders_list = water_builder_4_restype.builders()
++
++for i in range(1,len(water_builders_list)+1):
++    print( i, len(water_builders_list[i]) )

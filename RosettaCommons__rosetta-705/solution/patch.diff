@@ -1,0 +1,246 @@
+diff --git a/source/src/utility/keys/ClassKeyMap.hh b/source/src/utility/keys/ClassKeyMap.hh
+index b7ebd7b7932..0de52aea34c 100644
+--- a/source/src/utility/keys/ClassKeyMap.hh
++++ b/source/src/utility/keys/ClassKeyMap.hh
+@@ -109,16 +109,10 @@ public: // Creation
+ 
+ 
+ 	/// @brief Default constructor
+-	inline
+-	ClassKeyMap()
+-	= default;
+-
+-
+-	/// @brief Copy constructor
+-	inline
+-	ClassKeyMap( ClassKeyMap const & a ) :
+-		v_( a.v_ )
+-	{}
++	// The templated iterator-range constructor below is a user-declared constructor,
++	// which suppresses the implicit default. Keep an explicit = default so that
++	// expressions like `ClassKeyMap<K,T,C> m;` continue to compile.
++	ClassKeyMap() = default;
+ 
+ 
+ 	/// @brief Iterator range constructor
+@@ -136,26 +130,9 @@ public: // Creation
+ 	}
+ 
+ 
+-	/// @brief Destructor
+-	inline
+-	~ClassKeyMap() {}
+-
+-
+ public: // Assignment
+ 
+ 
+-	/// @brief Copy assignment
+-	inline
+-	ClassKeyMap &
+-	operator =( ClassKeyMap const & a )
+-	{
+-		if ( this != &a ) {
+-			v_ = a.v_;
+-		}
+-		return *this;
+-	}
+-
+-
+ 	/// @brief Uniform value assignment to current elements
+ 	inline
+ 	ClassKeyMap &
+diff --git a/source/src/utility/keys/ClassKeyVector.hh b/source/src/utility/keys/ClassKeyVector.hh
+index 8fbf2d09274..c39415dbf1d 100644
+--- a/source/src/utility/keys/ClassKeyVector.hh
++++ b/source/src/utility/keys/ClassKeyVector.hh
+@@ -99,16 +99,9 @@ public: // Creation
+ 
+ 
+ 	/// @brief Default constructor
+-	inline
+-	ClassKeyVector()
+-	= default;
+-
+-
+-	/// @brief Copy constructor
+-	inline
+-	ClassKeyVector( ClassKeyVector const & a ) :
+-		v_( a.v_ )
+-	{}
++	// The other user-declared constructors below suppress the implicit default,
++	// so keep an explicit = default so that `ClassKeyVector<K,T,C> v;` compiles.
++	ClassKeyVector() = default;
+ 
+ 
+ 	/// @brief Size constructor
+@@ -140,26 +133,9 @@ public: // Creation
+ 	{}
+ 
+ 
+-	/// @brief Destructor
+-	inline
+-	~ClassKeyVector() {}
+-
+-
+ public: // Assignment
+ 
+ 
+-	/// @brief Copy assignment
+-	inline
+-	ClassKeyVector &
+-	operator =( ClassKeyVector const & a )
+-	{
+-		if ( this != &a ) {
+-			v_ = a.v_;
+-		}
+-		return *this;
+-	}
+-
+-
+ 	/// @brief Uniform value assignment to current elements
+ 	inline
+ 	ClassKeyVector &
+diff --git a/source/src/utility/keys/KeyVector.hh b/source/src/utility/keys/KeyVector.hh
+index 8c410b23b80..73796059a23 100644
+--- a/source/src/utility/keys/KeyVector.hh
++++ b/source/src/utility/keys/KeyVector.hh
+@@ -90,9 +90,9 @@ public: // Creation
+ 
+ 
+ 	/// @brief Default constructor
+-	inline
+-	KeyVector()
+-	= default;
++	// The other user-declared constructors below suppress the implicit default,
++	// so keep an explicit = default so that `KeyVector<K,T> v;` compiles.
++	KeyVector() = default;
+ 
+ 
+ 	/// @brief Size constructor
+@@ -124,27 +124,9 @@ public: // Creation
+ 	{}
+ 
+ 
+-	/// @brief Destructor
+-	inline
+-	~KeyVector()
+-	= default;
+-
+-
+ public: // Assignment
+ 
+ 
+-	/// @brief Copy assignment
+-	inline
+-	KeyVector &
+-	operator =( KeyVector const & a )
+-	{
+-		if ( this != &a ) {
+-			v_ = a.v_;
+-		}
+-		return *this;
+-	}
+-
+-
+ 	/// @brief Uniform value assignment to elements
+ 	inline
+ 	KeyVector &
+diff --git a/source/src/utility/keys/SmallKeyMap.hh b/source/src/utility/keys/SmallKeyMap.hh
+index 77d689fef7a..5bb9015ff33 100644
+--- a/source/src/utility/keys/SmallKeyMap.hh
++++ b/source/src/utility/keys/SmallKeyMap.hh
+@@ -111,15 +111,6 @@ public: // Creation
+ 	{}
+ 
+ 
+-	/// @brief Copy constructor
+-	inline
+-	SmallKeyMap( SmallKeyMap const & a ) :
+-		v_( a.v_ ),
+-		m_( a.m_ ),
+-		u_( a.u_ )
+-	{}
+-
+-
+ 	/// @brief Iterator range constructor
+ 	template< typename InputIterator >
+ 	inline
+@@ -136,28 +127,9 @@ public: // Creation
+ 	}
+ 
+ 
+-	/// @brief Destructor
+-	inline
+-	~SmallKeyMap() {}
+-
+-
+ public: // Assignment
+ 
+ 
+-	/// @brief Copy assignment
+-	inline
+-	SmallKeyMap &
+-	operator =( SmallKeyMap const & a )
+-	{
+-		if ( this != &a ) {
+-			v_ = a.v_;
+-			m_ = a.m_;
+-			u_ = a.u_;
+-		}
+-		return *this;
+-	}
+-
+-
+ 	/// @brief Uniform mapped value assignment to current elements
+ 	inline
+ 	SmallKeyMap &
+diff --git a/source/src/utility/keys/SmallKeyVector.hh b/source/src/utility/keys/SmallKeyVector.hh
+index 1eb861a60ef..309ba631052 100644
+--- a/source/src/utility/keys/SmallKeyVector.hh
++++ b/source/src/utility/keys/SmallKeyVector.hh
+@@ -105,15 +105,6 @@ public: // Creation
+ 	{}
+ 
+ 
+-	/// @brief Copy constructor
+-	inline
+-	SmallKeyVector( SmallKeyVector const & a ) :
+-		v_( a.v_ ),
+-		m_( a.m_ ),
+-		u_( a.u_ )
+-	{}
+-
+-
+ 	/// @brief Size constructor
+ 	inline
+ 	explicit
+@@ -146,28 +137,9 @@ public: // Creation
+ 	{}
+ 
+ 
+-	/// @brief Destructor
+-	inline
+-	~SmallKeyVector() {}
+-
+-
+ public: // Assignment
+ 
+ 
+-	/// @brief Copy assignment
+-	inline
+-	SmallKeyVector &
+-	operator =( SmallKeyVector const & a )
+-	{
+-		if ( this != &a ) {
+-			v_ = a.v_;
+-			m_ = a.m_;
+-			u_ = a.u_;
+-		}
+-		return *this;
+-	}
+-
+-
+ 	/// @brief Uniform value assignment to current elements
+ 	inline
+ 	SmallKeyVector &

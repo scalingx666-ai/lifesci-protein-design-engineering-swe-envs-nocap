@@ -1,0 +1,77 @@
+diff --git a/functions/pr_alternative_utils.py b/functions/pr_alternative_utils.py
+index e9154ba..c267d08 100644
+--- a/functions/pr_alternative_utils.py
++++ b/functions/pr_alternative_utils.py
+@@ -65,6 +65,7 @@
+ import subprocess
+ import contextlib
+ import time
++import pathlib
+ from itertools import zip_longest
+ from .generic_utils import clean_pdb
+ from .logging_utils import vprint
+@@ -903,7 +904,6 @@ def openmm_relax(pdb_file_path, output_pdb_path, use_gpu_relax=True,
+     platform_name_used : str or None
+         Name of the OpenMM platform actually used (e.g., 'CUDA', 'OpenCL', or 'CPU').
+     """
+-
+     start_time = time.time()
+     basename = os.path.basename(pdb_file_path)
+     vprint(f"[OpenMM-Relax] Initiating relax for {basename}")
+@@ -1580,6 +1580,14 @@ def openmm_relax_subprocess(pdb_file_path, output_pdb_path, use_gpu_relax=True,
+     import logging as _logging
+     want_verbose = _logging.getLogger("functions").isEnabledFor(_logging.DEBUG)
+ 
++    # Change in cwd is needed when running outside of code directory
++    # parents[1] is the directory above the current one
++    cwd = pathlib.Path(__file__).parents[1].resolve()
++    
++    # also resolve input/output to allow for running outside of main code repo
++    pdb_file_path = str(pathlib.Path(pdb_file_path).resolve())
++    output_pdb_path = str(pathlib.Path(output_pdb_path).resolve())
++
+     code_parts = []
+     if want_verbose:
+         code_parts.append(
+@@ -1602,12 +1610,12 @@ def openmm_relax_subprocess(pdb_file_path, output_pdb_path, use_gpu_relax=True,
+ 
+     # Signature to detect soft fallback path inside child (input copied to output)
+     fallback_signature = "[OpenMM-Relax] ERROR; copied input to output"
+-
++    
+     attempts = int(max(1, int(max_attempts)))
+     for attempt_idx in range(1, attempts + 1):
+         # Capture output to inspect for fallback while still forwarding to parent
+         proc = subprocess.run(
+-            [sys.executable, "-c", py_code], timeout=timeout, capture_output=True, text=True
++            [sys.executable, "-c", py_code], timeout=timeout, capture_output=True, text=True, cwd=cwd
+         )
+ 
+         # Forward child output to parent streams to preserve visibility, but filter stderr
+@@ -1674,4 +1682,4 @@ def openmm_relax_subprocess(pdb_file_path, output_pdb_path, use_gpu_relax=True,
+         plat = openmm_relax(args.inp, args.out, use_gpu_relax=args.gpu)
+         if plat:
+             print(plat)
+-        sys.exit(0)
+\ No newline at end of file
++        sys.exit(0)
+diff --git a/install_bindcraft.sh b/install_bindcraft.sh
+index 1f0aac0..6998adc 100644
+--- a/install_bindcraft.sh
++++ b/install_bindcraft.sh
+@@ -168,7 +168,7 @@ wget -O "${params_file}" "https://storage.googleapis.com/alphafold/alphafold_par
+ 
+ # extract AF2 weights
+ tar tf "${params_file}" >/dev/null 2>&1 || { echo -e "Error: Corrupt AlphaFold2 weights download"; exit 1; }
+-tar -xvf "${params_file}" -C "${params_dir}" || { echo -e "Error: Failed to extract AlphaFold2weights"; exit 1; }
++tar -xvf "${params_file}" -C "${params_dir}" --no-same-owner || { echo -e "Error: Failed to extract AlphaFold2weights"; exit 1; }
+ [ -f "${params_dir}/params_model_5_ptm.npz" ] || { echo -e "Error: Could not locate extracted AlphaFold2 weights"; exit 1; }
+ rm "${params_file}" || { echo -e "Warning: Failed to remove AlphaFold2 weights archive"; }
+ 
+@@ -224,4 +224,4 @@ echo -e "\n"
+ echo -e "Installation took $(($t / 3600)) hours, $((($t / 60) % 60)) minutes and $(($t % 60)) seconds."
+ echo -e "\n"
+ echo -e "If you encounter 'Solving environment' issues, try rerunning with:"
+-echo -e "  ./install_bindcraft.sh --fix-channels [other options]"
+\ No newline at end of file
++echo -e "  ./install_bindcraft.sh --fix-channels [other options]"

@@ -1,0 +1,995 @@
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/__init__.py b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/__init__.py
+index e9c5e426d5b..b9ce8537400 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/__init__.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/__init__.py
+@@ -19,6 +19,7 @@
+     get_protocols_list_of_str,
+     get_scores_dict,
+     get_yml,
++    iterate,
+     produce,
+     recreate_environment,
+     reproduce,
+@@ -38,6 +39,7 @@
+     "get_protocols_list_of_str",
+     "get_scores_dict",
+     "get_yml",
++    "iterate",
+     "produce",
+     "recreate_environment",
+     "reproduce",
+@@ -45,7 +47,7 @@
+     "run",
+     "update_scores",
+ ]
+-__version__: str = "1.2.3"
++__version__: str = "1.3.0"
+ 
+ _print_conda_warnings()
+ 
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/converters.py b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/converters.py
+index ac5fa7a1851..d252d29a20f 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/converters.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/converters.py
+@@ -169,6 +169,28 @@ def _to_list(
+     return converter(objs)
+ 
+ 
++def _parse_yield_results(yield_results: Any) -> bool:
++    @singledispatch
++    def converter(objs: Any) -> NoReturn:
++        raise ValueError("'yield_results' parameter must be of type `bool`.")
++    
++    @converter.register(bool)
++    def _to_bool(objs: bool) -> bool:
++        return objs
++    
++    @converter.register(int)
++    @converter.register(float)
++    @converter.register(str)
++    def _int_to_bool(objs: Union[int, float, str]) -> bool:
++        return bool(objs)
++    
++    @converter.register(type(None))
++    def _none_to_bool(objs: None) -> bool:
++        return False
++    
++    return converter(yield_results)
++
++
+ def _parse_pyrosetta_build(obj: Any) -> str:
+     """Parse the PyRosetta build string."""
+ 
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/core.py b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/core.py
+index 48a129593ce..0c4f3fab9d8 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/core.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/core.py
+@@ -256,6 +256,7 @@
+     _parse_sha1,
+     _parse_system_info,
+     _parse_tasks,
++    _parse_yield_results,
+ )
+ from pyrosetta.distributed.cluster.initialization import _get_pyrosetta_init_args, _maybe_init_client
+ from pyrosetta.distributed.cluster.io import IO
+@@ -273,14 +274,16 @@
+ from pyrosetta.distributed.packed_pose.core import PackedPose
+ from typing import (
+     Any,
++    Dict,
++    Generator,
+     List,
+     NoReturn,
+     Optional,
++    Tuple,
+     TypeVar,
+     Union,
+ )
+ 
+-
+ G = TypeVar("G")
+ 
+ 
+@@ -558,6 +561,13 @@ class PyRosettaCluster(IO[G], LoggingSupport[G], SchedulerManager[G], TaskBase[G
+         validator=attr.validators.instance_of(bool),
+         converter=attr.converters.default_if_none(False),
+     )
++    yield_results = attr.ib(
++        type=bool,
++        init=False,
++        default=False,
++        validator=attr.validators.instance_of(bool),
++        converter=_parse_yield_results,
++    )
+     protocols_key = attr.ib(
+         type=str,
+         default="PyRosettaCluster_protocols_container",
+@@ -617,7 +627,13 @@ def __attrs_post_init__(self):
+         self.serializer = Serialization(compression=self.compression)
+         self.clients_dict = self._setup_clients_dict()
+ 
+-    def distribute(self, *args: Any, protocols: Any = None, clients_indices: Any = None, resources: Any = None) -> Optional[NoReturn]:
++    def _run(
++        self,
++        *args: Any,
++        protocols: Any = None,
++        clients_indices: Any = None,
++        resources: Any = None,
++    ) -> Union[NoReturn, Generator[Tuple[PackedPose, Dict[Any, Any]], None, None]]:
+         """
+         Run user-provided PyRosetta protocols on a local or remote compute cluster using
+         the user-customized PyRosettaCluster instance. Either arguments or the 'protocols'
+@@ -691,13 +707,12 @@ def distribute(self, *args: Any, protocols: Any = None, clients_indices: Any = N
+                 applied, the protocols will not run. See https://distributed.dask.org/en/stable/resources.html for more
+                 information.
+                 Default: None
+-
+-        Returns:
+-            None
+         """
+-
++        yield_results = _parse_yield_results(self.yield_results)
+         compressed_input_packed_pose = self.serializer.compress_packed_pose(self.input_packed_pose)
+-        protocols, protocol, seed, clients_index, resource = self._setup_protocols_protocol_seed(args, protocols, clients_indices, resources)
++        protocols, protocol, seed, clients_index, resource = self._setup_protocols_protocol_seed(
++            args, protocols, clients_indices, resources
++        )
+         clients, cluster, adaptive = self._setup_clients_cluster_adaptive()
+         client_residue_type_set = _get_residue_type_set()
+         extra_args = (
+@@ -742,9 +757,13 @@ def distribute(self, *args: Any, protocols: Any = None, clients_indices: Any = N
+             for compressed_packed_pose, compressed_kwargs in results:
+                 kwargs = self.serializer.decompress_kwargs(compressed_kwargs)
+                 if not kwargs[self.protocols_key]:
++                    if yield_results:
++                        yield self.serializer.decompress_packed_pose(compressed_packed_pose), self.serializer.deepcopy_kwargs(kwargs)
+                     self._save_results(compressed_packed_pose, kwargs)
+                 else:
+                     if self.save_all:
++                        if yield_results:
++                            yield self.serializer.decompress_packed_pose(compressed_packed_pose), self.serializer.deepcopy_kwargs(kwargs)
+                         self._save_results(
+                             compressed_packed_pose,
+                             self.serializer.deepcopy_kwargs(kwargs),
+@@ -768,5 +787,110 @@ def distribute(self, *args: Any, protocols: Any = None, clients_indices: Any = N
+         self._maybe_teardown(clients, cluster)
+         self._close_logger()
+ 
++    def generate(
++        self,
++        *args: Any,
++        protocols: Any = None,
++        clients_indices: Any = None,
++        resources: Any = None,
++    ) -> Union[NoReturn, Generator[Tuple[PackedPose, Dict[Any, Any]], None, None]]:
++        if self.sha1 != "":
++            logging.warning(
++                "Use of the `PyRosettaCluster.generate` method for reproducible simulations is not supported! "
++                + "PyRosettaCluster reproduces decoys from the output files written to disk. Subsequent code run "
++                + "on these results is not being saved by PyRosettaCluster. Use the `PyRosettaCluster.distribute` "
++                + "method for reproducible simulations. To silence this warning and continue without using version "
++                + "control, set the `sha1` instance attribute of PyRosettaCluster to `None`."
++            )
++        self.yield_results = True
++        for result in self._run(
++            *args,
++            protocols=protocols,
++            clients_indices=clients_indices,
++            resources=resources,
++        ):
++            yield result
++
++    def distribute(
++        self,
++        *args: Any,
++        protocols: Any = None,
++        clients_indices: Any = None,
++        resources: Any = None,
++    ) -> Optional[NoReturn]:
++        self.yield_results = False
++        for _ in self._run(
++            *args,
++            protocols=protocols,
++            clients_indices=clients_indices,
++            resources=resources,
++        ):
++            pass
++
++    distribute.__doc__ = _run.__doc__ + """
++        Returns:
++            None
++        """
++
++    generate.__doc__ = _run.__doc__ + """
++        Extra information:
++
++        The `PyRosettaCluster.generate` method may be used for developing PyRosetta protocols on a local or
++        remote compute cluster and optionally post-processing or visualizing output `PackedPose` objects in memory.
++        Importantly, subsequent code run on the yielded results is not captured by PyRosettaCluster, and so use
++        of this method does not ensure reproducibility of the simulation. Use the `PyRosettaCluster.distribute`
++        method for reproducible simulations.
++
++        Each yielded result is a `tuple` object with a `PackedPose` object as the first element and a `dict`
++        object as the second element. The `PackedPose` object represents a returned or yielded `PackedPose`
++        (or `Pose` or `NoneType`) object from the most recently run user-provided PyRosetta protocol. The `dict`
++        object represents the optionally returned or yielded user-defined PyRosetta protocol `kwargs` dictionary
++        object from the same most recently run user-provided PyRosetta protocol (see 'protocols' argument). If
++        `PyRosettaCluster(save_all=True)`, results are yielded after each user-provided PyRosetta protocol,
++        otherwise results are yielded after the final user-defined PyRosetta protocol. Results are yielded in the
++        order in which they arrive back to the client(s) from the distributed cluster (which may differ from the
++        order that tasks are submitted, due to tasks running asynchronously). If `PyRosettaCluster(dry_run=True)`,
++        results are still yielded but '.pdb' or '.pdb.bz2' files are not saved to disk.
++        See https://docs.dask.org/en/latest/futures.html#distributed.as_completed for more information.
++
++        Extra examples:
++
++            # Iterate over results in real-time as they are yielded from the cluster:
++            for packed_pose, kwargs in PyRosettaCluster().generate(protocols):
++                ...
++
++            # Iterate over submissions to the same client:
++            client = Client()
++            for packed_pose, kwargs in PyRosettaCluster(client=client).generate(protocols):
++                # Post-process results on host node asynchronously from results generation
++                prc = PyRosettaCluster(input_packed_pose=packed_pose, client=client)
++                for packed_pose, kwargs in prc.generate(other_protocols):
++                    ...
++
++            # Iterate over multiple clients:
++            client_1 = Client()
++            client_2 = Client()
++            for packed_pose, kwargs in PyRosettaCluster(client=client_1).generate(protocols):
++                # Post-process results on host node asynchronously from results generation
++                prc = PyRosettaCluster(input_packed_pose=packed_pose, client=client_2)
++                for packed_pose, kwargs in prc.generate(other_protocols):
++                    ...
++
++            # Using multiple `dask.distributed.as_completed` iterators on the host node creates additional overhead.
++            # If post-processing on the host node is not required between user-provided PyRosetta protocols,
++            # the preferred method is to distribute protocols within a single `PyRosettaCluster().generate()`
++            # method call using the `clients_indices` keyword argument:
++            prc_generate = PyRosettaCluster(clients=[client_1, client_2]).generate(
++                protocols=[protocol_1, protocol_2],
++                clients_indices=[0, 1],
++                resources=[{"GPU": 1}, {"CPU": 1}],
++            )
++            for packed_pose, kwargs in prc_generate:
++                # Post-process results on host node asynchronously from results generation
++
++        Yields:
++            (PackedPose, dict) tuples from the most recently run user-provided PyRosetta protocol if
++            `PyRosettaCluster(save_all=True)` otherwise from the final user-defined PyRosetta protocol.
++        """
+ 
+ PyRosettaCluster.__doc__ = __doc__
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/toolkit.py b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/toolkit.py
+index ec905619c8d..d7902fea6de 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/toolkit.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/toolkit.py
+@@ -17,6 +17,7 @@
+     Serialization,
+     get_instance_kwargs,
+     get_protocols,
++    iterate,
+     produce,
+     recreate_environment,
+     reproduce,
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/tools.py b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/tools.py
+index 3caac25cf81..74c99bc3bb8 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/tools.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/tools.py
+@@ -31,7 +31,7 @@
+ 
+ from datetime import datetime
+ from functools import wraps
+-from pyrosetta.distributed.cluster.converters import _parse_protocols
++from pyrosetta.distributed.cluster.converters import _parse_protocols, _parse_yield_results
+ from pyrosetta.distributed.cluster.converter_tasks import (
+     get_protocols_list_of_str,
+     get_yml,
+@@ -53,9 +53,11 @@
+     Any,
+     Callable,
+     Dict,
++    Generator,
+     List,
+     NoReturn,
+     Optional,
++    Tuple,
+     TypeVar,
+     Union,
+     cast,
+@@ -524,22 +526,18 @@ def reproduce(
+ 
+ def produce(**kwargs: Any) -> Optional[NoReturn]:
+     """
+-    PyRosettaCluster.distribute shim requiring the 'protocols' keyword argument and optionally
+-    any PyRosettaCluster keyword arguments or the 'clients_indices' keyword argument when using
+-    the 'clients' keyword argument.
++    `PyRosettaCluster().distribute()` shim requiring the 'protocols' keyword argument, and optionally
++    any PyRosettaCluster keyword arguments or the 'clients_indices' keyword argument (when using
++    the `PyRosettaCluster(clients=...)` keyword argument), or the 'resources' keyword argument.
+ 
+     Args:
+-        **kwargs: See PyRosettaCluster docstring. The keyword arguments must also include
++        **kwargs: See `PyRosettaCluster` docstring. The keyword arguments must also include
+             'protocols', an iterable object of function or generator objects specifying
+             an ordered sequence of user-defined PyRosetta protocols to execute for
+-            the simulation (see PyRosettaCluster.distribute docstring). The keyword arguments
+-            may also optionally include 'clients_indices' (see PyRosettaCluster.distribute
+-            docstring).
+-
+-    Returns:
+-        None
++            the simulation (see `PyRosettaCluster().distribute` docstring). The keyword arguments
++            may also optionally include 'clients_indices' or 'resources' (see
++            `PyRosettaCluster().distribute` docstring).
+     """
+-
+     protocols = kwargs.pop("protocols", None)
+     clients_indices = kwargs.pop("clients_indices", None)
+     resources = kwargs.pop("resources", None)
+@@ -549,5 +547,28 @@ def produce(**kwargs: Any) -> Optional[NoReturn]:
+         resources=resources,
+     )
+ 
+-
+ run: Callable[..., Optional[NoReturn]] = produce
++
++@wraps(produce, assigned=("__doc__",), updated=())
++def iterate(**kwargs: Any) -> Union[NoReturn, Generator[Tuple[PackedPose, Dict[Any, Any]], None, None]]:
++    protocols = kwargs.pop("protocols", None)
++    clients_indices = kwargs.pop("clients_indices", None)
++    resources = kwargs.pop("resources", None)
++    for result in PyRosettaCluster(**kwargs).generate(
++        protocols=protocols,
++        clients_indices=clients_indices,
++        resources=resources,
++    ):
++        yield result
++
++produce.__doc__ += """
++    Returns:
++        None
++    """
++iterate.__doc__ = iterate.__doc__.replace(
++    "PyRosettaCluster().distribute", "PyRosettaCluster().generate"
++) + """
++    Yields:
++        (PackedPose, dict) tuples from the most recently run user-provided PyRosetta protocol if
++        `PyRosettaCluster(save_all=True)` otherwise from the final user-defined PyRosetta protocol.
++    """
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/tests/distributed/cluster/test_reproducibility.py b/source/src/python/PyRosetta/src/pyrosetta/tests/distributed/cluster/test_reproducibility.py
+index 2530de7b591..c51bf9e7fa7 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/tests/distributed/cluster/test_reproducibility.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/tests/distributed/cluster/test_reproducibility.py
+@@ -466,39 +466,41 @@ def my_third_protocol(packed_pose, **kwargs):
+             protocols = [my_first_protocol, my_second_protocol, my_third_protocol]
+             self.assertEqual(len(seeds), len(protocols))
+ 
+-            PyRosettaCluster(
+-                tasks=tasks,
+-                input_packed_pose=input_pose,
+-                seeds=seeds,
+-                decoy_ids=None,
+-                client=None,
+-                scheduler=None,
+-                scratch_dir=workdir,
+-                cores=None,
+-                processes=None,
+-                memory=None,
+-                min_workers=1,
+-                max_workers=1,
+-                nstruct=nstruct,
+-                dashboard_address=None,
+-                compressed=True,
+-                logging_level="INFO",
+-                scorefile_name=None,
+-                project_name="PyRosettaCluster_Tests",
+-                simulation_name=None,
+-                environment=None,
+-                output_path=output_path,
+-                simulation_records_in_scorefile=True,
+-                decoy_dir_name="decoys",
+-                logs_dir_name="logs",
+-                ignore_errors=False,
+-                timeout=0.1,
+-                sha1=None,
+-                dry_run=False,
+-                save_all=False,
+-                system_info=None,
+-                pyrosetta_build=None,
+-            ).distribute(*protocols)
++            _ = list(
++                PyRosettaCluster(
++                    tasks=tasks,
++                    input_packed_pose=input_pose,
++                    seeds=seeds,
++                    decoy_ids=None,
++                    client=None,
++                    scheduler=None,
++                    scratch_dir=workdir,
++                    cores=None,
++                    processes=None,
++                    memory=None,
++                    min_workers=1,
++                    max_workers=1,
++                    nstruct=nstruct,
++                    dashboard_address=None,
++                    compressed=True,
++                    logging_level="INFO",
++                    scorefile_name=None,
++                    project_name="PyRosettaCluster_Tests",
++                    simulation_name=None,
++                    environment=None,
++                    output_path=output_path,
++                    simulation_records_in_scorefile=True,
++                    decoy_dir_name="decoys",
++                    logs_dir_name="logs",
++                    ignore_errors=False,
++                    timeout=0.1,
++                    sha1=None,
++                    dry_run=False,
++                    save_all=False,
++                    system_info=None,
++                    pyrosetta_build=None,
++                ).generate(*protocols)
++            )
+ 
+             with open(os.path.join(output_path, "scores.json"), "r") as f:
+                 data = [json.loads(line) for line in f]
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/tests/distributed/cluster/test_smoke.py b/source/src/python/PyRosetta/src/pyrosetta/tests/distributed/cluster/test_smoke.py
+index ae6061d592e..92f48002133 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/tests/distributed/cluster/test_smoke.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/tests/distributed/cluster/test_smoke.py
+@@ -13,6 +13,7 @@
+ 
+ import glob
+ import json
++import logging
+ import numpy
+ import os
+ import pyrosetta.distributed
+@@ -21,6 +22,7 @@
+ import subprocess
+ import sys
+ import tempfile
++import time
+ import unittest
+ import warnings
+ 
+@@ -38,6 +40,7 @@
+     )
+     raise
+ 
++from functools import wraps
+ from pyrosetta import Pose
+ from pyrosetta.distributed.packed_pose.core import PackedPose
+ from pyrosetta.utility import get_package_version
+@@ -45,6 +48,7 @@
+ from pyrosetta.distributed.cluster import (
+     PyRosettaCluster,
+     Serialization,
++    iterate,
+     get_scores_dict,
+     produce,
+     reserve_scores,
+@@ -1409,5 +1413,518 @@ def test_detached_scores_in_protocol(self):
+                 self.assertEqual(scores_dict["scores"][key], ScoresTest._value)
+ 
+ 
++class TestBase:
++    @classmethod
++    def setUpClass(cls):
++        pyrosetta.distributed.init(
++            options="-run:constant_seed 1 -multithreading:total_threads 1",
++            extra_options="-out:level 200",
++            set_logging_handler="logging",
++        )
++        cls.input_packed_pose = io.pose_from_sequence("TESTING")
++        cls.local_directory = tempfile.TemporaryDirectory()
++        cls.local_directory_1 = tempfile.TemporaryDirectory()
++        cls.local_directory_2 = tempfile.TemporaryDirectory()
++        with warnings.catch_warnings():
++            # Catch 'ResourceWarning: unclosed <socket.socket ...' from distributed/node.py:235
++            # Catch 'UserWarning: Port 8787 is already in use' from distributed/node.py:240
++            # Catch 'DeprecationWarning: `np.bool8` is a deprecated alias for `np.bool_`.  (Deprecated NumPy 1.24)' from bokeh/core/property/primitive.py:37
++            # Catch 'DeprecationWarning: pkg_resources is deprecated as an API.' from jupyter_server_proxy/config.py:10
++            warnings.simplefilter("ignore", category=ResourceWarning)
++            warnings.simplefilter("ignore", category=UserWarning)
++            warnings.simplefilter("ignore", category=DeprecationWarning)
++            default_cluster = LocalCluster(
++                n_workers=1,
++                threads_per_worker=1,
++                dashboard_address=None,
++                local_directory=cls.local_directory.name,
++                resources={"CPU": 1},
++            )
++            cluster_1 = LocalCluster(
++                n_workers=2,
++                threads_per_worker=2,
++                dashboard_address=None,
++                local_directory=cls.local_directory_1.name,
++                resources={"FOO": 1, "BAZ": 2},
++            )
++            cluster_2 = LocalCluster(
++                n_workers=2,
++                threads_per_worker=2,
++                dashboard_address=None,
++                local_directory=cls.local_directory_2.name,
++                resources={"BAR": 1e9, "BAZ": 2},
++            )
++        cls.default_client = Client(default_cluster)
++        cls.clients = [Client(cluster_1), Client(cluster_2)]
++
++    @classmethod
++    def tearDownClass(cls):
++        cls.local_directory.cleanup()
++        cls.local_directory_1.cleanup()
++        cls.local_directory_2.cleanup()
++        for c in [cls.default_client, *cls.clients]:
++            for worker in c.cluster.workers.values():
++                worker.close_gracefully()
++            c.shutdown()
++            c.cluster.close()
++
++    def setUp(self):
++        self.workdir = tempfile.TemporaryDirectory()
++        self.instance_kwargs = dict(
++            seeds=None,
++            decoy_ids=None,
++            client=None,
++            clients=None,
++            scheduler=None,
++            scratch_dir=self.workdir.name,
++            cores=None,
++            processes=None,
++            memory=None,
++            min_workers=1,
++            max_workers=1,
++            nstruct=1,
++            dashboard_address=None,
++            compression=True,
++            compressed=True,
++            logging_level="INFO",
++            scorefile_name=None,
++            project_name="PyRosettaCluster_Tests",
++            simulation_name=None,
++            environment=None,
++            output_path=os.path.join(self.workdir.name, "outputs"),
++            simulation_records_in_scorefile=False,
++            decoy_dir_name="test_decoy_dir",
++            logs_dir_name="logs",
++            ignore_errors=False,
++            timeout=0.1,
++            max_delay_time=0.0,
++            sha1=None,
++            system_info=None,
++            pyrosetta_build=None,
++            dry_run=False,
++            save_all=False,
++        )
++
++    def tearDown(self):
++        self.workdir.cleanup()
++
++
++class GeneratorTest(TestBase, unittest.TestCase):
++    """Smoke test for the use case of the `PyRosettaCluster().generate()` method."""
++    _n_tasks = 2
++    _n_output_packed_poses = 2
++    _parameters = (0.0, 100.0) # `float` objects for `packed_pose.update_scores` values
++    _pyrosetta_kwargs = {
++        "options": "-mute all",
++        "extra_options": "-ex1 -multithreading:total_threads 1",
++        "set_logging_handler": "logging",
++        }
++
++    @staticmethod
++    def parameter_to_str(parameter):
++        return f"stored_{int(parameter)}"
++
++    @staticmethod
++    def create_tasks(parameter):
++        for _ in range(GeneratorTest._n_tasks):
++            yield {
++                "extra_options": "-ex1 -multithreading:total_threads 1",
++                "set_logging_handler": "logging",
++                "n_output_packed_poses": GeneratorTest._n_output_packed_poses,
++                "parameter": parameter,
++            }
++
++    @staticmethod
++    def my_pyrosetta_protocol_1(packed_pose, **kwargs):
++        value = 1.0
++        kwargs["kwargs_key_1"] = value
++        packed_pose = packed_pose.update_scores(scores_key_1=value)
++        yield packed_pose
++        yield kwargs
++
++    @staticmethod
++    def my_pyrosetta_protocol_2(packed_pose, **kwargs):
++        assert "kwargs_key_1" in kwargs
++        assert "scores_key_1" in list(packed_pose.pose.scores)
++        value = 2.0
++        kwargs["kwargs_key_2"] = value
++        parameter = kwargs.get("parameter", "string")
++        packed_pose = packed_pose.update_scores(
++            {
++                "scores_key_2": value,
++                "parameter": parameter,
++                GeneratorTest.parameter_to_str(parameter): "test",
++            }
++        )
++        packed_poses = [packed_pose.pose.clone() for _ in range(kwargs["n_output_packed_poses"])]
++        return (*packed_poses, kwargs)
++
++    @classmethod
++    def get_protocols(cls):
++        return [cls.my_pyrosetta_protocol_1, cls.my_pyrosetta_protocol_2]
++
++    def test_generate_builtin_clients(self):
++        """Test for `PyRosettaCluster().generate()` using built-in client instantiations."""
++        instance_kwargs_update = {
++            **self.instance_kwargs,
++            "tasks": self.create_tasks(parameter=GeneratorTest._parameters[0]),
++            "input_packed_pose": self.input_packed_pose,
++        }
++        protocols = self.get_protocols()
++        clients_indices = instance_kwargs_update.pop("clients_indices", None)
++        resources = instance_kwargs_update.pop("resources", None)
++        instance = PyRosettaCluster(**instance_kwargs_update)
++
++        output_packed_pose_results = []
++        output_kwargs_results = []
++        for output_packed_pose, output_kwargs in instance.generate(
++            protocols=protocols,
++            clients_indices=clients_indices,
++            resources=resources,
++        ):
++            self.assertIsInstance(output_packed_pose, PackedPose)
++            self.assertIsInstance(output_kwargs, dict)
++            self.assertIn("kwargs_key_1", output_kwargs)
++            self.assertIn("kwargs_key_2", output_kwargs)
++            self.assertIn("scores_key_1", list(output_packed_pose.pose.scores))
++            self.assertIn("scores_key_2", list(output_packed_pose.pose.scores))
++            instance_kwargs_update = {
++                **self.instance_kwargs,
++                "tasks": self.create_tasks(parameter=GeneratorTest._parameters[1]),
++                "input_packed_pose": output_packed_pose,
++                "protocols": protocols,
++                "clients_indices": clients_indices,
++                "resources": resources,
++            }
++            for output_packed_pose, output_kwargs in iterate(**instance_kwargs_update):
++                self.assertIsInstance(output_packed_pose, PackedPose)
++                self.assertIsInstance(output_kwargs, dict)
++                self.assertIn("kwargs_key_1", output_kwargs)
++                self.assertIn("kwargs_key_2", output_kwargs)
++                self.assertIn("scores_key_1", list(output_packed_pose.pose.scores))
++                self.assertIn("scores_key_2", list(output_packed_pose.pose.scores))
++                output_packed_pose_results.append(output_packed_pose)
++                output_kwargs_results.append(output_kwargs)
++        _n_results_per_parameter = (GeneratorTest._n_tasks * GeneratorTest._n_output_packed_poses)
++        _n_output_results = _n_results_per_parameter ** 2
++        self.assertEqual(len(output_packed_pose_results), _n_output_results)
++        self.assertEqual(len(output_kwargs_results), _n_output_results)
++        for packed_pose in output_packed_pose_results:
++            self.assertEqual(
++                packed_pose.pose.scores.get("parameter", None),
++                GeneratorTest._parameters[1],
++                msg="Output packed pose does not have the correct value for the 'parameter' scores key."
++            )
++        for kwargs in output_kwargs_results:
++            self.assertEqual(
++                kwargs["PyRosettaCluster_task"].get("parameter", None),
++                GeneratorTest._parameters[1],
++                msg="Output kwargs do not have the correct value for the 'parameter' task key."
++            )
++        for _parameter in GeneratorTest._parameters:
++            scores_key = self.parameter_to_str(_parameter)
++            self.assertEqual(
++                len(list(filter(lambda packed_pose: scores_key in packed_pose.pose.scores, output_packed_pose_results))),
++                _n_output_results,
++                msg=f"Packed poses do not have the correct values for the '{scores_key}' scores key."
++            )
++
++    def test_generate_user_client(self):
++        """
++        Test for `PyRosettaCluster().generate()` with `save_all=True`,
++        `dry_run=True`, and using a user-provided client.
++        """
++        instance_kwargs = {
++            **self.instance_kwargs,
++            "tasks": self.create_tasks(parameter=GeneratorTest._parameters[0]),
++            "input_packed_pose": self.input_packed_pose,
++            "protocols": self.get_protocols(),
++            "client": self.default_client,
++            "clients": None,
++            "clients_indices": None,
++            "resources": None,
++            "save_all": True,
++            "dry_run": True,
++            "output_path": os.path.join(self.workdir.name, "outputs_dry_run"),
++        }
++        results = []
++        for output_packed_pose, _ in iterate(**instance_kwargs):
++            instance_kwargs_update = {
++                **instance_kwargs,
++                "input_packed_pose": output_packed_pose,
++                "tasks": self.create_tasks(parameter=GeneratorTest._parameters[1]),
++                "client": self.default_client, # Test passing in same client
++            }
++            for result in iterate(**instance_kwargs_update):
++                results.append(result)
++        _n_output_packed_poses_save_all = (GeneratorTest._n_output_packed_poses + 1) # Plus one from my_pyrosetta_protocol_1
++        _n_results_per_parameter = (GeneratorTest._n_tasks * _n_output_packed_poses_save_all)
++        _n_output_results = _n_results_per_parameter ** 2
++        self.assertEqual(
++            len(results), _n_output_results, msg="Number of results with save_all failed."
++        )
++        self.assertListEqual(
++            os.listdir(os.path.join(instance_kwargs["output_path"], instance_kwargs["decoy_dir_name"])),
++            [],
++            msg="Dry run failed while yielding results.",
++        )
++        self.assertFalse(
++            os.path.isfile(os.path.join(instance_kwargs["output_path"], "scores.json")),
++            msg="Dry run failed while yielding results.",
++        )
++
++    def test_generate_multi_user_clients(self):
++        """
++        Test for `PyRosettaCluster().generate()` with `save_all=True`,
++        `dry_run=True`, and using multiple user-provided clients.
++        """
++        clients_indices = [0, 1]
++        resources = [{"FOO": 1}, {"BAR": 9e8}]
++        instance_kwargs = {
++            **self.instance_kwargs,
++            "tasks": self.create_tasks(parameter=GeneratorTest._parameters[0]),
++            "input_packed_pose": self.input_packed_pose,
++            "protocols": self.get_protocols(),
++            "client": None,
++            "clients": self.clients,
++            "clients_indices": clients_indices,
++            "resources": resources,
++            "save_all": True,
++            "dry_run": True,
++            "output_path": os.path.join(self.workdir.name, "outputs"),
++        }
++        results = []
++        for output_packed_pose, _ in iterate(**instance_kwargs):
++            instance_kwargs_update = {
++                **instance_kwargs,
++                "input_packed_pose": output_packed_pose,
++                "tasks": self.create_tasks(parameter=GeneratorTest._parameters[1]),
++                "client": None,
++                "clients": self.clients, # Test passing in same clients
++                "clients_indices": clients_indices,
++                "resources": resources,
++            }
++            for result in iterate(**instance_kwargs_update):
++                results.append(result)
++        _n_output_packed_poses_save_all = (GeneratorTest._n_output_packed_poses + 1) # Plus one from my_pyrosetta_protocol_1
++        _n_results_per_parameter = (GeneratorTest._n_tasks * _n_output_packed_poses_save_all)
++        _n_output_results = _n_results_per_parameter ** 2
++        self.assertEqual(
++            len(results), _n_output_results, msg="Number of results with save_all failed."
++        )
++        self.assertListEqual(
++            os.listdir(os.path.join(instance_kwargs["output_path"], instance_kwargs["decoy_dir_name"])),
++            [],
++            msg="Dry run failed while yielding results.",
++        )
++        self.assertFalse(
++            os.path.isfile(os.path.join(instance_kwargs["output_path"], "scores.json")),
++            msg="Dry run failed while yielding results.",
++        )
++
++    def test_generate_partition_clients(self):
++        """
++        Test for `PyRosettaCluster().generate()` with `save_all=True`,
++        `dry_run=True`, and partitioning user-provided clients over iterations.
++        """
++        resources = [{"BAZ": 1}, {"BAZ": 2}]
++        instance_kwargs = {
++            **self.instance_kwargs,
++            "tasks": self.create_tasks(parameter=GeneratorTest._parameters[0]),
++            "input_packed_pose": self.input_packed_pose,
++            "protocols": self.get_protocols(),
++            "client": self.clients[0], # Test passing in first client
++            "clients": None,
++            "clients_indices": None,
++            "resources": resources,
++            "save_all": True,
++            "dry_run": True,
++            "output_path": os.path.join(self.workdir.name, "outputs_dry_run_clients"),
++        }
++        results = []
++        for output_packed_pose, _ in iterate(**instance_kwargs):
++            instance_kwargs_update = {
++                **instance_kwargs,
++                "input_packed_pose": output_packed_pose,
++                "tasks": self.create_tasks(parameter=GeneratorTest._parameters[1]),
++                "client": self.clients[1], # Test passing in second client
++                "clients": None,
++                "clients_indices": None,
++                "resources": resources,
++            }
++            for result in iterate(**instance_kwargs_update):
++                results.append(result)
++        _n_output_packed_poses_save_all = (GeneratorTest._n_output_packed_poses + 1) # Plus one from my_pyrosetta_protocol_1
++        _n_results_per_parameter = (GeneratorTest._n_tasks * _n_output_packed_poses_save_all)
++        _n_output_results = _n_results_per_parameter ** 2
++        self.assertEqual(
++            len(results), _n_output_results, msg="Number of results with save_all failed."
++        )
++        self.assertListEqual(
++            os.listdir(os.path.join(instance_kwargs["output_path"], instance_kwargs["decoy_dir_name"])),
++            [],
++            msg="Dry run failed while yielding results.",
++        )
++        self.assertFalse(
++            os.path.isfile(os.path.join(instance_kwargs["output_path"], "scores.json")),
++            msg="Dry run failed while yielding results.",
++        )
++
++
++class RuntimeTestLoggingFilter(logging.Filter):
++    matches = (
++        "with_lock",
++        "dry_run",
++        "save_all",
++        "Percent Complete",
++        "simulation complete",
++        "Attempted to determine the residue type set of an empty pose",
++    )
++    def filter(self, record):
++        msg = record.getMessage()
++        return all(map(lambda s: s not in msg, self.matches))
++
++
++@unittest.skip("Auxiliary tests for runtime testing.")
++class RuntimeTest(TestBase, unittest.TestCase):
++    @staticmethod
++    def create_simple_tasks(n_tasks=10):
++        for i in range(n_tasks):
++            yield {
++                **GeneratorTest._pyrosetta_kwargs,
++                "task": i,
++            }
++
++    @staticmethod
++    def timing_protocol_1(packed_pose, **kwargs):
++        import logging
++        _logger = logging.getLogger(kwargs['PyRosettaCluster_protocol_name'])
++        _logger.info(f"Running procotol {kwargs['PyRosettaCluster_protocol_name']} with task {kwargs['task']}")
++        yield packed_pose
++
++    @staticmethod
++    def timing_protocol_2(packed_pose, **kwargs):
++        return RuntimeTest.timing_protocol_1(packed_pose, **kwargs)
++
++    @classmethod
++    def setup_logger(cls, stream=True):
++        _logger = logging.getLogger(__name__)
++        if stream:
++            _stream_handler = logging.StreamHandler(sys.stdout)
++            _logger.addHandler(_stream_handler)
++        else:
++            _stream_handler = None
++
++        _root_logger = logging.getLogger("root")
++        _filter = RuntimeTestLoggingFilter()
++        _root_logger.addFilter(_filter)
++
++        _rosetta_logger = logging.getLogger("rosetta")
++        _rosetta_logger.addFilter(_filter)
++
++        _distributed_logger = logging.getLogger("pyrosetta.distributed")
++        _distributed_logger.addFilter(_filter)
++
++        return _logger, _stream_handler
++
++    @classmethod
++    def tear_down_logger(cls, _logger, _stream_handler):
++        if _stream_handler is not None:
++            _logger.removeHandler(_stream_handler)
++
++    @staticmethod
++    def get_mean_dt(ts):
++        return numpy.mean([ts[i + 1] - ts[i] for i in range(len(ts) - 1)])
++
++    @staticmethod
++    def get_dt(t, ts):
++        return t if len(ts) == 0 else (t - ts[-1])
++
++    @unittest.skip("Auxiliary test for runtime testing.")
++    def test_timing_single_instance(self):
++        """Runtime test with a single PyRosettaCluster instance."""
++        _logger, _stream_handler = self.setup_logger(stream=True)
++        _logger.info(f"Starting single PyRosettaCluster instance runtime test.")
++        prc = PyRosettaCluster(
++            **{
++                **self.instance_kwargs,
++                "input_packed_pose": self.input_packed_pose,
++                "tasks": self.create_simple_tasks(),
++                "clients": self.clients,
++                "dry_run": True,
++                "save_all": True,
++                "max_delay_time": 0.0,
++            }
++        )
++        prc_iterable = prc.generate(
++            self.timing_protocol_1,
++            self.timing_protocol_2,
++            clients_indices=[0, 1],
++            resources=[{"FOO": 1}, {"BAZ": 2}],
++        )
++        ts = []
++        t0 = time.time()
++        for i, (_, output_kwargs) in enumerate(prc_iterable):
++            t = time.time() - t0
++            dt = self.get_dt(t, ts)
++            ts.append(t)
++            task = output_kwargs.get("task")
++            client_repr = output_kwargs.get("PyRosettaCluster_client_repr")
++            _logger.info(f"Finished iteration {(i,)} with task {task} on client {client_repr} in {dt:0.3f} seconds")
++        mean_dt = self.get_mean_dt(ts)
++        _logger.info(f"Average iteration time with a single PyRosettaCluster instance: {mean_dt:0.7f} seconds")
++        self.tear_down_logger(_logger, _stream_handler)
++
++    @unittest.skip("Auxiliary test for runtime testing.")
++    def test_timing_multi_instance(self):
++        """Runtime test for two PyRosettaCluster instances asynchronously generating results."""
++        _logger, _stream_handler = self.setup_logger(stream=True)
++        _logger.info(f"Starting multiple PyRosettaCluster instance runtime test.")
++        setup_kwargs = {
++            "dry_run": True,
++            "save_all": False,
++            "max_delay_time": 0.0,
++        }
++        instance_kwargs_1 = {
++            **self.instance_kwargs,
++            **setup_kwargs,
++            "input_packed_pose": self.input_packed_pose,
++            "tasks": self.create_simple_tasks(),
++            "client": self.clients[0],
++            "protocols": self.timing_protocol_1,
++            "resources": [{"BAZ": 1}],
++        }
++        prc_iterate = iterate(**instance_kwargs_1)
++        instance_kwargs_2 = {
++            **self.instance_kwargs,
++            **setup_kwargs,
++            "client": self.clients[1],
++        }
++        for k in ("protocols", "clients_indices", "resources"):
++            instance_kwargs_2.pop(k, None)
++        prc = PyRosettaCluster(**instance_kwargs_2)
++        ts = []
++        t0 = time.time()
++        for i, (output_packed_pose, output_kwargs) in enumerate(prc_iterate):
++            t = time.time() - t0
++            dt = self.get_dt(t, ts)
++            ts.append(t)
++            task = output_kwargs.get("task")
++            client_repr = output_kwargs.get("PyRosettaCluster_client_repr")
++            _logger.info(f"Finished iteration {(i,)} with task {task} on client {client_repr} in {dt:0.3f} seconds")
++            prc.tasks = [{**GeneratorTest._pyrosetta_kwargs, "task": task}]
++            prc.input_packed_pose = output_packed_pose
++            for j, (_, output_kwargs) in enumerate(prc.generate(self.timing_protocol_2, resources=[{"BAR": 1e8}])):
++                t = time.time() - t0
++                dt = self.get_dt(t, ts)
++                ts.append(t)
++                task = output_kwargs.get("task")
++                client_repr = output_kwargs.get("PyRosettaCluster_client_repr")
++                _logger.info(f"Finished iteration {(i, j)} with task {task} on client {client_repr} in {dt:0.3f} seconds")
++        mean_dt = self.get_mean_dt(ts)
++        _logger.info(f"Average iteration time with multiple PyRosettaCluster instances: {mean_dt:0.7f} seconds")
++        self.tear_down_logger(_logger, _stream_handler)
++
++
+ if __name__ == "__main__":
+     unittest.main(verbosity=2)

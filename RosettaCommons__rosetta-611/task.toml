@@ -1,0 +1,63 @@
+version = "1.0"
+
+[task]
+name = "default/RosettaCommons__rosetta-611"
+description = "Update SecureUnpickler disallowed packages"
+
+[metadata]
+difficulty = "medium"
+category = "bugfix"
+keywords = [
+    "rosetta",
+    "pr_diff",
+]
+
+[metadata.repo2env]
+pipeline = "pr_diff"
+pipeline_version = "0.3.0"
+repo = "RosettaCommons/rosetta"
+ref = "1a56185c2592611dec4c9c75ddc9468cd2227c1f"
+reference = "https://github.com/RosettaCommons/rosetta/pull/611"
+source_access = "auto"
+built_at = "2026-11-15T22:35:53.227803+00:00"
+reward_kinds = [
+    "diff_similarity",
+]
+spec_version = "0.2.0"
+content_hash = "sha256:d78226d3738cc76407375233cec06a3aa290c47cf8402fdba8b91897844cd186"
+
+[metadata.repo2env.pr_diff]
+pr_merged_at = "2026-02-03T01:21:37Z"
+diff_format = "unified"
+context_files = [
+    "source/src/python/PyRosetta/src/pyrosetta/secure_unpickle.py",
+    "source/src/python/PyRosetta/src/pyrosetta/tests/bindings/core/test_pose.py",
+]
+
+[metadata.repo2env.reward_calibration]
+baseline_reward = 0.0
+loc_changed = 72
+difficulty = "medium"
+
+[metadata.repo2env.evaluation]
+schema_version = "1"
+status = "unverified"
+stage = "generation"
+reason_codes = [
+    "validation_not_run",
+]
+detail = "Generated task; validation has not been established."
+provenance = "unknown"
+evidence = []
+
+[metadata.repo2env.reproducibility]
+mode = "local_only"
+image_ref = "python:3.12-slim"
+image_tag = "python:3.12-slim"
+image_visibility = "private"
+
+[agent]
+timeout_sec = 1800.0
+
+[verifier]
+timeout_sec = 300.0

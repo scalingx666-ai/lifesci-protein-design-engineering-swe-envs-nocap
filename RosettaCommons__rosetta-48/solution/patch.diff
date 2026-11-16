@@ -1,0 +1,149 @@
+diff --git a/tests/benchmark/tests/scientific/command.py b/tests/benchmark/tests/scientific/command.py
+index 4e42fc731be..2593894821f 100755
+--- a/tests/benchmark/tests/scientific/command.py
++++ b/tests/benchmark/tests/scientific/command.py
+@@ -135,7 +135,7 @@ def run(test, repository_root, working_dir, platform, config, hpc_driver=None, v
+ 
+         mp_f19_tilt_angle     = 'numpy matplotlib==3.2 pandas==0.24.2 scipy==1.1.0',
+         mp_f19_sequence_recovery    = 'numpy matplotlib==3.2',
+-        mp_f19_ddG_of_mutation      = 'numpy matplotlib==3.2',
++        mp_f19_ddG_of_mutation      = 'numpy matplotlib==3.7', # Requires Python 3.8!
+         mp_f19_decoy_discrimination = 'numpy matplotlib==3.2',
+ 
+         mp_dock            = 'numpy matplotlib==3.2',
+diff --git a/tests/scientific/tests/mp_f19_ddG_of_mutation/2.analyze.py b/tests/scientific/tests/mp_f19_ddG_of_mutation/2.analyze.py
+index fb3be58d14f..2e13ab81ebc 100755
+--- a/tests/scientific/tests/mp_f19_ddG_of_mutation/2.analyze.py
++++ b/tests/scientific/tests/mp_f19_ddG_of_mutation/2.analyze.py
+@@ -12,7 +12,7 @@
+ ## @brief this script is part of mp_f19_ddG_of_mutation scientific test
+ ## @author Sergey Lyskov, Rebecca F. Alford (ralford3@jhu.edu)
+ 
+-import os, sys, subprocess, math
++import os, os.path, sys, subprocess, math
+ import numpy as np
+ import benchmark
+ from benchmark.util import quality_measures as qm
+@@ -57,58 +57,63 @@
+ 
+ # go through scorefiles of targets
+ for i in range( 0, len( ddG_files ) ):
+-
+-	# get column numbers from labels, 1-indexed
+-	exp_index = str( subprocess.getoutput( "grep " + exp_label + " " + ddG_files[0] ).split().index( exp_label ) + 1 )
+-	pred_index = str( subprocess.getoutput( "grep " + pred_label + " " + ddG_files[0] ).split().index( pred_label ) + 1 )
+-	aa_index = str( subprocess.getoutput( "grep " + aa_label + " " + ddG_files[0] ).split().index( aa_label ) + 1 )
+-
+-	# read in score file, scores are sorted, first one is lowest
+-	exp = subprocess.getoutput( "grep -v SEQUENCE " + ddG_files[i] + " | grep -v " + exp_label + " | awk '{print $" + exp_index + "}'" ).splitlines()
+-	pred = subprocess.getoutput( "grep -v SEQUENCE " + ddG_files[i] + " | grep -v " + pred_label + " | awk '{print $" + pred_index + "}'" ).splitlines()
+-	aa = subprocess.getoutput( "grep -v SEQUENCE " + ddG_files[i] + " | grep -v " + aa_label + " | awk '{print $" + aa_index + "}'" ).splitlines()
+-
+-	# map values to floats (were strings)
+-	exp = list( map( float, exp ))
+-	pred = list( map( float, pred ))
+-	aa = list( map( str, aa ))
+-
+-	# Make numpy arrays
+-	exp_arr = np.asarray( exp )
+-	pred_arr = np.asarray( pred )
+-	aa_arr = np.asarray( aa )
+-
+-	# Remove prolines
+-	exp_no_proline = exp_arr[ np.where( aa_arr != "P" ) ]
+-	pred_no_proline = pred_arr[ np.where( aa_arr != "P" ) ]
+-	aa_no_proline = aa_arr[ np.where( aa_arr != "P" ) ]
+-	
+-	# Calculate a correlation coefficient
+-	pearson_correl = np.corrcoef( exp_no_proline, pred_no_proline ).item((0,1))
+-	best_fit = np.polyfit( exp_no_proline, pred_no_proline, 1 )
+-
+-	slope = best_fit[0]
+-	intercept = best_fit[1]
+-	
+-	# check for correlation above cutoff
+-	#Its a stochastic value, exact value may not match. giving a range of -0.05
+-	f.write( targets[i] + "\t" )
+-	f.write( str(round(pearson_correl, 3)) + "\t" )
+-	if ( cutoffs_corr_dict[targets[i]]-0.05 > pearson_correl ): 
+-		failures.append( "correl " + targets[i] )
+-
+-	# check for slope within range
+-	f.write( str(round(slope, 3)) + "\t" )
+-	if ( cutoffs_slope_dict[targets[i]]+2.0 < slope or cutoffs_slope_dict[targets[i]]-2.0 > slope ):
+-		failures.append( "slope " + targets[i] )
+-
+-	# check for intercept within range
+-	f.write( str(round(intercept, 3)) + "\t" )
+-	if ( cutoffs_intercept_dict[targets[i]]+3.0 < intercept or cutoffs_intercept_dict[targets[i]]-3.0 > intercept ): 
+-		failures.append( "intercept " + targets[i] )
+-
+-	results.update( {targets[i] : [pearson_correl, slope, intercept] } )
+-	f.write( "\n" )
++    if not os.path.isfile(ddG_files[i]):
++        raise RuntimeError("Cannot find datafile: "+ddG_files[i])
++
++    try:
++        # get column numbers from labels, 1-indexed
++        exp_index = str( subprocess.getoutput( "grep " + exp_label + " " + ddG_files[0] ).split().index( exp_label ) + 1 )
++        pred_index = str( subprocess.getoutput( "grep " + pred_label + " " + ddG_files[0] ).split().index( pred_label ) + 1 )
++        aa_index = str( subprocess.getoutput( "grep " + aa_label + " " + ddG_files[0] ).split().index( aa_label ) + 1 )
++
++        # read in score file, scores are sorted, first one is lowest
++        exp = subprocess.getoutput( "grep -v SEQUENCE " + ddG_files[i] + " | grep -v " + exp_label + " | awk '{print $" + exp_index + "}'" ).splitlines()
++        pred = subprocess.getoutput( "grep -v SEQUENCE " + ddG_files[i] + " | grep -v " + pred_label + " | awk '{print $" + pred_index + "}'" ).splitlines()
++        aa = subprocess.getoutput( "grep -v SEQUENCE " + ddG_files[i] + " | grep -v " + aa_label + " | awk '{print $" + aa_index + "}'" ).splitlines()
++
++        # map values to floats (were strings)
++        exp = list( map( float, exp ))
++        pred = list( map( float, pred ))
++        aa = list( map( str, aa ))
++
++        # Make numpy arrays
++        exp_arr = np.asarray( exp )
++        pred_arr = np.asarray( pred )
++        aa_arr = np.asarray( aa )
++
++        # Remove prolines
++        exp_no_proline = exp_arr[ np.where( aa_arr != "P" ) ]
++        pred_no_proline = pred_arr[ np.where( aa_arr != "P" ) ]
++        aa_no_proline = aa_arr[ np.where( aa_arr != "P" ) ]
++
++        # Calculate a correlation coefficient
++        pearson_correl = np.corrcoef( exp_no_proline, pred_no_proline ).item((0,1))
++        best_fit = np.polyfit( exp_no_proline, pred_no_proline, 1 )
++
++        slope = best_fit[0]
++        intercept = best_fit[1]
++
++        # check for correlation above cutoff
++        #Its a stochastic value, exact value may not match. giving a range of -0.05
++        f.write( targets[i] + "\t" )
++        f.write( str(round(pearson_correl, 3)) + "\t" )
++        if ( cutoffs_corr_dict[targets[i]]-0.05 > pearson_correl ):
++            failures.append( "correl " + targets[i] )
++
++        # check for slope within range
++        f.write( str(round(slope, 3)) + "\t" )
++        if ( cutoffs_slope_dict[targets[i]]+2.0 < slope or cutoffs_slope_dict[targets[i]]-2.0 > slope ):
++            failures.append( "slope " + targets[i] )
++
++        # check for intercept within range
++        f.write( str(round(intercept, 3)) + "\t" )
++        if ( cutoffs_intercept_dict[targets[i]]+3.0 < intercept or cutoffs_intercept_dict[targets[i]]-3.0 > intercept ):
++            failures.append( "intercept " + targets[i] )
++
++        results.update( {targets[i] : [pearson_correl, slope, intercept] } )
++        f.write( "\n" )
++    except:
++        print("ERROR when processing", ddG_files[i])
+ 
+ f.close()
+ 
+diff --git a/tools b/tools
+index 8099121a565..b0af2521cbe 160000
+--- a/tools
++++ b/tools
+@@ -1 +1 @@
+-Subproject commit 8099121a5655572e3375dd6d3e9fc4f2edcd2ed3
++Subproject commit b0af2521cbed1f2bde597ef1c5406efa376a6f85

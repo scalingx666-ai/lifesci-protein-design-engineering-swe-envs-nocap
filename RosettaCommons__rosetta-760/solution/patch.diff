@@ -1,0 +1,20 @@
+diff --git a/PyRosetta.notebooks b/PyRosetta.notebooks
+index a0b43d6d03..7ad685f291 160000
+--- a/PyRosetta.notebooks
++++ b/PyRosetta.notebooks
+@@ -1 +1 @@
+-Subproject commit a0b43d6d036c9d98cca9356d4853d64126b7afb8
++Subproject commit 7ad685f291b5b7b681259e2135e4dcecf05050a4
+diff --git a/tests/benchmark/tests/PyRosetta.py b/tests/benchmark/tests/PyRosetta.py
+index cdbfaf172b..f3ec6750d5 100644
+--- a/tests/benchmark/tests/PyRosetta.py
++++ b/tests/benchmark/tests/PyRosetta.py
+@@ -231,7 +231,7 @@ def run_notebook_tests(rosetta_dir, working_dir, platform, config, hpc_driver, v
+     TR = Tracer(verbose)
+ 
+     packages = 'ipython pyrosettacolabsetup nbconvert'  # base packages for test
+-    packages += ' matplotlib biopython blosc dask distributed jupyter numpy pandas py3Dmol scipy traitlets graphviz seaborn dask-jobqueue attrs billiard GitPython fsspec' # extra packages for various notebooks
++    packages += ' matplotlib biopython blosc dask distributed jupyter numpy pandas py3Dmol scipy traitlets graphviz seaborn dask-jobqueue attrs billiard GitPython fsspec pyrosetta-distributed' # extra packages for various notebooks
+     #packages += ' traitlets==5.3.0 ipywidgets==8.0.1 jupyterlab-widgets==3.0.2 prompt-toolkit==3.0.30 widgetsnbextension==4.0.2'
+ 
+     P = build_and_install_pyrosetta(working_dir, rosetta_dir, platform, jobs, config, mode='MinSizeRel', packages=packages, skip_compile=skip_compile)

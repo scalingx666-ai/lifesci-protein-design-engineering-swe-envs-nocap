@@ -1,0 +1,41 @@
+diff --git a/documentation b/documentation
+index c63fa76b91..4a35833a88 160000
+--- a/documentation
++++ b/documentation
+@@ -1 +1 @@
+-Subproject commit c63fa76b91078c3661160449997b330096f65963
++Subproject commit 4a35833a88d3e5b08c6b63e6bdf3c449fd27b505
+diff --git a/source/src/utility/string_util.cc b/source/src/utility/string_util.cc
+index 22bdb5b9b7..2f56140e95 100644
+--- a/source/src/utility/string_util.cc
++++ b/source/src/utility/string_util.cc
+@@ -711,8 +711,7 @@ make_tag_with_dashes( utility::vector1< int > const & res_vector,
+ 	for ( platform::Size n = 1; n <= res_vector_segments.size(); n++ ) {
+ 		if ( n > 1 ) tag += delimiter;
+ 		std::pair< int, int > const & segment = res_vector_segments[n];
+-		if ( chains_for_segments[n] != "\0" &&
+-				chains_for_segments[n] != " "  &&
++		if ( chains_for_segments[n] != " "  &&
+ 				chains_for_segments[n] != "_" ) tag += chains_for_segments[n] + ":";
+ 		if ( segids_for_segments[n] != "    " ) tag += strip(segids_for_segments[n]) + ":";
+ 		if ( segment.first == segment.second ) {
+@@ -725,19 +724,6 @@ make_tag_with_dashes( utility::vector1< int > const & res_vector,
+ 	return tag;
+ }
+ 
+-//std::string
+-//make_tag_with_dashes( utility::vector1< int > const & res_vector,
+-// utility::vector1< char > const & chain_vector,
+-// utility::vector1< std::string > const & segid_vector,
+-// char const delimiter
+-//) {
+-// utility::vector1< std::string > chain_str;
+-// for ( char chain: chain_vector ) {
+-//  chain_str.push_back( std::string{chain} );
+-// }
+-// return make_tag_with_dashes(res_vector, chain_vector, segid_vector, delimiter);
+-//}
+-
+ /////////////////////////////////////////////////////////////////////////////////////////
+ // @brief Demands four-character seg ids. Output looks like "SEG1:3-4 SEG2:1-12    :1-3"
+ std::string

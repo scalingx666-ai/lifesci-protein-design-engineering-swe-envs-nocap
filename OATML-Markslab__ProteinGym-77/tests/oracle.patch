@@ -1,0 +1,2342 @@
+diff --git a/config.json b/config.json
+index 5734f72..707f6ce 100644
+--- a/config.json
++++ b/config.json
+@@ -95,7 +95,8 @@
+         "Progen3_339m":{"input_score_name":"log_likelihood", "location":"Progen3/339m", "directionality": 1, "key": "mutant","model_type":"Single sequence"},
+         "Progen3_762m":{"input_score_name":"log_likelihood", "location":"Progen3/762m", "directionality": 1, "key": "mutant","model_type":"Single sequence"},
+         "Progen3_1b":{"input_score_name":"log_likelihood", "location":"Progen3/1b", "directionality": 1, "key": "mutant","model_type":"Single sequence"},
+-        "Progen3_3b":{"input_score_name":"log_likelihood", "location":"Progen3/3b", "directionality": 1, "key": "mutant","model_type":"Single sequence"}
++        "Progen3_3b":{"input_score_name":"log_likelihood", "location":"Progen3/3b", "directionality": 1, "key": "mutant","model_type":"Single sequence"},
++        "AIDO.Protein-RAG-16B-zeroshot":{"input_score_name":"AIDO.Protein-RAG-16B-zeroshot", "location":"AIDO.Protein/AIDO.Protein-RAG-16B-zeroshot", "directionality": 1, "key": "mutant","model_type":"Structure & MSA"}
+     },
+     "model_list_zero_shot_indels_DMS":{
+         "Unirep":{"input_score_name":"Unirep_score", "location":"UniRep", "directionality": -1, "key": "mutated_sequence","model_type":"Single sequence"},
+diff --git a/proteingym/baselines/AIDO.Protein-RAG-proteingym-dms-zeroshot/LICENSE b/proteingym/baselines/AIDO.Protein-RAG-proteingym-dms-zeroshot/LICENSE
+new file mode 100644
+index 0000000..38013df
+--- /dev/null
++++ b/proteingym/baselines/AIDO.Protein-RAG-proteingym-dms-zeroshot/LICENSE
+@@ -0,0 +1,49 @@
++GENBIO AI COMMUNITY LICENSE AGREEMENT
++
++This GenBio AI Community License Agreement (the “License”) constitutes an agreement between you or the legal entity you represent (“you” or “your”) and GENBIO.AI, INC. (“GenBio”), governing your use of the GenBio Materials. If you are using the GenBio Materials on behalf of a legal entity, you represent and warrant to GenBio that you have full legal authority to act on behalf of that legal entity as applicable under the License. If you do not have the authority to accept this License or if you disagree with any or all of the License, you shall not use the GenBio Materials in any manner. By using or distributing any portion or element of the GenBio Materials, you imply your agreement to be bound by the License.
++
++“GenBio Materials” means any datasets, code, model weights or any other materials provided by GenBio at the following GitHub Page https://github.com/genbio-ai or Hugging Face Page https://huggingface.co/genbio-ai, including any updates or modifications made from time to time, whether in Source or Object form, and is made available to you under this License.
++
++
++1. License Grant.
++      1.1 License Scope. Subject to the terms of this License, GenBio grants you a non-exclusive, worldwide, non-transferable, non-sublicensable, revocable and royalty-free limited license under GenBio’s intellectual property or other rights owned by GenBio embodied in the GenBio Materials to use, reproduce, distribute, and create Derivative Works of, and make modifications to, the GenBio Materials for any Non-Commercial Purposes.
++      1.2 Use Restrictions. Restricted activities in relation to the License or use of GenBio Materials include:
++            1.2.1 You shall use the GenBio Materials, Contributions, Derivative Works, Outputs and Output Derivatives (as defined below) solely for Non-Commercial Purposes;
++            1.2.2 You shall not, directly or indirectly: (a) use or provide access to any Outputs or Output Derivatives to train, optimize, improve, or otherwise enhance the functionality or performance of any machine learning models or related technologies that are similar to the GenBio Materials; (b) engage in any form of model distillation or other methods that would achieve the purposes described in subsection (a) above. Notwithstanding the foregoing, you may use Outputs and Output Derivatives to train, optimize, improve, or enhance the functionality or performance of: (i) The GenBio Materials itself; and (ii) downstream Derivative Works of the GenBio Materials;
++            1.2.3 Your use of the GenBio Materials shall be subject to any additional terms and conditions that: (a) GenBio provides to you separately; or (b) GenBio otherwise makes available to you.
++
++2. Sharing and Distribution.  
++      2.1 Subject to Section 1, if you distribute or make available the GenBio Materials or a Derivative Work to a third party for your Non-Commercial Purposes, in Source or Object form, you shall: 
++            2.1.1 provide a copy of this License to that third party;
++            2.1.2 retain the following attribution notice within a “Notice” text file distributed as a part of such copies: “This is licensed under the GenBio AI Community License Agreement, Copyright ©  GENBIO.AI, INC. All Rights Reserved”; and
++            2.1.3 prominently display “Powered by GenBio AI” on a related website, user interface, blogpost, about page, or product documentation. 
++      2.2 If You create a Derivative Work, you may add your own attribution notice(s) to the “Notice” text file included with that Derivative Work, provided that you clearly indicate which attributions apply to the GenBio Materials and state in the “Notice” text file that you changed the GenBio Materials and how it was modified.
++
++3. Submission of Contribution.
++      Unless you explicitly state otherwise, any Contribution intentionally submitted for inclusion in the GenBio Materials by you to GenBio shall be under the terms and conditions of this License, without any additional terms or conditions. Notwithstanding the above, nothing herein shall supersede or modify the terms of any separate license agreement you may have executed with GenBio regarding such Contributions.
++
++4. Export Control.
++      You shall comply with the applicable U.S. Foreign Corrupt Practices Act and all applicable export laws, restrictions and regulations of the U.S. Department of Commerce, and any other applicable U.S. and foreign authority.
++
++5. Disclaimer of Warranty.
++      GENBIO MATERIALS PROVIDED BY GENBIO OR ANY OUTPUT YOU RECEIVED ARE PROVIDED “AS IS.” EXCEPT TO THE EXTENT PROHIBITED BY LAW. GENBIO MAKES NO REPRESENTATIONS OR WARRANTIES OF ANY KIND, WHETHER EXPRESS, IMPLIED OR OTHERWISE, REGARDING THE ACCURACY, COMPLETENESS OR PERFORMANCE OF THE SERVICES AND YOUR OUTPUT, OR WITH RESPECT TO SATISFACTORY QUALITY, FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT. 
++
++6. Limitation of Liability.  
++      In no event and under no legal theory, whether in tort (including negligence), contract, or otherwise, unless required by applicable law (such as deliberate and grossly negligent acts) or agreed to in writing, shall any Contributor be liable to You for damages, including any direct, indirect, special, incidental, or consequential damages of any character arising as a result of this License or out of the use or inability to use the GenBio Materials (including but not limited to damages for loss of goodwill, work stoppage, computer failure or malfunction, or any and all other commercial damages or losses), even if such Contributor has been advised of the possibility of such damages.
++
++7. General Terms. 
++      7.1 Relationship of Parties.  You and GenBio are independent contractors, and nothing herein shall be deemed to constitute either party as the agent or representative of the other or both parties as joint venturers or partners for any purpose.
++      7.2 Assignment.  This License and the rights and obligations herein may not be assigned or transferred, in whole or in part, by You without the prior written consent of GenBio. Any assignment in violation of this provision is void. GenBio may freely assign or transfer this License, in whole or in part. This License shall be binding upon, and inure to the benefit of, the successors and permitted assigns of the parties.
++      7.3 Governing Law.  This License shall be governed, construed and interpreted in accordance with the laws of the State of California, without giving effect to principles of conflicts of law. Each of the parties to this License consents to the exclusive jurisdiction and venue of the courts of the state and federal courts of California.
++      7.4 Severability. If any provision of this License is held to be invalid, illegal or unenforceable in any respect, that provision shall be limited or eliminated to the minimum extent necessary so that this License otherwise remains in full force and effect and enforceable.
++
++8. Definitions.
++      8.1 “Commercial Entity” means any entity engaged in any activity intended for or directed toward commercial advantage or monetary compensation, including, without limitation, the development of any product or service intended to be sold or made available for a fee. For the purpose of this License, references to a Commercial Entity expressly exclude any universities, non-profit organizations, not-for-profit entities, research institutes and educational and government bodies.
++      8.2 “Contribution” means any work of authorship, including the original version of the GenBio Materials and any modifications or additions to that GenBio Materials or Derivative Works thereof, that is intentionally submitted to GenBio for inclusion in the GenBio Materials by the copyright owner or by an individual or legal entity authorized to submit on behalf of the copyright owner. For the purposes of this definition, “submitted” means any form of electronic, verbal, or written communication sent to GenBio or its representatives, including but not limited to communication on electronic mailing lists, source code control systems, and issue tracking systems that are managed by, or on behalf of, GenBio for the purpose of discussing and improving the GenBio Materials, but excluding Outputs and all communications that are conspicuously marked or otherwise designated in writing by the copyright owner as “Not a Contribution”.
++      8.3 “Contributor” means GenBio and any individual or legal entity on behalf of whom a Contribution has been received by GenBio and subsequently incorporated within the GenBio Materials.
++      8.4 “Derivative Work” means any work, whether in Source or Object form, that is based on (or derived from) the GenBio Materials and for which the editorial revisions, annotations, elaborations, or other modifications represent, as a whole, an original work of authorship. For the purposes of this License, Derivative Works shall not include works that remain separable from, or merely link (or bind by name) to the interfaces of, the GenBio Materials and Derivative Works thereof.
++      8.5 “Non-Commercial Purposes” means uses not intended for or directed toward commercial advantage or monetary compensation, or the facilitation of development of any product or service to be sold or made available for a fee. For the avoidance of doubt, the provision of Outputs as a service is not a Non-Commercial Purpose.
++      8.6 “Object” means any form resulting from mechanical transformation or translation of a Source form, including but not limited to compiled object code, generated documentation, and conversions to other media types.
++      8.7 “Output” means any output, including any protein sequence, structure prediction, functional annotation, molecule, descriptions of a molecule, model, sequence, text, and/or image that is elicited directly or indirectly by, or otherwise made available to, you in connection with your use of the GenBio Materials, including, but not limited to, the use of AI-Powered Technology. For the avoidance of doubt, it includes any intermediate results, such as activations across model layers, intermediate outputs from model layers (e.g., attention maps), as well as gradients and embeddings produced by the GenBio Materials.
++      8.8 “Output Derivatives” means any enhancements, modifications and derivative works of Outputs (including, but not limited to, any derivative sequences or molecules).
++      8.9 “Source” means the preferred form for making modifications, including but not limited to GenBio Materials source code, documentation source, and configuration files.
+diff --git a/proteingym/baselines/AIDO.Protein-RAG-proteingym-dms-zeroshot/README.md b/proteingym/baselines/AIDO.Protein-RAG-proteingym-dms-zeroshot/README.md
+new file mode 100644
+index 0000000..297ee79
+--- /dev/null
++++ b/proteingym/baselines/AIDO.Protein-RAG-proteingym-dms-zeroshot/README.md
+@@ -0,0 +1,107 @@
++# AIDO.Protein-RAG-16B-proteingym-dms-zeroshot for Protein Zero-Shot Fitness Prediction
++
++### Installation
++
++```bash
++conda create -n ragplm python=3.11 -y
++conda activate ragplm
++
++conda install anaconda::git-lfs -y
++pip install tabulate seaborn deepspeed
++pip install git+https://github.com/genbio-ai/ModelGenerator.git
++pip install hf_transfer
++pip install --upgrade transformers==4.51.0
++```
++
++### Download and decompress DMS, MSA and structure files
++
++```bash
++git clone https://github.com/genbio-ai/AIDO.Protein-RAG-proteingym-dms-zeroshot.git
++cd AIDO.Protein-RAG-proteingym-dms-zeroshot
++git clone https://huggingface.co/datasets/genbio-ai/ProteinGYM-DMS-RAG-zeroshot
++cd ProteinGYM-DMS-RAG-zeroshot
++mv msa_data dms_data.tar.gz struc_data.tar.gz query.fasta ..
++cd ..
++
++tar xf dms_data.tar.gz
++tar xf struc_data.tar.gz
++mkdir output
++```
++
++### Verify Installation
++
++Test whether the program runs without errors:
++
++```shell
++python compute_fitness.py --dms_ids PTEN_HUMAN_Mighell_2018
++```
++
++Expected result:
++
++```shell
++PTEN_HUMAN_Mighell_2018: R=0.5182
++```
++
++### Model
++
++The checkpoint is maintained under HuggingFace of genbio-ai: [genbio-ai/AIDO.Protein-RAG-16B-proteingym-dms-zeroshot](https://huggingface.co/genbio-ai/AIDO.Protein-RAG-16B-proteingym-dms-zeroshot)
++
++### How to Analyze Your Own Protein
++
++1. Add your protein sequence to the `query.fasta` file. The header format should be:
++
++   ```
++   >[name] [start]-[end]
++   ```
++
++   The name must match the structure file name in the `struc_data` directory, the MSA file name in the `msa_data` directory, and the DMS table file name in the `dms_data` directory. The `start` and `end` positions indicate that the sequence, MSA, and structure file represent a fragment of the full protein from the DMS table. For example, if you have a protein called `abc` with a length of 345, add the sequence to `query.fasta` as follows:
++
++   ```
++   >abc 1-345
++   [protein sequence]....
++   ```
++
++   Ensure that the following files exist:
++
++   - `abc.pdb` in the `struc_data` directory
++   - `abc.txt.gz` in the `msa_data` directory
++   - `abc.csv` in the `dms_data` directory
++
++2. Add the protein structure to the `struc_data` directory.
++
++3. Add the MSA to the `msa_data` directory.
++
++4. Add the DMS mutation table to the `dms_data` directory. The table should contain `mutant` and `DMS_score` columns. You can fill 0 values to the `DMS_score` column.
++
++5. Run the inference:
++
++   ```bash
++   python compute_fitness.py --dms_ids abc --output_path outputs
++   ```
++
++### Citation
++
++Please cite AIDO.Protein-RAG-16B-proteingym-dms-zeroshot using the following BibTex code:
++
++```
++@inproceedings{sun_mixture_2024,
++    title = {Mixture of Experts Enable Efficient and Effective Protein Understanding and Design},
++    url = {https://www.biorxiv.org/content/10.1101/2024.11.29.625425v1},
++    doi = {10.1101/2024.11.29.625425},
++    publisher = {bioRxiv},
++    author = {Sun, Ning and Zou, Shuxian and Tao, Tianhua and Mahbub, Sazan and Li, Dian and Zhuang, Yonghao and Wang, Hongyi and Cheng, Xingyi and Song, Le and Xing, Eric P.},
++    year = {2024},
++    booktitle={NeurIPS 2024 Workshop on AI for New Drug Modalities},
++}
++
++@article {Li2024.12.02.626519,
++    author = {Li, Pan and Cheng, Xingyi and Song, Le and Xing, Eric},
++    title = {Retrieval Augmented Protein Language Models for Protein Structure Prediction},
++    url = {https://www.biorxiv.org/content/10.1101/2024.12.02.626519v1},
++    year = {2024},
++    doi = {10.1101/2024.12.02.626519},
++    publisher = {bioRxiv},
++    booktitle={NeurIPS 2024 Workshop on Machine Learning in Structural Biology},
++}
++```
++
+diff --git a/proteingym/baselines/AIDO.Protein-RAG-proteingym-dms-zeroshot/compute_fitness.py b/proteingym/baselines/AIDO.Protein-RAG-proteingym-dms-zeroshot/compute_fitness.py
+new file mode 100644
+index 0000000..f660343
+--- /dev/null
++++ b/proteingym/baselines/AIDO.Protein-RAG-proteingym-dms-zeroshot/compute_fitness.py
+@@ -0,0 +1,94 @@
++#!/usr/bin/env python
++
++import os, sys, time, re, random, pickle, copy, gzip, io, yaml, logging, configparser, math, shutil, pathlib, tempfile, hashlib, argparse, json, inspect, urllib, collections, subprocess, requests, platform, multiprocessing, importlib, string, code, warnings, concurrent, gc, functools, types, traceback, base64, bz2, ctypes, tarfile, shlex, socket
++from queue import PriorityQueue, Queue, deque, LifoQueue
++from concurrent.futures import ThreadPoolExecutor, as_completed
++from multiprocessing import Pool
++from os.path import exists, join, getsize, isfile, isdir, abspath, basename, realpath, dirname
++from os import listdir
++from typing import Dict, Union, Optional, List, Tuple, Mapping
++from functools import partial
++from datetime import datetime
++import numpy  as np
++import pandas as pd
++from pathlib import Path
++from tqdm.auto import tqdm, trange
++from tabulate import tabulate
++from argparse import Namespace, ArgumentParser
++
++from transformers import AutoModelForCausalLM, AutoTokenizer, AutoConfig, AutoModelForMaskedLM
++import safetensors
++import torch
++from scipy.stats import spearmanr
++from scipy.special import softmax
++import seaborn as sns
++import matplotlib.pyplot as plt
++
++from utils import misc
++from utils import protein
++
++SCRIPT_PATH = str(pathlib.Path(__file__).parent.resolve())
++
++def main(args):
++
++    #############################
++    ## Create structure tokenizer
++    #############################
++
++    str_tokenizer = misc.AIDO_Structure_Tokenizer(device='cuda:0')
++
++    #############################
++    ## Define model and tokenizer
++    #############################
++
++    tokenizer  = AutoTokenizer.from_pretrained("genbio-ai/AIDO.Protein-RAG-16B-proteingym-dms-zeroshot", trust_remote_code=True)
++    model      = AutoModelForCausalLM.from_pretrained("genbio-ai/AIDO.Protein-RAG-16B-proteingym-dms-zeroshot", trust_remote_code=True, torch_dtype=torch.bfloat16)
++    model      = model.bfloat16().eval().to('cuda:0')
++
++    #############################
++    ## Run model and get predicted DMS scores
++    #############################
++
++    os.makedirs(args.output_path, exist_ok=True)
++    for dms_id in args.dms_ids:
++        
++        ## Read Sequence
++        dms2seq, dms2annot = misc.load_fasta(f"{SCRIPT_PATH}/query.fasta", load_annotation=True)
++        q_seq = dms2seq[dms_id]
++        start, end = [int(x) for x in dms2annot[dms_id].split('-')]
++
++        ## Read MSA
++        msa = misc.load_msa_txt(f"{SCRIPT_PATH}/msa_data/{dms_id}.txt.gz")
++        assert q_seq == msa[0]
++
++        ## Read PDB
++        with open(f"{SCRIPT_PATH}/struc_data/{dms_id}.pdb") as IN:
++            text = IN.read()
++
++        prot = protein.from_pdb_string(text, molecular_type='protein')
++        assert prot.seq(True) == q_seq
++        
++        ## Read DMS Table
++        dms_df = pd.read_csv(f'{SCRIPT_PATH}/dms_data/{dms_id}.csv')
++    
++        ## Inference
++        all_poses, logits_table = misc.get_logits_table_sliding(q_seq, prot, msa, dms_df, model, tokenizer, str_tokenizer, start, mask_str=args.mask_str, disable_tqdm=False)
++        result_df = misc.get_scores_from_table(q_seq, logits_table, all_poses, dms_df, tokenizer, start, temp_mt=1.0, temp_wt=1.5)
++        
++        assert np.all(dms_df['mutant'] == result_df['Mutation'])
++        assert np.allclose(dms_df['DMS_score'] , result_df['GT_Score'], 1e-05, 1e-05)
++        dms_df['AIDO.Protein-RAG-16B-zeroshot'] = result_df['Pred_Score']
++        result_df = dms_df
++        
++        result_df.to_csv(join(args.output_path, f"{dms_id}.csv"), index=False)
++        r = round(spearmanr(result_df['AIDO.Protein-RAG-16B-zeroshot'], result_df['DMS_score'])[0], 4)
++        print(f"{dms_id}: R={r}")
++
++if __name__ == "__main__":
++    parser = ArgumentParser()
++    all_dms_ids = [n[:-7] for n in os.listdir(f'{SCRIPT_PATH}/msa_data') if n.endswith('.txt.gz')]
++    parser.add_argument("--dms_ids",     type=str, default=all_dms_ids, nargs="+")
++    parser.add_argument("--output_path", type=str, default=f"{SCRIPT_PATH}/output", help="Output path",)
++    parser.add_argument("--mask-str", action='store_true', help="Mask the structure input")
++    args = parser.parse_args()
++    main(args)
+diff --git a/proteingym/baselines/AIDO.Protein-RAG-proteingym-dms-zeroshot/utils/.DS_Store b/proteingym/baselines/AIDO.Protein-RAG-proteingym-dms-zeroshot/utils/.DS_Store
+new file mode 100644
+index 0000000..5008ddf
+Binary files /dev/null and b/proteingym/baselines/AIDO.Protein-RAG-proteingym-dms-zeroshot/utils/.DS_Store differ
+diff --git a/proteingym/baselines/AIDO.Protein-RAG-proteingym-dms-zeroshot/utils/__init__.py b/proteingym/baselines/AIDO.Protein-RAG-proteingym-dms-zeroshot/utils/__init__.py
+new file mode 100644
+index 0000000..e69de29
+diff --git a/proteingym/baselines/AIDO.Protein-RAG-proteingym-dms-zeroshot/utils/codebook.pt b/proteingym/baselines/AIDO.Protein-RAG-proteingym-dms-zeroshot/utils/codebook.pt
+new file mode 100644
+index 0000000..45e46dc
+Binary files /dev/null and b/proteingym/baselines/AIDO.Protein-RAG-proteingym-dms-zeroshot/utils/codebook.pt differ
+diff --git a/proteingym/baselines/AIDO.Protein-RAG-proteingym-dms-zeroshot/utils/misc.py b/proteingym/baselines/AIDO.Protein-RAG-proteingym-dms-zeroshot/utils/misc.py
+new file mode 100644
+index 0000000..337797c
+--- /dev/null
++++ b/proteingym/baselines/AIDO.Protein-RAG-proteingym-dms-zeroshot/utils/misc.py
+@@ -0,0 +1,383 @@
++
++import os, sys, time, re, random, pickle, copy, gzip, io, configparser, math, shutil, pathlib, tempfile, hashlib, argparse, json, inspect, urllib, collections, subprocess, requests, platform, multiprocessing
++from typing import Dict, Union, Optional, Tuple
++import multiprocessing as mp
++from tqdm.auto import trange, tqdm
++import numpy as np
++import pandas as pd
++from Bio import SeqIO
++from datetime import datetime
++from typing import Optional, Union, List
++import torch
++import torch.nn.functional as F
++from scipy.stats import spearmanr, pearsonr
++from scipy.special import softmax
++from scipy.spatial.distance import squareform, pdist, cdist
++from os.path import exists, join, getsize, isfile, isdir, abspath, basename, realpath, dirname
++from os import listdir
++from tabulate import tabulate
++from argparse import Namespace
++from modelgenerator.structure_tokenizer.models import EquiformerEncoderLightning, ESMFoldDecoderLightning
++from modelgenerator.structure_tokenizer.datasets.protein_dataset import ProteinDataset
++
++SCRIPT_PATH = str(pathlib.Path(__file__).parent.resolve())
++
++class AIDO_Structure_Tokenizer:
++    def __init__(self, codebook_path=None, device='cuda'):
++        
++        if codebook_path is None:
++            codebook_path = join(SCRIPT_PATH, "codebook.pt")
++        
++        self.codebook = torch.load(codebook_path, 'cpu', weights_only=True) # [512, 384]
++        
++        self.encoder = EquiformerEncoderLightning(pretrained_model_name_or_path="genbio-ai/AIDO.StructureEncoder").eval().to(device)
++    
++    def to(self, device):
++        self.encoder = self.encoder.to(device) if self.encoder is not None else None
++        return self
++    
++    def encode(self, aatype, atom_positions, atom_mask, get_embedding=False):
++        """
++        aatype: [L]
++        atom_positions: [L, 37, 3]
++        atom_mask: [L, 37]
++        """
++        assert self.encoder is not None, "Encoder is not loaded"
++        
++        assert aatype.ndim == 1
++        assert atom_positions.ndim == 3
++        assert atom_mask.ndim == 2
++        device = next(iter(self.encoder.parameters())).device
++        
++        residue_index = torch.arange(1, aatype.shape[0]+1)
++        aatype = torch.from_numpy(aatype) if isinstance(aatype, np.ndarray) else aatype
++        
++        if isinstance(atom_positions, np.ndarray):
++            atom_positions = atom_positions.copy()
++            atom_positions[ atom_mask == 0 ] = np.nan
++            atom_mask = torch.from_numpy(atom_mask)
++            atom_positions = torch.from_numpy(atom_positions).float()
++        elif isinstance(atom_positions, torch.Tensor):
++            atom_positions = atom_positions.clone()
++            atom_positions[ atom_mask == 0 ] = torch.nan
++            atom_positions = atom_positions.float()
++        else:
++            raise RuntimeError(f"Expect atom_positions be np.ndarray or torch.Tensor, but got {type(atom_positions)}")
++        
++        batch = [{
++            'id':            'xxx',
++            'entity_id':     'xxx',
++            'chain_id':      'xxx',
++            'resolution':     torch.tensor(3.0),
++            'aatype':         aatype,
++            'atom_positions': atom_positions,
++            'atom_mask':      atom_mask,
++            'residue_index':  residue_index
++        }]
++        batch[0] = { k:(v.to(device) if torch.is_tensor(v) else v) for k,v in batch[0].items() }
++        batch = ProteinDataset.collate_fn(batch)
++        
++        with torch.no_grad():
++            tokens = self.encoder.predict_step(batch, batch_idx=0, dataloader_idx=0)['xxx_xxx_xxx']['struct_tokens'].cpu()
++        
++        if get_embedding:
++            emb = F.embedding(tokens, self.codebook)
++            return (emb, tokens)
++        else:
++            return tokens
++
++def load_fasta(seqFn, rem_tVersion=False, load_annotation=False, full_line_as_id=False):
++    """
++    seqFn               -- Fasta file or input handle (with readline implementation)
++    rem_tVersion        -- Remove version information. ENST000000022311.2 => ENST000000022311
++    load_annotation     -- Load sequence annotation
++    full_line_as_id     -- Use the full head line (starts with >) as sequence ID. Can not be specified simutanouly with load_annotation
++
++    Return:
++        {tid1: seq1, ...} if load_annotation==False
++        {tid1: seq1, ...},{tid1: annot1, ...} if load_annotation==True
++    """
++    if load_annotation and full_line_as_id:
++        raise RuntimeError("Error: load_annotation and full_line_as_id can not be specified simutanouly")
++    if rem_tVersion and full_line_as_id:
++        raise RuntimeError("Error: rem_tVersion and full_line_as_id can not be specified simutanouly")
++
++    fasta = {}
++    annotation = {}
++    cur_tid = ''
++    cur_seq = ''
++    
++    if isinstance(seqFn, str):
++        IN = open(seqFn)
++    elif hasattr(seqFn, 'readline'):
++        IN = seqFn
++    else:
++        raise RuntimeError(f"Expected seqFn: {type(seqFn)}")
++    for line in IN:
++        if line[0] == '>':
++            if cur_seq != '':
++                fasta[cur_tid] = re.sub(r"\s", "", cur_seq)
++                cur_seq = ''
++            data = line[1:-1].split(None, 1)
++            cur_tid = line[1:-1] if full_line_as_id else data[0]
++            annotation[cur_tid] = data[1] if len(data)==2 else ""
++            if rem_tVersion and '.' in cur_tid: 
++                cur_tid = ".".join(cur_tid.split(".")[:-1])
++        elif cur_tid != '':
++            cur_seq += line.rstrip()
++    
++    if isinstance(seqFn, str):
++        IN.close()
++
++    if cur_seq != '':
++        fasta[cur_tid] = re.sub(r"\s", "", cur_seq)
++    
++    if load_annotation:
++        return fasta, annotation
++    else:
++        return fasta
++
++def load_msa_txt(file_or_stream, load_id=False, load_annot=False, sort=False):
++    """
++    Read msa txt file
++    
++    Parmeters
++    --------------
++    file_or_stream: file or stream to read (with read method)
++    load_id: read identity and return
++    
++    Return
++    --------------
++    msa: list of msa sequences, the first sequence in msa is the query sequence
++    id_arr: Identity of msa sequences
++    annotations: Annotations of msa sequences
++    """
++    msa = []
++    id_arr = []
++    annotations = []
++    
++    if hasattr(file_or_stream, 'read'):
++        lines = file_or_stream.read().strip().split('\n')
++    elif file_or_stream.endswith('.gz'):
++        with gzip.open(file_or_stream) as IN:
++            lines = IN.read().decode().strip().split('\n')
++    else:
++        with open(file_or_stream) as IN:
++            lines = IN.read().strip().split('\n')
++    
++    for idx,line in enumerate(lines):
++        data = line.strip().split()
++        if idx == 0:
++            assert len(data) == 1, f"Expect 1 element for the 1st line, but got {data} in {file_or_stream}"
++            q_seq = data[0]
++        else:
++            if len(data) >= 2:
++                id_arr.append( float(data[1]) )
++            else:
++                assert len(q_seq) == len(data[0])
++                id_ = round(np.mean([ r1==r2 for r1,r2 in zip(q_seq, data[0]) ]), 3)
++                id_arr.append(id_)
++            msa.append( data[0] )
++            if len(data) >= 3:
++                annot = " ".join(data[2:])
++                annotations.append( annot )
++            else:
++                annotations.append(None)
++    
++    id_arr = np.array(id_arr, dtype=np.float64)
++    if sort:
++        id_order = np.argsort(id_arr)[::-1]
++        msa      = [ msa[i] for i in id_order ]
++        id_arr   = id_arr[id_order]
++        annotations = [ annotations[i] for i in id_order ]
++    msa = [q_seq] + msa
++    
++    outputs = [ msa ]
++    if load_id:
++        outputs.append( id_arr )
++    if load_annot:
++        outputs.append( annotations )
++    if len(outputs) == 1:
++        return outputs[0]
++    return outputs
++
++def greedy_select(msa: List[Tuple[str, str]], num_seqs: int, num_tokens: int = None, mode: str = "max", seed: int = None) -> List[Tuple[str, str]]:
++    """
++    Greedy select msa sequences according to hamming distance. 
++    Two modes:
++    - by num_seqs: select #seqs from all MSA sequences
++    - by num_tokens: select a MSA sequences subset contains #tokens (excluded gap) from all MSA sequences
++    """
++    msa = msa.copy()
++    if seed is not None:
++        random.Random(seed).shuffle(msa)
++    
++    assert mode in ("max", "min")
++    assert (num_seqs is None and num_tokens is not None) or (num_seqs is not None and num_tokens is None)
++    if num_seqs is not None and len(msa) <= num_seqs:
++        return msa
++    if num_tokens is not None and sum([ len(s)-s.count('-') for s in msa ]) <= num_tokens:
++        return msa
++    
++    array = np.array([list(seq) for seq in msa], dtype=np.bytes_).view(np.uint8)
++    
++    optfunc = np.argmax if mode == "max" else np.argmin
++    all_indices = np.arange(len(msa))
++    indices = [0]
++    pairwise_distances = np.zeros((0, len(msa)))
++    selected_msa = []
++    for _ in range(len(msa)-1):
++        dist = cdist(array[indices[-1:]], array, "hamming")
++        pairwise_distances = np.concatenate([pairwise_distances, dist])
++        shifted_distance = np.delete(pairwise_distances, indices, axis=1).mean(0)
++        shifted_index = optfunc(shifted_distance)
++        index = np.delete(all_indices, indices)[shifted_index]
++        indices.append(index)
++        selected_msa.append(msa[index])
++        if num_seqs is not None and len(indices) >= num_seqs:
++            break
++        if num_tokens is not None and sum([ len(s)-s.count('-') for s in selected_msa ]) >= num_tokens:
++            break
++    indices = sorted(indices)
++    return [msa[idx] for idx in indices]
++
++def tokenize(q_seq, msa, tokenizer, max_context=12800):
++    """
++    Tokenizes the input sequence and optionally additional sequences for multiple sequence alignment (MSA).
++    
++    Args:
++        q_seq (str): The query sequence to be tokenized.
++        msa (list or None): A list of sequences for multiple sequence alignment. If None, no MSA sequences are added.
++        tokenizer (object): The tokenizer object used to encode the sequences.
++        max_context (int, optional): The maximum number of tokens to consider in the context. Defaults to 12800.
++    
++    Returns:
++        tuple: A tuple containing:
++            - tokens (np.ndarray): The tokenized sequences.
++            - pos_encoding (np.ndarray): The positional encoding for the tokens.
++    """
++    len_seq = len(q_seq)
++    tokens = tokenizer.encode(q_seq, add_eos=False).tolist()
++    num_seq = 1
++    
++    for msa_seq in msa:
++        assert len(msa_seq) == len_seq, f"len(msa_seq)={len(msa_seq)}, len_seq={len_seq}"
++        tokens.extend(tokenizer.encode(msa_seq, add_eos=False).tolist())
++        num_seq += 1
++    
++    pos_encoding = np.stack([ np.tile(np.arange(len_seq), num_seq), np.repeat(np.arange(num_seq), len_seq) ])
++    
++    tokens = np.array(tokens)
++    tok_mask = (tokens != tokenizer.TokenToId('-'))
++    tokens, pos_encoding = tokens[tok_mask][:max_context], pos_encoding[..., tok_mask][..., :max_context]
++    return tokens, pos_encoding
++
++@torch.no_grad()
++def get_logits_table_sliding(q_seq, prot, msa, dms_df, model, tokenizer, str_tokenizer, start, sliding_window=768, sliding_step=768, mask_str=False, verbose=False, disable_tqdm=True):
++    """
++    xxxx
++    """
++    # model_type = get_model_type(model)
++    # assert model_type == 'emb_model_step1'
++    assert len(q_seq) == prot.aatype.shape[0], f"len(q_seq)={len(q_seq)}, prot.aatype.shape[0]={prot.aatype.shape[0]}"
++    assert q_seq == msa[0]
++    
++    pd_scores = []
++    all_poses = set()
++    for mutant in dms_df['mutant'].tolist():
++        for sub_mutant in mutant.split(":"):
++            wt, idx, mt = sub_mutant[0], int(sub_mutant[1:-1]) - start, sub_mutant[-1]
++            assert q_seq[idx] == wt
++            all_poses.add(idx)
++    
++    all_poses   = sorted(list(all_poses))
++    vocab_size  = model.language_model.embedding.word_embeddings.weight.shape[0] if hasattr(model, 'language_model') else model.config.padded_vocab_size
++    logit_table = np.zeros([len(all_poses), vocab_size])
++    count_table = np.zeros([len(all_poses)], dtype=np.int64)
++    
++    is_last_step = False
++    for f_start in range(0, len(q_seq), sliding_step):
++        if is_last_step:
++            break
++        if f_start + sliding_window > len(q_seq) and len(q_seq) > sliding_window:
++            f_start = len(q_seq) - sliding_window
++            is_last_step = True
++        
++        f_end = min(f_start + sliding_window, len(q_seq))
++        
++        f_q_seq = q_seq[f_start:f_end]
++        
++        # f_msa = rag_utils.greedy_select(list(set([ seq[f_start:f_end] for seq in msa[1:] ])), num_seqs=None, num_tokens=12800, seed=0)
++        f_msa = greedy_select([ seq[f_start:f_end] for seq in msa[1:] ], num_seqs=None, num_tokens=12800, seed=0)
++        f_msa.sort(key=lambda x: x.count('-'))
++        
++        str_embs, str_toks = str_tokenizer.encode(prot.aatype[f_start:f_end], prot.atom_positions[f_start:f_end], prot.atom_mask[f_start:f_end], get_embedding=True)
++        str_embs, str_toks = str_embs.cuda().bfloat16(), str_toks.cuda()
++        if mask_str:
++            str_embs[:] = 0
++            str_toks[:] = 0
++        
++        tokens, pos_encoding = tokenize(f_q_seq, f_msa, tokenizer, max_context=12800)
++        tokens       = torch.from_numpy(tokens).cuda()
++        pos_encoding = torch.from_numpy(pos_encoding).cuda()
++        
++        if verbose:
++            tqdm.write(f"{f_start}-{f_end}, SeqL={len(q_seq)}, TokenL={tokens.shape[0]}")
++        
++        for i,pos in tqdm(enumerate(all_poses), total=len(all_poses), leave=False, dynamic_ncols=True, disable=disable_tqdm):
++            if f_start <= pos < f_end:
++                masked_tokens = tokens.clone()
++                masked_tokens[pos_encoding[0]==pos-f_start] = tokenizer.TokenToId('tMASK')
++                lm_output = model.transformer(
++                    input_ids=masked_tokens[None],
++                    position_ids=pos_encoding[None],
++                    full_attention_mask=None,
++                    inputs_str_embeds=str_embs[None]
++                )
++                logits = model.transformer.output_layer(lm_output['last_hidden_state'])[:, 0]  # [seq_len, batch_size, 128]
++                logits = logits[:len(q_seq)].squeeze().cpu().float()
++                logit_table[i] += logits[pos-f_start].numpy()
++                count_table[i] += 1
++    
++    if np.any(count_table == 0):
++        breakpoint()
++    logit_table = logit_table / count_table[:, None]
++    return (all_poses, logit_table)
++
++def get_scores_from_table(q_seq, logits_table, all_poses, dms_df, tokenizer, start, temp_mt=1.0, temp_wt=1.5):
++    """
++    Calculate predicted scores for protein mutants based on a given table and compare them with ground truth scores.
++    
++    Args:
++        q_seq (str): The query sequence of the protein.
++        table (np.ndarray): A 2D array containing scores for each position and amino acid.
++        all_poses (list): A list of positions in the query sequence.
++        DMS_id (str): The identifier for the DMS (Deep Mutational Scanning) dataset.
++        tokenizer (Tokenizer): A tokenizer object to convert amino acids to indices.
++        start (int): The starting index for the positions in the query sequence.
++    
++    Returns:
++        tuple: A tuple containing:
++            - pd_scores (list): A list of predicted scores for each mutant.
++            - gt_scores (pd.Series): A series of ground truth scores from the DMS dataset.
++    """
++    table_mt = np.log(softmax(logits_table / temp_mt, axis=-1))
++    table_wt = np.log(softmax(logits_table / temp_wt, axis=-1))
++    gt_scores = dms_df['DMS_score']
++    pd_scores = []
++    vocab = tokenizer.get_vocab()
++    all_data = []
++    for i, mutant in enumerate(dms_df['mutant'].tolist()):
++        mutant_score = 0
++        for sub_mutant in mutant.split(":"):
++            wt, idx, mt = sub_mutant[0], int(sub_mutant[1:-1]) - start, sub_mutant[-1]
++            assert wt == q_seq[idx]
++            new_idx = all_poses.index(idx)
++            assert new_idx >= 0
++            pred = table_mt[new_idx, vocab[mt]] - table_wt[new_idx, vocab[wt]]
++            mutant_score += pred.item()
++        pd_scores.append(mutant_score)
++        all_data.append([ mutant, mutant_score, gt_scores[i] ])
++    result_df = pd.DataFrame(all_data, columns=['Mutation', 'Pred_Score', 'GT_Score']).round(5)
++    return result_df
++
+diff --git a/proteingym/baselines/AIDO.Protein-RAG-proteingym-dms-zeroshot/utils/protein.py b/proteingym/baselines/AIDO.Protein-RAG-proteingym-dms-zeroshot/utils/protein.py
+new file mode 100644
+index 0000000..89f6b68
+--- /dev/null
++++ b/proteingym/baselines/AIDO.Protein-RAG-proteingym-dms-zeroshot/utils/protein.py
+@@ -0,0 +1,685 @@
++# Copyright 2021 DeepMind Technologies Limited
++#
++# Licensed under the Apache License, Version 2.0 (the "License");
++# you may not use this file except in compliance with the License.
++# You may obtain a copy of the License at
++#
++#      http://www.apache.org/licenses/LICENSE-2.0
++#
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS,
++# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++# See the License for the specific language governing permissions and
++# limitations under the License.
++
++"""Protein data type."""
++import dataclasses
++import io, tempfile, os, sys
++from typing import Any, Mapping, Optional
++from utils import residue_constants
++from Bio.PDB import PDBParser
++import numpy as np
++import sys
++
++FeatureDict = Mapping[str, np.ndarray]
++ModelOutput = Mapping[str, Any]  # Is a nested dict.
++
++# Complete sequence of chain IDs supported by the PDB format.
++PDB_CHAIN_IDS = r"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789~!@#$%^&`'*()_+-,.;\/{}|:<>?[]€ƒ…†‡‰Š‹ŒŽ‘’“”•–—˜™š›œžŸ¡¢£¤¥¦§¨©ª«¬�­®¯°±²³´µ¶·¸¹º»¼½¾¿ÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖ×ØÙÚÛÜÝÞßàáâãäåæçèéêëìíîïðñòóôõö÷øùúûüýþÿ"
++PDB_MAX_CHAINS = len(PDB_CHAIN_IDS)  # := 62.
++
++def extend_PDB_Chains(extend_to=500):
++    """
++    Extend the PDB chains range
++
++    Parameter
++    ---------------
++    extend_to: int, Extend the chain name range to given range
++
++    Return
++    ---------------
++    PDB_CHAIN_IDS: New PDB Chain ID string
++    """
++    global PDB_CHAIN_IDS
++    global PDB_MAX_CHAINS
++
++    used_chains = set([ ord(char) for char in PDB_CHAIN_IDS ])
++    asc = 33
++    while len(PDB_CHAIN_IDS) < extend_to:
++        if asc not in used_chains and chr(asc).isprintable():
++            PDB_CHAIN_IDS += chr(asc)
++        asc += 1
++    PDB_MAX_CHAINS = extend_to
++    return PDB_CHAIN_IDS
++
++# @dataclasses.dataclass(frozen=False)
++class Protein:
++  """Protein structure representation."""
++
++  # Cartesian coordinates of atoms in angstroms. The atom types correspond to
++  # residue_constants.atom_types, i.e. the first three are N, CA, CB.
++  atom_positions: np.ndarray = np.array([])  # [num_res, num_atom_type, 3]
++
++  # Amino-acid type for each residue represented as an integer between 0 and
++  # 20, where 20 is 'X'.
++  aatype: np.ndarray = np.array([])  # [num_res]
++
++  # Binary float mask to indicate presence of a particular atom. 1.0 if an atom
++  # is present and 0.0 if not. This should be used for loss masking.
++  atom_mask: np.ndarray = np.array([])  # [num_res, num_atom_type]
++
++  # Residue index as used in PDB. It is not necessarily continuous or 0-indexed.
++  residue_index: np.ndarray = np.array([])  # [num_res]
++
++  # 0-indexed number corresponding to the chain in the protein that this residue
++  # belongs to.
++  chain_index: np.ndarray = np.array([])  # [num_res]
++
++  # B-factors, or temperature factors, of each residue (in sq. angstroms units),
++  # representing the displacement of the residue from its ground truth mean
++  # value.
++  b_factors: np.ndarray = None  # [num_res, num_atom_type]
++
++  # Secondary structure. 1: Loop, 2: Helix, 3: Sheet
++  occupancies: np.ndarray = None  # [num_res, num_atom_type]
++
++  # Molecular type: protein, RNA, DNA
++  molecular_type: str = 'protein'
++
++  def __init__(self,  atom_positions = None,   aatype = None, 
++                      atom_mask = None,        residue_index = None, 
++                      chain_index = None,      b_factors = None, 
++                      occupancies = None,      molecular_type=None):
++    
++    if atom_positions is not None:
++      self.atom_positions = atom_positions
++    if aatype is not None:
++      self.aatype = aatype
++    if atom_mask is not None:
++      self.atom_mask = atom_mask
++    if residue_index is not None:
++      self.residue_index = residue_index
++    if chain_index is not None:
++      self.chain_index = chain_index
++    if b_factors is not None:
++      self.b_factors = b_factors
++    if occupancies is not None:
++      self.occupancies = occupancies
++    if molecular_type is not None:
++      self.molecular_type = molecular_type
++
++  def __post_init__(self):
++    if len(np.unique(self.chain_index)) > PDB_MAX_CHAINS:
++      raise ValueError(
++          f'Cannot build an instance with more than {PDB_MAX_CHAINS} chains '
++          'because these cannot be written to PDB format.')
++    
++    assert self.molecular_type in ('protein', 'RNA', 'DNA')
++    atom_type_num = residue_constants.atom_type_num if self.molecular_type == 'protein' else residue_constants.na_atom_type_num
++
++    if len(self.atom_positions) == 0:
++      self.atom_positions   = np.zeros(shape=[0,atom_type_num,3])
++    if len(self.aatype) == 0:
++      self.aatype           = np.zeros(shape=[0])
++    if len(self.chain_index) == 0:
++      self.chain_index      = np.zeros(shape=[0])
++    if len(self.atom_mask) == 0:
++      self.atom_mask        = np.zeros(shape=[0,atom_type_num])
++    
++    if self.b_factors is None or len(self.b_factors) == 0:
++      self.b_factors        = np.zeros(shape=[self.aatype.shape[0], atom_type_num])
++    if self.occupancies is None or len(self.occupancies) == 0:
++      self.occupancies      = np.ones(shape=[self.aatype.shape[0],  atom_type_num])
++    
++    if self.atom_positions.ndim != 3:
++      raise ValueError(f'expect atom_positions dimension of 3, but got {self.atom_positions.shape}')
++    if self.aatype.ndim != 1:
++      raise ValueError(f'expect aatype dimension of 1, but got {self.aatype.shape}')
++    if self.residue_index.ndim != 1:
++      raise ValueError(f'expect residue_index dimension of 1, but got {self.residue_index.shape}')
++    if self.chain_index is not None and self.chain_index.ndim != 1:
++      raise ValueError(f'expect chain_index dimension of 1, but got {self.chain_index.shape}')
++    if self.b_factors is not None and self.b_factors.ndim != 2:
++      raise ValueError(f'expect b_factors dimension of 2, but got {self.b_factors.shape}')
++    if self.occupancies is not None and self.occupancies.ndim != 2:
++        raise ValueError(f'expect occupancies dimension of 2, but got {self.occupancies.shape}')
++
++    num_res = self.atom_positions.shape[0]
++    assert num_res == self.aatype.shape[0]
++    assert num_res == self.chain_index.shape[0]
++    assert num_res == self.atom_mask.shape[0]
++    assert num_res == self.b_factors.shape[0]
++    assert num_res == self.occupancies.shape[0]
++
++    self.aatype        = self.aatype.astype(np.int64)
++    self.chain_index   = self.chain_index.astype(np.int64)
++    self.atom_mask     = self.atom_mask.astype(np.int64)
++    self.residue_index = self.residue_index.astype(np.int64)
++
++  def slice(self, i: int, j: int, ch_idx: Optional[int] = None, by: str = 'residue_index'):
++    """
++    Slice protein object with residue_index or index
++
++    Parameters
++    ---------------
++    i: int, start index (close)
++    j: int, end start (open)
++    ch_idx: int, chain index
++    by: str, 'residue_index' or 'index'
++    """
++    assert by in ('residue_index', 'index')
++
++    if by == 'residue_index':
++      mask = (i <= self.residue_index) & (self.residue_index < j)
++    else:
++      mask = np.zeros(self.aatype.shape[0]).astype(np.bool_)
++      mask[i:j] = True
++
++    if ch_idx is not None:
++      mask &= (self.chain_index == ch_idx)
++
++    return self.filter_by_mask(mask)
++
++  def __add__(self, prot2):
++    """
++    Combine two proteins
++    """
++    assert self.molecular_type == prot2.molecular_type
++    ret_b_factors = (self.b_factors is not None) and (prot2.b_factors is not None)
++    ret_occupancies = (self.occupancies is not None) and (prot2.occupancies is not None)
++
++    return Protein(
++      np.concatenate([self.atom_positions, prot2.atom_positions]),
++      np.concatenate([self.aatype, prot2.aatype]),
++      np.concatenate([self.atom_mask, prot2.atom_mask]),
++      np.concatenate([self.residue_index, prot2.residue_index]),
++      np.concatenate([self.chain_index, prot2.chain_index]),
++      np.concatenate([self.b_factors, prot2.b_factors]) if ret_b_factors else None,
++      np.concatenate([self.occupancies, prot2.occupancies]) if ret_occupancies else None,
++      self.molecular_type
++    )
++
++  def filter_by_mask(self, mask: np.ndarray):
++    assert isinstance(mask, np.ndarray) and mask.dtype == np.bool_
++    return Protein(
++      self.atom_positions[mask],
++      self.aatype[mask],
++      self.atom_mask[mask],
++      self.residue_index[mask],
++      self.chain_index[mask],
++      self.b_factors[mask] if self.b_factors is not None else None,
++      self.occupancies[mask] if self.occupancies is not None else None,
++      self.molecular_type
++    )
++
++  def filter_by_chain(self, chain_id_or_name):
++    assert isinstance(chain_id_or_name, (int, str))
++    if isinstance(chain_id_or_name, str):
++      chain_id = PDB_CHAIN_IDS.index(chain_id_or_name)
++    else:
++      chain_id = chain_id_or_name
++    mask = (self.chain_index == chain_id)
++    return self.filter_by_mask(mask)
++  
++  def weight(self):
++    """
++    Return the molecular weight (KDa)
++    """
++
++    atom_types = residue_constants.atom_types if self.molecular_type == 'protein' else residue_constants.na_atom_types
++
++    atom_masses = {"C": 12.01, "N": 14.01, "O": 16.00, "S": 32.06, "P": 30.97}
++    weight = 0
++    for residue in self.atom_mask:
++        for atom_idx in range(len(residue)):
++            atom_mask = residue[atom_idx]
++            if atom_mask == 1:
++                weight += atom_masses[atom_types[atom_idx][0]]
++    return weight / 1_000
++
++  def __repr__(self):
++
++    # restypes_with_x = residue_constants.restypes_with_x if self.molecular_type == 'protein' else residue_constants.nuctypes_with_x
++
++    text = f"Molecular weight: {self.weight():.3f}KDa\n"
++    chain2seq = self.seq(as_seq=False, with_gap=True)
++    for ch_name, ch_seq in chain2seq.items():
++      text += f"{ch_name} ({len(ch_seq)}): {ch_seq}\n"
++    return text
++
++  # def __str__(self):
++  #   return to_pdb(self)
++  
++  def __getitem__(self, val):
++    """
++    Acceptable values:
++    str: chain name
++    int: residue index
++    slice: residue range
++    """
++    num_chain = len(np.unique(self.chain_index))
++    if isinstance(val, str):
++      return self.filter_by_chain(val)
++    elif isinstance(val, int):
++      assert num_chain == 1, f"Expect one chain in protein, but got {num_chain} chains"
++      if val < 0:
++        val = self.residue_index[-1] + 1 + val
++      return self.slice(val, val+1)
++    elif isinstance(val, slice):
++      assert num_chain == 1, f"Expect one chain in protein, but got {num_chain} chains"
++      start, stop, step = val.start, val.stop, val.step
++      if start is None:
++        start = 0
++      elif start < 0:
++        start = self.residue_index[-1] + 1 + start
++        assert start >= 0, f"Expect start >= - ({self.residue_index[-1]} + 1)"
++      if stop is None:
++        stop = self.residue_index[-1] + 1
++      elif stop < 0:
++        stop = self.residue_index[-1] + 1 + stop
++        assert stop > 0, f"Expect stop > - ({self.residue_index[-1]} + 1)"
++      if step is None:
++        step = 1
++
++      assert start < stop, f"Expect start < stop, but got start={start}, stop={stop}"
++
++      acceptable_residue_index = np.array([ int(d) for d in range(start, stop, step) ])
++      mask = np.isin(self.residue_index, acceptable_residue_index)
++      return self.filter_by_mask(mask)
++    else:
++      raise ValueError(f"Expect val be one of str,int,slice, but got {type(val)}")
++  
++  def re_index(self):
++    for ch_idx in np.unique(self.chain_index):
++        ch_idx = int(ch_idx)
++        chain_mask = (self.chain_index == ch_idx)
++        self.residue_index[chain_mask] = np.arange(1, chain_mask.sum()+1)
++  
++  def seq(self, as_seq=False, with_gap=False):
++    """
++    Return the sequence of current protein
++
++    Parameters
++    ------------
++    as_seq: (True) return the concatenated sequence. (False) return dict of sequence
++    with_gap: return the sequence with gap
++    
++    Return
++    ------------
++    as_seq=True, return str
++    as_seq=False, return dict
++    """
++
++    restypes_with_x    = residue_constants.restypes_with_x if self.molecular_type == 'protein' else residue_constants.nuctypes_with_x
++    return_seq_dict = {}
++    return_seq = ""
++
++    uniq_chs, ch_order = np.unique(self.chain_index, return_index=True)
++    uniq_chs = uniq_chs[np.argsort(ch_order)]
++    for ch_idx in uniq_chs:
++      ch_idx  = int(ch_idx)
++      ch_prot = self.filter_by_chain(ch_idx)
++      ch_name = PDB_CHAIN_IDS[ch_idx]
++      if ch_prot.residue_index.min() == 0:
++          ch_prot.residue_index = ch_prot.residue_index + 1
++      ch_res  = ['-'] * ch_prot.residue_index.max()
++      for res_idx, res_aatype in zip(ch_prot.residue_index, ch_prot.aatype):
++          ch_res[res_idx-1] = restypes_with_x[res_aatype]
++      ch_seq  = "".join(ch_res)
++      return_seq_dict[ch_name] = ch_seq if with_gap else ch_seq.replace('-', '')
++      return_seq += ch_seq if with_gap else ch_seq.replace('-', '')
++    
++    if as_seq:
++      return return_seq
++    else:
++      return return_seq_dict
++
++  def save(self, file):
++    from af2_features import save_prot_as_pdb, save_prot_as_cif
++    if file.endswith('.cif'):
++      save_prot_as_cif(self, file)
++    else:
++      save_prot_as_pdb(self, file)
++
++def from_pdb_string(pdb_str: str, 
++                    chain_id: Optional[str] = None, 
++                    molecular_type: Optional[str] = None, 
++                    # read_res_with_insertion_code:bool = False,
++                    insertion_code_process: str = 'error',
++                    stderr=sys.stderr) -> Protein:
++  """Takes a PDB string and constructs a Protein object.
++
++  WARNING: All non-standard residue types will be converted into UNK. All
++    non-standard atoms will be ignored.
++
++  Args:
++    pdb_str: The contents of the pdb file
++    chain_id: If chain_id is specified (e.g. A), then only that chain
++      is parsed. Otherwise all chains are parsed.
++    molecular_type: None or protein, DNA or RNA
++    insertion_code_process: error, insert or ignore
++    stderr: print error information
++
++  Returns:
++    A new `Protein` parsed from the pdb contents.
++  """
++
++  if molecular_type is not None:
++    assert molecular_type in ('protein', 'DNA', 'RNA')
++  assert insertion_code_process in ('error', 'insert', 'ignore')
++
++  pdb_fh = io.StringIO(pdb_str)
++  parser = PDBParser(QUIET=True)
++  structure = parser.get_structure('none', pdb_fh)
++  models = list(structure.get_models())
++  if len(models) != 1:
++    #raise ValueError(f'Only single model PDBs are supported. Found {len(models)} models.')
++    print(f"Only single model PDBs are supported. Found {len(models)} models. Use the 1st model.", file=stderr)
++  model = models[0]
++
++  atom_positions = []
++  aatype = []
++  atom_mask = []
++  residue_index = []
++  chain_ids = []
++  b_factors = []
++  occupancies = []
++
++  ## Read residues with insertion code
++  cur_chain = None
++  residue_increase_on_chain = 0
++
++  for chain in model:
++    if chain_id is not None and chain.id != chain_id:
++      continue
++    if cur_chain is None or cur_chain != chain.id:
++      cur_chain = chain.id
++      residue_increase_on_chain = 0
++    for res in chain:
++      if res.id[0] != ' ':
++        print(f"Warning: Unexpected residue -- {res.id}, ignored", file=stderr)
++        continue
++      if res.id[2] != ' ':
++        if insertion_code_process == 'insert':
++          print(f"Warning: PDB contains an insertion code at chain {chain.id} and residue index {res.id[1]} -- {res.id}. Insert into chain", file=stderr)
++          residue_increase_on_chain += 1
++        elif insertion_code_process == 'ignore':
++          print(f"Warning: PDB contains an insertion code at chain {chain.id} and residue index {res.id[1]} -- {res.id}. Ingored", file=stderr)
++          continue
++        else:
++          raise ValueError(
++              f'PDB contains an insertion code at chain {chain.id} and residue '
++              f'index {res.id[1]}. These are not supported.')
++      resname = res.resname.strip()
++      if len(resname) == 3:
++        ## Protein
++        restype_3to1 = residue_constants.restype_3to1
++        restype_order = residue_constants.restype_order
++        atom_type_num = residue_constants.atom_type_num
++        atom_order = residue_constants.atom_order
++        atom_types = residue_constants.atom_types
++        restype_num = residue_constants.restype_num
++        if molecular_type is not None:
++          if molecular_type != 'protein':
++            continue
++        molecular_type = 'protein'
++      elif len(resname) == 2:
++        ## DNA
++        restype_3to1 = { 'DA': 'A', 'DT': 'T', 'DC': 'C', 'DG': 'G' }
++        restype_order = residue_constants.nuctype_order
++        atom_type_num = residue_constants.na_atom_type_num
++        atom_order = residue_constants.na_atom_order
++        atom_types = residue_constants.na_atom_types
++        restype_num = residue_constants.nuctype_num
++        if molecular_type is not None:
++          if molecular_type != 'DNA':
++            continue
++        molecular_type = 'DNA'
++      elif len(resname) == 1:
++        ## RNA
++        restype_3to1 = { 'A': 'A', 'U': 'U', 'C': 'C', 'G': 'G' }
++        restype_order = residue_constants.nuctype_order
++        atom_type_num = residue_constants.na_atom_type_num
++        atom_order = residue_constants.na_atom_order
++        atom_types = residue_constants.na_atom_types
++        restype_num = residue_constants.nuctype_num
++        if molecular_type is not None:
++          if molecular_type != 'RNA':
++            continue
++        molecular_type = 'RNA'
++      else:
++        print(f"Unexpected resname: {resname}, ignored", file=stderr)
++        # len(resname) == 4
++        #ATOM     58  CA AARG A  20     131.717  89.202 105.130  0.50 78.68           C
++        #ATOM     59  CB AARG A  20     131.422  88.374 106.378  0.50 78.68           C
++        continue
++
++      res_shortname = restype_3to1.get(resname, 'X')
++      restype_idx = restype_order.get(res_shortname, restype_num)
++      pos = np.zeros((atom_type_num, 3))
++      mask = np.zeros((atom_type_num,))
++      res_b_factors = np.zeros((atom_type_num,))
++      res_occupancy = np.zeros((atom_type_num,))
++      for atom in res:
++        if atom.name not in atom_types:
++          continue
++        pos[atom_order[atom.name]] = atom.coord
++        mask[atom_order[atom.name]] = 1.
++        res_b_factors[atom_order[atom.name]] = 0 if atom.bfactor is None else atom.bfactor
++        res_occupancy[atom_order[atom.name]] = 0 if atom.occupancy is None else atom.occupancy
++      if np.sum(mask) < 0.5:
++        # If no known atom positions are reported for the residue then skip it.
++        continue
++      aatype.append(restype_idx)
++      atom_positions.append(pos)
++      atom_mask.append(mask)
++      residue_index.append(res.id[1]+residue_increase_on_chain)
++      chain_ids.append(chain.id)
++      b_factors.append(res_b_factors)
++      occupancies.append(res_occupancy)
++
++  # Chain IDs are usually characters so map these to ints.
++  unique_chain_ids = np.unique(chain_ids)
++  chain_id_mapping = {cid: PDB_CHAIN_IDS.index(cid) for n, cid in enumerate(unique_chain_ids)}
++  chain_index = np.array([chain_id_mapping[cid] for cid in chain_ids])
++
++  return Protein(
++      atom_positions=np.array(atom_positions),
++      atom_mask=np.array(atom_mask),
++      aatype=np.array(aatype),
++      residue_index=np.array(residue_index),
++      chain_index=chain_index,
++      b_factors=np.array(b_factors),
++      occupancies=np.array(occupancies),
++      molecular_type=molecular_type)
++
++
++def _chain_end(atom_index, end_resname, chain_name, residue_index) -> str:
++  chain_end = 'TER'
++  return (f'{chain_end:<6}{atom_index:>5}      {end_resname:>3} '
++          f'{chain_name:>1}{residue_index:>4}')
++
++
++def to_pdb(prot: Protein, gap_ter_threshold=600.0) -> str:
++  """Converts a `Protein` instance to a PDB string.
++
++  Args:
++    prot: The protein to convert to PDB.
++
++  Returns:
++    PDB string.
++  """
++  if prot.molecular_type == 'protein':
++    restypes = residue_constants.restypes + ['X']
++    res_1to3 = lambda r: residue_constants.restype_1to3.get(restypes[r], 'UNK')
++    atom_types = residue_constants.atom_types
++  elif prot.molecular_type == 'RNA':
++    nuctypes = residue_constants.nuctypes + ['X']
++    res_1to3 = lambda r: nuctypes[r]
++    atom_types = residue_constants.na_atom_types
++  else:
++    nuctypes = residue_constants.nuctypes + ['X']
++    res_1to3 = lambda r: 'D' + nuctypes[r]
++    atom_types = residue_constants.na_atom_types
++
++  pdb_lines = []
++
++  atom_mask = prot.atom_mask
++  aatype = prot.aatype
++  atom_positions = prot.atom_positions
++  residue_index = prot.residue_index.astype(np.int32)
++  chain_index = prot.chain_index.astype(np.int32)
++  b_factors = prot.b_factors
++  occupancies = prot.occupancies
++  if occupancies is None:
++    occupancies = np.ones_like(b_factors)
++
++  if np.any(aatype > residue_constants.restype_num):
++    raise ValueError('Invalid aatypes.')
++
++  # Construct a mapping from chain integer indices to chain ID strings.
++  chain_ids = {}
++  for i in np.unique(chain_index):  # np.unique gives sorted output.
++    if i >= PDB_MAX_CHAINS:
++      raise ValueError(
++          f'The PDB format supports at most {PDB_MAX_CHAINS} chains.')
++    chain_ids[i] = PDB_CHAIN_IDS[i]
++
++  pdb_lines.append('MODEL     1')
++  atom_index = 1
++  last_chain_index = chain_index[0]
++  last_residue_index = residue_index[0]
++  # last_res_ca_xyz = atom_positions[0, 1] if atom_mask[0, 1] == 1.0 else None
++  last_resolved_ca_xyz = atom_positions[0, 1] if atom_mask[0, 1] == 1.0 else None # Last resolved Ca XYZ
++  # Add all atom sites.
++  for i in range(aatype.shape[0]):
++    # Close the previous chain if in a multichain PDB.
++    if last_chain_index != chain_index[i] or (last_chain_index == chain_index[i] and last_residue_index > residue_index[i]):
++      pdb_lines.append(_chain_end(atom_index, res_1to3(aatype[i - 1]), chain_ids[chain_index[i - 1]], residue_index[i - 1]))
++      last_chain_index = chain_index[i]
++      atom_index += 1  # Atom index increases at the TER symbol.
++      atom_index = min(atom_index, 9999)
++    #elif last_res_ca_xyz is not None and atom_mask[i, 1] == 1.0 and \
++    #    np.sqrt(np.sum((last_res_ca_xyz - atom_positions[i, 1])**2)) >= gap_ter_threshold:
++    elif last_resolved_ca_xyz is not None and atom_mask[i, 1] == 1.0 and \
++          np.sqrt(np.sum((last_resolved_ca_xyz - atom_positions[i, 1])**2)) >= gap_ter_threshold:
++      pdb_lines.append(_chain_end(atom_index, res_1to3(aatype[i - 1]), chain_ids[chain_index[i - 1]], residue_index[i - 1]))
++      last_chain_index = chain_index[i]
++      atom_index += 1  # Atom index increases at the TER symbol.
++      atom_index = min(atom_index, 9999)
++    # last_res_ca_xyz = atom_positions[i, 1] if atom_mask[i, 1] == 1.0 else None
++    if atom_mask[i, 1] == 1:
++      last_resolved_ca_xyz = atom_positions[i, 1]
++
++    res_name_3 = res_1to3(aatype[i])
++    for atom_name, pos, mask, b_factor, occupancy in zip(
++        atom_types, atom_positions[i], atom_mask[i], b_factors[i], occupancies[i]):
++      if mask < 0.5:
++        continue
++
++      record_type = 'ATOM'
++      name = atom_name if len(atom_name) == 4 else f' {atom_name}'
++      alt_loc = ''
++      insertion_code = ''
++      # occupancy = 1.00
++      element = atom_name[0]  # Protein supports only C, N, O, S, this works.
++      charge = ''
++      # PDB is a columnar format, every space matters here!
++      atom_line = (f'{record_type:<6}{atom_index:>5} {name:<4}{alt_loc:>1}'
++                   f'{res_name_3:>3} {chain_ids[chain_index[i]]:>1}'
++                   f'{residue_index[i]:>4}{insertion_code:>1}   '
++                   f'{pos[0]:>8.3f}{pos[1]:>8.3f}{pos[2]:>8.3f}'
++                   f'{occupancy:>6.2f}{b_factor:>6.2f}          '
++                   f'{element:>2}{charge:>2}')
++      pdb_lines.append(atom_line)
++      atom_index += 1
++      atom_index = min(atom_index, 9999)
++    
++    last_residue_index = residue_index[i]
++
++  # Close the final chain.
++  pdb_lines.append(_chain_end(atom_index, res_1to3(aatype[-1]), chain_ids[chain_index[-1]], residue_index[-1]))
++  pdb_lines.append('ENDMDL')
++  pdb_lines.append('END')
++
++  # Pad all lines to 80 characters.
++  pdb_lines = [line.ljust(80) for line in pdb_lines]
++  return '\n'.join(pdb_lines) + '\n'  # Add terminating newline.
++
++
++def ideal_atom_mask(prot: Protein) -> np.ndarray:
++  """Computes an ideal atom mask.
++
++  `Protein.atom_mask` typically is defined according to the atoms that are
++  reported in the PDB. This function computes a mask according to heavy atoms
++  that should be present in the given sequence of amino acids.
++
++  Args:
++    prot: `Protein` whose fields are `numpy.ndarray` objects.
++
++  Returns:
++    An ideal atom mask.
++  """
++  return residue_constants.STANDARD_ATOM_MASK[prot.aatype]
++
++
++def from_prediction(
++    features: FeatureDict,
++    result: ModelOutput,
++    b_factors: Optional[np.ndarray] = None,
++    remove_leading_feature_dimension: bool = True) -> Protein:
++  """Assembles a protein from a prediction.
++
++  Args:
++    features: Dictionary holding model inputs.
++    result: Dictionary holding model outputs.
++    b_factors: (Optional) B-factors to use for the protein.
++    remove_leading_feature_dimension: Whether to remove the leading dimension
++      of the `features` values.
++
++  Returns:
++    A protein instance.
++  """
++  fold_output = result['structure_module']
++
++  def _maybe_remove_leading_dim(arr: np.ndarray) -> np.ndarray:
++    return arr[0] if remove_leading_feature_dimension else arr
++
++  if 'asym_id' in features:
++    chain_index = _maybe_remove_leading_dim(features['asym_id'])
++  else:
++    chain_index = np.zeros_like(_maybe_remove_leading_dim(features['aatype']))
++
++  if b_factors is None:
++    b_factors = np.zeros_like(fold_output['final_atom_mask'])
++
++  return Protein(
++      aatype=_maybe_remove_leading_dim(features['aatype']),
++      atom_positions=fold_output['final_atom_positions'],
++      atom_mask=fold_output['final_atom_mask'],
++      residue_index=_maybe_remove_leading_dim(features['residue_index']) + 1,
++      chain_index=chain_index,
++      b_factors=b_factors)
++
++def from_protein(prot: Protein, 
++              atom_positions=None,
++              aatype=None,
++              atom_mask=None,
++              residue_index=None, 
++              chain_index=None,
++              b_factors=None,
++              occupancies=None) -> Protein:
++    if isinstance(chain_index, int) or isinstance(chain_index, float):
++        chain_index = np.ones_like(prot.chain_index) * chain_index
++    return Protein(
++        prot.atom_positions if atom_positions is None else atom_positions,
++        prot.aatype         if aatype         is None else aatype,
++        prot.atom_mask      if atom_mask      is None else atom_mask,
++        prot.residue_index  if residue_index  is None else residue_index,
++        prot.chain_index    if chain_index    is None else chain_index,
++        prot.b_factors      if b_factors      is None else b_factors,
++        prot.occupancies    if occupancies    is None else occupancies,
++        prot.molecular_type
++    )
++
++
+diff --git a/proteingym/baselines/AIDO.Protein-RAG-proteingym-dms-zeroshot/utils/residue_constants.py b/proteingym/baselines/AIDO.Protein-RAG-proteingym-dms-zeroshot/utils/residue_constants.py
+new file mode 100644
+index 0000000..f562d11
+--- /dev/null
++++ b/proteingym/baselines/AIDO.Protein-RAG-proteingym-dms-zeroshot/utils/residue_constants.py
+@@ -0,0 +1,933 @@
++# Copyright 2021 DeepMind Technologies Limited
++#
++# Licensed under the Apache License, Version 2.0 (the "License");
++# you may not use this file except in compliance with the License.
++# You may obtain a copy of the License at
++#
++#      http://www.apache.org/licenses/LICENSE-2.0
++#
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS,
++# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++# See the License for the specific language governing permissions and
++# limitations under the License.
++
++"""Constants used in AlphaFold."""
++
++import collections
++import functools
++import os
++from typing import List, Mapping, Tuple
++
++import numpy as np
++import tree
++
++# Internal import (35fd).
++
++
++# Distance from one CA to next CA [trans configuration: omega = 180].
++ca_ca = 3.80209737096
++
++# Format: The list for each AA type contains chi1, chi2, chi3, chi4 in
++# this order (or a relevant subset from chi1 onwards). ALA and GLY don't have
++# chi angles so their chi angle lists are empty.
++chi_angles_atoms = {
++    'ALA': [],
++    # Chi5 in arginine is always 0 +- 5 degrees, so ignore it.
++    'ARG': [['N', 'CA', 'CB', 'CG'], ['CA', 'CB', 'CG', 'CD'],
++            ['CB', 'CG', 'CD', 'NE'], ['CG', 'CD', 'NE', 'CZ']],
++    'ASN': [['N', 'CA', 'CB', 'CG'], ['CA', 'CB', 'CG', 'OD1']],
++    'ASP': [['N', 'CA', 'CB', 'CG'], ['CA', 'CB', 'CG', 'OD1']],
++    'CYS': [['N', 'CA', 'CB', 'SG']],
++    'GLN': [['N', 'CA', 'CB', 'CG'], ['CA', 'CB', 'CG', 'CD'],
++            ['CB', 'CG', 'CD', 'OE1']],
++    'GLU': [['N', 'CA', 'CB', 'CG'], ['CA', 'CB', 'CG', 'CD'],
++            ['CB', 'CG', 'CD', 'OE1']],
++    'GLY': [],
++    'HIS': [['N', 'CA', 'CB', 'CG'], ['CA', 'CB', 'CG', 'ND1']],
++    'ILE': [['N', 'CA', 'CB', 'CG1'], ['CA', 'CB', 'CG1', 'CD1']],
++    'LEU': [['N', 'CA', 'CB', 'CG'], ['CA', 'CB', 'CG', 'CD1']],
++    'LYS': [['N', 'CA', 'CB', 'CG'], ['CA', 'CB', 'CG', 'CD'],
++            ['CB', 'CG', 'CD', 'CE'], ['CG', 'CD', 'CE', 'NZ']],
++    'MET': [['N', 'CA', 'CB', 'CG'], ['CA', 'CB', 'CG', 'SD'],
++            ['CB', 'CG', 'SD', 'CE']],
++    'PHE': [['N', 'CA', 'CB', 'CG'], ['CA', 'CB', 'CG', 'CD1']],
++    'PRO': [['N', 'CA', 'CB', 'CG'], ['CA', 'CB', 'CG', 'CD']],
++    'SER': [['N', 'CA', 'CB', 'OG']],
++    'THR': [['N', 'CA', 'CB', 'OG1']],
++    'TRP': [['N', 'CA', 'CB', 'CG'], ['CA', 'CB', 'CG', 'CD1']],
++    'TYR': [['N', 'CA', 'CB', 'CG'], ['CA', 'CB', 'CG', 'CD1']],
++    'VAL': [['N', 'CA', 'CB', 'CG1']],
++}
++
++# If chi angles given in fixed-length array, this matrix determines how to mask
++# them for each AA type. The order is as per restype_order (see below).
++chi_angles_mask = [
++    [0.0, 0.0, 0.0, 0.0],  # ALA
++    [1.0, 1.0, 1.0, 1.0],  # ARG
++    [1.0, 1.0, 0.0, 0.0],  # ASN
++    [1.0, 1.0, 0.0, 0.0],  # ASP
++    [1.0, 0.0, 0.0, 0.0],  # CYS
++    [1.0, 1.0, 1.0, 0.0],  # GLN
++    [1.0, 1.0, 1.0, 0.0],  # GLU
++    [0.0, 0.0, 0.0, 0.0],  # GLY
++    [1.0, 1.0, 0.0, 0.0],  # HIS
++    [1.0, 1.0, 0.0, 0.0],  # ILE
++    [1.0, 1.0, 0.0, 0.0],  # LEU
++    [1.0, 1.0, 1.0, 1.0],  # LYS
++    [1.0, 1.0, 1.0, 0.0],  # MET
++    [1.0, 1.0, 0.0, 0.0],  # PHE
++    [1.0, 1.0, 0.0, 0.0],  # PRO
++    [1.0, 0.0, 0.0, 0.0],  # SER
++    [1.0, 0.0, 0.0, 0.0],  # THR
++    [1.0, 1.0, 0.0, 0.0],  # TRP
++    [1.0, 1.0, 0.0, 0.0],  # TYR
++    [1.0, 0.0, 0.0, 0.0],  # VAL
++]
++
++# The following chi angles are pi periodic: they can be rotated by a multiple
++# of pi without affecting the structure.
++chi_pi_periodic = [
++    [0.0, 0.0, 0.0, 0.0],  # ALA
++    [0.0, 0.0, 0.0, 0.0],  # ARG
++    [0.0, 0.0, 0.0, 0.0],  # ASN
++    [0.0, 1.0, 0.0, 0.0],  # ASP
++    [0.0, 0.0, 0.0, 0.0],  # CYS
++    [0.0, 0.0, 0.0, 0.0],  # GLN
++    [0.0, 0.0, 1.0, 0.0],  # GLU
++    [0.0, 0.0, 0.0, 0.0],  # GLY
++    [0.0, 0.0, 0.0, 0.0],  # HIS
++    [0.0, 0.0, 0.0, 0.0],  # ILE
++    [0.0, 0.0, 0.0, 0.0],  # LEU
++    [0.0, 0.0, 0.0, 0.0],  # LYS
++    [0.0, 0.0, 0.0, 0.0],  # MET
++    [0.0, 1.0, 0.0, 0.0],  # PHE
++    [0.0, 0.0, 0.0, 0.0],  # PRO
++    [0.0, 0.0, 0.0, 0.0],  # SER
++    [0.0, 0.0, 0.0, 0.0],  # THR
++    [0.0, 0.0, 0.0, 0.0],  # TRP
++    [0.0, 1.0, 0.0, 0.0],  # TYR
++    [0.0, 0.0, 0.0, 0.0],  # VAL
++    [0.0, 0.0, 0.0, 0.0],  # UNK
++]
++
++# Atoms positions relative to the 8 rigid groups, defined by the pre-omega, phi,
++# psi and chi angles:
++# 0: 'backbone group',
++# 1: 'pre-omega-group', (empty)
++# 2: 'phi-group', (currently empty, because it defines only hydrogens)
++# 3: 'psi-group',
++# 4,5,6,7: 'chi1,2,3,4-group'
++# The atom positions are relative to the axis-end-atom of the corresponding
++# rotation axis. The x-axis is in direction of the rotation axis, and the y-axis
++# is defined such that the dihedral-angle-definiting atom (the last entry in
++# chi_angles_atoms above) is in the xy-plane (with a positive y-coordinate).
++# format: [atomname, group_idx, rel_position]
++rigid_group_atom_positions = {
++    'ALA': [
++        ['N', 0, (-0.525, 1.363, 0.000)],
++        ['CA', 0, (0.000, 0.000, 0.000)],
++        ['C', 0, (1.526, -0.000, -0.000)],
++        ['CB', 0, (-0.529, -0.774, -1.205)],
++        ['O', 3, (0.627, 1.062, 0.000)],
++    ],
++    'ARG': [
++        ['N', 0, (-0.524, 1.362, -0.000)],
++        ['CA', 0, (0.000, 0.000, 0.000)],
++        ['C', 0, (1.525, -0.000, -0.000)],
++        ['CB', 0, (-0.524, -0.778, -1.209)],
++        ['O', 3, (0.626, 1.062, 0.000)],
++        ['CG', 4, (0.616, 1.390, -0.000)],
++        ['CD', 5, (0.564, 1.414, 0.000)],
++        ['NE', 6, (0.539, 1.357, -0.000)],
++        ['NH1', 7, (0.206, 2.301, 0.000)],
++        ['NH2', 7, (2.078, 0.978, -0.000)],
++        ['CZ', 7, (0.758, 1.093, -0.000)],
++    ],
++    'ASN': [
++        ['N', 0, (-0.536, 1.357, 0.000)],
++        ['CA', 0, (0.000, 0.000, 0.000)],
++        ['C', 0, (1.526, -0.000, -0.000)],
++        ['CB', 0, (-0.531, -0.787, -1.200)],
++        ['O', 3, (0.625, 1.062, 0.000)],
++        ['CG', 4, (0.584, 1.399, 0.000)],
++        ['ND2', 5, (0.593, -1.188, 0.001)],
++        ['OD1', 5, (0.633, 1.059, 0.000)],
++    ],
++    'ASP': [
++        ['N', 0, (-0.525, 1.362, -0.000)],
++        ['CA', 0, (0.000, 0.000, 0.000)],
++        ['C', 0, (1.527, 0.000, -0.000)],
++        ['CB', 0, (-0.526, -0.778, -1.208)],
++        ['O', 3, (0.626, 1.062, -0.000)],
++        ['CG', 4, (0.593, 1.398, -0.000)],
++        ['OD1', 5, (0.610, 1.091, 0.000)],
++        ['OD2', 5, (0.592, -1.101, -0.003)],
++    ],
++    'CYS': [
++        ['N', 0, (-0.522, 1.362, -0.000)],
++        ['CA', 0, (0.000, 0.000, 0.000)],
++        ['C', 0, (1.524, 0.000, 0.000)],
++        ['CB', 0, (-0.519, -0.773, -1.212)],
++        ['O', 3, (0.625, 1.062, -0.000)],
++        ['SG', 4, (0.728, 1.653, 0.000)],
++    ],
++    'GLN': [
++        ['N', 0, (-0.526, 1.361, -0.000)],
++        ['CA', 0, (0.000, 0.000, 0.000)],
++        ['C', 0, (1.526, 0.000, 0.000)],
++        ['CB', 0, (-0.525, -0.779, -1.207)],
++        ['O', 3, (0.626, 1.062, -0.000)],
++        ['CG', 4, (0.615, 1.393, 0.000)],
++        ['CD', 5, (0.587, 1.399, -0.000)],
++        ['NE2', 6, (0.593, -1.189, -0.001)],
++        ['OE1', 6, (0.634, 1.060, 0.000)],
++    ],
++    'GLU': [
++        ['N', 0, (-0.528, 1.361, 0.000)],
++        ['CA', 0, (0.000, 0.000, 0.000)],
++        ['C', 0, (1.526, -0.000, -0.000)],
++        ['CB', 0, (-0.526, -0.781, -1.207)],
++        ['O', 3, (0.626, 1.062, 0.000)],
++        ['CG', 4, (0.615, 1.392, 0.000)],
++        ['CD', 5, (0.600, 1.397, 0.000)],
++        ['OE1', 6, (0.607, 1.095, -0.000)],
++        ['OE2', 6, (0.589, -1.104, -0.001)],
++    ],
++    'GLY': [
++        ['N', 0, (-0.572, 1.337, 0.000)],
++        ['CA', 0, (0.000, 0.000, 0.000)],
++        ['C', 0, (1.517, -0.000, -0.000)],
++        ['O', 3, (0.626, 1.062, -0.000)],
++    ],
++    'HIS': [
++        ['N', 0, (-0.527, 1.360, 0.000)],
++        ['CA', 0, (0.000, 0.000, 0.000)],
++        ['C', 0, (1.525, 0.000, 0.000)],
++        ['CB', 0, (-0.525, -0.778, -1.208)],
++        ['O', 3, (0.625, 1.063, 0.000)],
++        ['CG', 4, (0.600, 1.370, -0.000)],
++        ['CD2', 5, (0.889, -1.021, 0.003)],
++        ['ND1', 5, (0.744, 1.160, -0.000)],
++        ['CE1', 5, (2.030, 0.851, 0.002)],
++        ['NE2', 5, (2.145, -0.466, 0.004)],
++    ],
++    'ILE': [
++        ['N', 0, (-0.493, 1.373, -0.000)],
++        ['CA', 0, (0.000, 0.000, 0.000)],
++        ['C', 0, (1.527, -0.000, -0.000)],
++        ['CB', 0, (-0.536, -0.793, -1.213)],
++        ['O', 3, (0.627, 1.062, -0.000)],
++        ['CG1', 4, (0.534, 1.437, -0.000)],
++        ['CG2', 4, (0.540, -0.785, -1.199)],
++        ['CD1', 5, (0.619, 1.391, 0.000)],
++    ],
++    'LEU': [
++        ['N', 0, (-0.520, 1.363, 0.000)],
++        ['CA', 0, (0.000, 0.000, 0.000)],
++        ['C', 0, (1.525, -0.000, -0.000)],
++        ['CB', 0, (-0.522, -0.773, -1.214)],
++        ['O', 3, (0.625, 1.063, -0.000)],
++        ['CG', 4, (0.678, 1.371, 0.000)],
++        ['CD1', 5, (0.530, 1.430, -0.000)],
++        ['CD2', 5, (0.535, -0.774, 1.200)],
++    ],
++    'LYS': [
++        ['N', 0, (-0.526, 1.362, -0.000)],
++        ['CA', 0, (0.000, 0.000, 0.000)],
++        ['C', 0, (1.526, 0.000, 0.000)],
++        ['CB', 0, (-0.524, -0.778, -1.208)],
++        ['O', 3, (0.626, 1.062, -0.000)],
++        ['CG', 4, (0.619, 1.390, 0.000)],
++        ['CD', 5, (0.559, 1.417, 0.000)],
++        ['CE', 6, (0.560, 1.416, 0.000)],
++        ['NZ', 7, (0.554, 1.387, 0.000)],
++    ],
++    'MET': [
++        ['N', 0, (-0.521, 1.364, -0.000)],
++        ['CA', 0, (0.000, 0.000, 0.000)],
++        ['C', 0, (1.525, 0.000, 0.000)],
++        ['CB', 0, (-0.523, -0.776, -1.210)],
++        ['O', 3, (0.625, 1.062, -0.000)],
++        ['CG', 4, (0.613, 1.391, -0.000)],
++        ['SD', 5, (0.703, 1.695, 0.000)],
++        ['CE', 6, (0.320, 1.786, -0.000)],
++    ],
++    'PHE': [
++        ['N', 0, (-0.518, 1.363, 0.000)],
++        ['CA', 0, (0.000, 0.000, 0.000)],
++        ['C', 0, (1.524, 0.000, -0.000)],
++        ['CB', 0, (-0.525, -0.776, -1.212)],
++        ['O', 3, (0.626, 1.062, -0.000)],
++        ['CG', 4, (0.607, 1.377, 0.000)],
++        ['CD1', 5, (0.709, 1.195, -0.000)],
++        ['CD2', 5, (0.706, -1.196, 0.000)],
++        ['CE1', 5, (2.102, 1.198, -0.000)],
++        ['CE2', 5, (2.098, -1.201, -0.000)],
++        ['CZ', 5, (2.794, -0.003, -0.001)],
++    ],
++    'PRO': [
++        ['N', 0, (-0.566, 1.351, -0.000)],
++        ['CA', 0, (0.000, 0.000, 0.000)],
++        ['C', 0, (1.527, -0.000, 0.000)],
++        ['CB', 0, (-0.546, -0.611, -1.293)],
++        ['O', 3, (0.621, 1.066, 0.000)],
++        ['CG', 4, (0.382, 1.445, 0.0)],
++        # ['CD', 5, (0.427, 1.440, 0.0)],
++        ['CD', 5, (0.477, 1.424, 0.0)],  # manually made angle 2 degrees larger
++    ],
++    'SER': [
++        ['N', 0, (-0.529, 1.360, -0.000)],
++        ['CA', 0, (0.000, 0.000, 0.000)],
++        ['C', 0, (1.525, -0.000, -0.000)],
++        ['CB', 0, (-0.518, -0.777, -1.211)],
++        ['O', 3, (0.626, 1.062, -0.000)],
++        ['OG', 4, (0.503, 1.325, 0.000)],
++    ],
++    'THR': [
++        ['N', 0, (-0.517, 1.364, 0.000)],
++        ['CA', 0, (0.000, 0.000, 0.000)],
++        ['C', 0, (1.526, 0.000, -0.000)],
++        ['CB', 0, (-0.516, -0.793, -1.215)],
++        ['O', 3, (0.626, 1.062, 0.000)],
++        ['CG2', 4, (0.550, -0.718, -1.228)],
++        ['OG1', 4, (0.472, 1.353, 0.000)],
++    ],
++    'TRP': [
++        ['N', 0, (-0.521, 1.363, 0.000)],
++        ['CA', 0, (0.000, 0.000, 0.000)],
++        ['C', 0, (1.525, -0.000, 0.000)],
++        ['CB', 0, (-0.523, -0.776, -1.212)],
++        ['O', 3, (0.627, 1.062, 0.000)],
++        ['CG', 4, (0.609, 1.370, -0.000)],
++        ['CD1', 5, (0.824, 1.091, 0.000)],
++        ['CD2', 5, (0.854, -1.148, -0.005)],
++        ['CE2', 5, (2.186, -0.678, -0.007)],
++        ['CE3', 5, (0.622, -2.530, -0.007)],
++        ['NE1', 5, (2.140, 0.690, -0.004)],
++        ['CH2', 5, (3.028, -2.890, -0.013)],
++        ['CZ2', 5, (3.283, -1.543, -0.011)],
++        ['CZ3', 5, (1.715, -3.389, -0.011)],
++    ],
++    'TYR': [
++        ['N', 0, (-0.522, 1.362, 0.000)],
++        ['CA', 0, (0.000, 0.000, 0.000)],
++        ['C', 0, (1.524, -0.000, -0.000)],
++        ['CB', 0, (-0.522, -0.776, -1.213)],
++        ['O', 3, (0.627, 1.062, -0.000)],
++        ['CG', 4, (0.607, 1.382, -0.000)],
++        ['CD1', 5, (0.716, 1.195, -0.000)],
++        ['CD2', 5, (0.713, -1.194, -0.001)],
++        ['CE1', 5, (2.107, 1.200, -0.002)],
++        ['CE2', 5, (2.104, -1.201, -0.003)],
++        ['OH', 5, (4.168, -0.002, -0.005)],
++        ['CZ', 5, (2.791, -0.001, -0.003)],
++    ],
++    'VAL': [
++        ['N', 0, (-0.494, 1.373, -0.000)],
++        ['CA', 0, (0.000, 0.000, 0.000)],
++        ['C', 0, (1.527, -0.000, -0.000)],
++        ['CB', 0, (-0.533, -0.795, -1.213)],
++        ['O', 3, (0.627, 1.062, -0.000)],
++        ['CG1', 4, (0.540, 1.429, -0.000)],
++        ['CG2', 4, (0.533, -0.776, 1.203)],
++    ],
++}
++
++# A list of atoms (excluding hydrogen) for each AA type. PDB naming convention.
++residue_atoms = {
++    'ALA': ['C', 'CA', 'CB', 'N', 'O'],
++    'ARG': ['C', 'CA', 'CB', 'CG', 'CD', 'CZ', 'N', 'NE', 'O', 'NH1', 'NH2'],
++    'ASP': ['C', 'CA', 'CB', 'CG', 'N', 'O', 'OD1', 'OD2'],
++    'ASN': ['C', 'CA', 'CB', 'CG', 'N', 'ND2', 'O', 'OD1'],
++    'CYS': ['C', 'CA', 'CB', 'N', 'O', 'SG'],
++    'GLU': ['C', 'CA', 'CB', 'CG', 'CD', 'N', 'O', 'OE1', 'OE2'],
++    'GLN': ['C', 'CA', 'CB', 'CG', 'CD', 'N', 'NE2', 'O', 'OE1'],
++    'GLY': ['C', 'CA', 'N', 'O'],
++    'HIS': ['C', 'CA', 'CB', 'CG', 'CD2', 'CE1', 'N', 'ND1', 'NE2', 'O'],
++    'ILE': ['C', 'CA', 'CB', 'CG1', 'CG2', 'CD1', 'N', 'O'],
++    'LEU': ['C', 'CA', 'CB', 'CG', 'CD1', 'CD2', 'N', 'O'],
++    'LYS': ['C', 'CA', 'CB', 'CG', 'CD', 'CE', 'N', 'NZ', 'O'],
++    'MET': ['C', 'CA', 'CB', 'CG', 'CE', 'N', 'O', 'SD'],
++    'PHE': ['C', 'CA', 'CB', 'CG', 'CD1', 'CD2', 'CE1', 'CE2', 'CZ', 'N', 'O'],
++    'PRO': ['C', 'CA', 'CB', 'CG', 'CD', 'N', 'O'],
++    'SER': ['C', 'CA', 'CB', 'N', 'O', 'OG'],
++    'THR': ['C', 'CA', 'CB', 'CG2', 'N', 'O', 'OG1'],
++    'TRP': ['C', 'CA', 'CB', 'CG', 'CD1', 'CD2', 'CE2', 'CE3', 'CZ2', 'CZ3',
++            'CH2', 'N', 'NE1', 'O'],
++    'TYR': ['C', 'CA', 'CB', 'CG', 'CD1', 'CD2', 'CE1', 'CE2', 'CZ', 'N', 'O',
++            'OH'],
++    'VAL': ['C', 'CA', 'CB', 'CG1', 'CG2', 'N', 'O']
++}
++
++# Naming swaps for ambiguous atom names.
++# Due to symmetries in the amino acids the naming of atoms is ambiguous in
++# 4 of the 20 amino acids.
++# (The LDDT paper lists 7 amino acids as ambiguous, but the naming ambiguities
++# in LEU, VAL and ARG can be resolved by using the 3d constellations of
++# the 'ambiguous' atoms and their neighbours)
++residue_atom_renaming_swaps = {
++    'ASP': {'OD1': 'OD2'},
++    'GLU': {'OE1': 'OE2'},
++    'PHE': {'CD1': 'CD2', 'CE1': 'CE2'},
++    'TYR': {'CD1': 'CD2', 'CE1': 'CE2'},
++}
++
++# Van der Waals radii [Angstroem] of the atoms (from Wikipedia)
++van_der_waals_radius = {
++    'C': 1.7,
++    'N': 1.55,
++    'O': 1.52,
++    'S': 1.8,
++}
++
++Bond = collections.namedtuple(
++    'Bond', ['atom1_name', 'atom2_name', 'length', 'stddev'])
++BondAngle = collections.namedtuple(
++    'BondAngle',
++    ['atom1_name', 'atom2_name', 'atom3name', 'angle_rad', 'stddev'])
++
++
++@functools.lru_cache(maxsize=None)
++def load_stereo_chemical_props() -> Tuple[Mapping[str, List[Bond]],
++                                          Mapping[str, List[Bond]],
++                                          Mapping[str, List[BondAngle]]]:
++  """Load stereo_chemical_props.txt into a nice structure.
++
++  Load literature values for bond lengths and bond angles and translate
++  bond angles into the length of the opposite edge of the triangle
++  ("residue_virtual_bonds").
++
++  Returns:
++    residue_bonds: Dict that maps resname -> list of Bond tuples.
++    residue_virtual_bonds: Dict that maps resname -> list of Bond tuples.
++    residue_bond_angles: Dict that maps resname -> list of BondAngle tuples.
++  """
++  stereo_chemical_props_path = os.path.join(
++      os.path.dirname(os.path.abspath(__file__)), 'stereo_chemical_props.txt'
++  )
++  with open(stereo_chemical_props_path, 'rt') as f:
++    stereo_chemical_props = f.read()
++  lines_iter = iter(stereo_chemical_props.splitlines())
++  # Load bond lengths.
++  residue_bonds = {}
++  next(lines_iter)  # Skip header line.
++  for line in lines_iter:
++    if line.strip() == '-':
++      break
++    bond, resname, length, stddev = line.split()
++    atom1, atom2 = bond.split('-')
++    if resname not in residue_bonds:
++      residue_bonds[resname] = []
++    residue_bonds[resname].append(
++        Bond(atom1, atom2, float(length), float(stddev)))
++  residue_bonds['UNK'] = []
++
++  # Load bond angles.
++  residue_bond_angles = {}
++  next(lines_iter)  # Skip empty line.
++  next(lines_iter)  # Skip header line.
++  for line in lines_iter:
++    if line.strip() == '-':
++      break
++    bond, resname, angle_degree, stddev_degree = line.split()
++    atom1, atom2, atom3 = bond.split('-')
++    if resname not in residue_bond_angles:
++      residue_bond_angles[resname] = []
++    residue_bond_angles[resname].append(
++        BondAngle(atom1, atom2, atom3,
++                  float(angle_degree) / 180. * np.pi,
++                  float(stddev_degree) / 180. * np.pi))
++  residue_bond_angles['UNK'] = []
++
++  def make_bond_key(atom1_name, atom2_name):
++    """Unique key to lookup bonds."""
++    return '-'.join(sorted([atom1_name, atom2_name]))
++
++  # Translate bond angles into distances ("virtual bonds").
++  residue_virtual_bonds = {}
++  for resname, bond_angles in residue_bond_angles.items():
++    # Create a fast lookup dict for bond lengths.
++    bond_cache = {}
++    for b in residue_bonds[resname]:
++      bond_cache[make_bond_key(b.atom1_name, b.atom2_name)] = b
++    residue_virtual_bonds[resname] = []
++    for ba in bond_angles:
++      bond1 = bond_cache[make_bond_key(ba.atom1_name, ba.atom2_name)]
++      bond2 = bond_cache[make_bond_key(ba.atom2_name, ba.atom3name)]
++
++      # Compute distance between atom1 and atom3 using the law of cosines
++      # c^2 = a^2 + b^2 - 2ab*cos(gamma).
++      gamma = ba.angle_rad
++      length = np.sqrt(bond1.length**2 + bond2.length**2
++                       - 2 * bond1.length * bond2.length * np.cos(gamma))
++
++      # Propagation of uncertainty assuming uncorrelated errors.
++      dl_outer = 0.5 / length
++      dl_dgamma = (2 * bond1.length * bond2.length * np.sin(gamma)) * dl_outer
++      dl_db1 = (2 * bond1.length - 2 * bond2.length * np.cos(gamma)) * dl_outer
++      dl_db2 = (2 * bond2.length - 2 * bond1.length * np.cos(gamma)) * dl_outer
++      stddev = np.sqrt((dl_dgamma * ba.stddev)**2 +
++                       (dl_db1 * bond1.stddev)**2 +
++                       (dl_db2 * bond2.stddev)**2)
++      residue_virtual_bonds[resname].append(
++          Bond(ba.atom1_name, ba.atom3name, length, stddev))
++
++  return (residue_bonds,
++          residue_virtual_bonds,
++          residue_bond_angles)
++
++
++# Between-residue bond lengths for general bonds (first element) and for Proline
++# (second element).
++between_res_bond_length_c_n = [1.329, 1.341]
++between_res_bond_length_stddev_c_n = [0.014, 0.016]
++
++# Between-residue cos_angles.
++between_res_cos_angles_c_n_ca = [-0.5203, 0.0353]  # degrees: 121.352 +- 2.315
++between_res_cos_angles_ca_c_n = [-0.4473, 0.0311]  # degrees: 116.568 +- 1.995
++
++# This mapping is used when we need to store atom data in a format that requires
++# fixed atom data size for every residue (e.g. a numpy array).
++atom_types = [
++    'N', 'CA', 'C', 'CB', 'O', 'CG', 'CG1', 'CG2', 'OG', 'OG1', 'SG', 'CD',
++    'CD1', 'CD2', 'ND1', 'ND2', 'OD1', 'OD2', 'SD', 'CE', 'CE1', 'CE2', 'CE3',
++    'NE', 'NE1', 'NE2', 'OE1', 'OE2', 'CH2', 'NH1', 'NH2', 'OH', 'CZ', 'CZ2',
++    'CZ3', 'NZ', 'OXT'
++]
++atom_order = {atom_type: i for i, atom_type in enumerate(atom_types)}
++atom_type_num = len(atom_types)  # := 37.
++
++# A compact atom encoding with 14 columns
++# pylint: disable=line-too-long
++# pylint: disable=bad-whitespace
++restype_name_to_atom14_names = {
++    'ALA': ['N', 'CA', 'C', 'O', 'CB', '',    '',    '',    '',    '',    '',    '',    '',    ''],
++    'ARG': ['N', 'CA', 'C', 'O', 'CB', 'CG',  'CD',  'NE',  'CZ',  'NH1', 'NH2', '',    '',    ''],
++    'ASN': ['N', 'CA', 'C', 'O', 'CB', 'CG',  'OD1', 'ND2', '',    '',    '',    '',    '',    ''],
++    'ASP': ['N', 'CA', 'C', 'O', 'CB', 'CG',  'OD1', 'OD2', '',    '',    '',    '',    '',    ''],
++    'CYS': ['N', 'CA', 'C', 'O', 'CB', 'SG',  '',    '',    '',    '',    '',    '',    '',    ''],
++    'GLN': ['N', 'CA', 'C', 'O', 'CB', 'CG',  'CD',  'OE1', 'NE2', '',    '',    '',    '',    ''],
++    'GLU': ['N', 'CA', 'C', 'O', 'CB', 'CG',  'CD',  'OE1', 'OE2', '',    '',    '',    '',    ''],
++    'GLY': ['N', 'CA', 'C', 'O', '',   '',    '',    '',    '',    '',    '',    '',    '',    ''],
++    'HIS': ['N', 'CA', 'C', 'O', 'CB', 'CG',  'ND1', 'CD2', 'CE1', 'NE2', '',    '',    '',    ''],
++    'ILE': ['N', 'CA', 'C', 'O', 'CB', 'CG1', 'CG2', 'CD1', '',    '',    '',    '',    '',    ''],
++    'LEU': ['N', 'CA', 'C', 'O', 'CB', 'CG',  'CD1', 'CD2', '',    '',    '',    '',    '',    ''],
++    'LYS': ['N', 'CA', 'C', 'O', 'CB', 'CG',  'CD',  'CE',  'NZ',  '',    '',    '',    '',    ''],
++    'MET': ['N', 'CA', 'C', 'O', 'CB', 'CG',  'SD',  'CE',  '',    '',    '',    '',    '',    ''],
++    'PHE': ['N', 'CA', 'C', 'O', 'CB', 'CG',  'CD1', 'CD2', 'CE1', 'CE2', 'CZ',  '',    '',    ''],
++    'PRO': ['N', 'CA', 'C', 'O', 'CB', 'CG',  'CD',  '',    '',    '',    '',    '',    '',    ''],
++    'SER': ['N', 'CA', 'C', 'O', 'CB', 'OG',  '',    '',    '',    '',    '',    '',    '',    ''],
++    'THR': ['N', 'CA', 'C', 'O', 'CB', 'OG1', 'CG2', '',    '',    '',    '',    '',    '',    ''],
++    'TRP': ['N', 'CA', 'C', 'O', 'CB', 'CG',  'CD1', 'CD2', 'NE1', 'CE2', 'CE3', 'CZ2', 'CZ3', 'CH2'],
++    'TYR': ['N', 'CA', 'C', 'O', 'CB', 'CG',  'CD1', 'CD2', 'CE1', 'CE2', 'CZ',  'OH',  '',    ''],
++    'VAL': ['N', 'CA', 'C', 'O', 'CB', 'CG1', 'CG2', '',    '',    '',    '',    '',    '',    ''],
++    'UNK': ['',  '',   '',  '',  '',   '',    '',    '',    '',    '',    '',    '',    '',    ''],
++
++}
++# pylint: enable=line-too-long
++# pylint: enable=bad-whitespace
++
++
++# This is the standard residue order when coding AA type as a number.
++# Reproduce it by taking 3-letter AA codes and sorting them alphabetically.
++restypes = [
++    'A', 'R', 'N', 'D', 'C', 'Q', 'E', 'G', 'H', 'I', 'L', 'K', 'M', 'F', 'P',
++    'S', 'T', 'W', 'Y', 'V'
++]
++restype_order = {restype: i for i, restype in enumerate(restypes)}
++restype_num = len(restypes)  # := 20.
++unk_restype_index = restype_num  # Catch-all index for unknown restypes.
++
++restypes_with_x = restypes + ['X']
++restype_order_with_x = {restype: i for i, restype in enumerate(restypes_with_x)}
++
++
++def sequence_to_onehot(
++    sequence: str,
++    mapping: Mapping[str, int],
++    map_unknown_to_x: bool = False) -> np.ndarray:
++  """Maps the given sequence into a one-hot encoded matrix.
++
++  Args:
++    sequence: An amino acid sequence.
++    mapping: A dictionary mapping amino acids to integers.
++    map_unknown_to_x: If True, any amino acid that is not in the mapping will be
++      mapped to the unknown amino acid 'X'. If the mapping doesn't contain
++      amino acid 'X', an error will be thrown. If False, any amino acid not in
++      the mapping will throw an error.
++
++  Returns:
++    A numpy array of shape (seq_len, num_unique_aas) with one-hot encoding of
++    the sequence.
++
++  Raises:
++    ValueError: If the mapping doesn't contain values from 0 to
++      num_unique_aas - 1 without any gaps.
++  """
++  num_entries = max(mapping.values()) + 1
++
++  if sorted(set(mapping.values())) != list(range(num_entries)):
++    raise ValueError('The mapping must have values from 0 to num_unique_aas-1 '
++                     'without any gaps. Got: %s' % sorted(mapping.values()))
++
++  one_hot_arr = np.zeros((len(sequence), num_entries), dtype=np.int32)
++
++  for aa_index, aa_type in enumerate(sequence):
++    if map_unknown_to_x:
++      if aa_type.isalpha() and aa_type.isupper():
++        aa_id = mapping.get(aa_type, mapping['X'])
++      else:
++        raise ValueError(f'Invalid character in the sequence: {aa_type}')
++    else:
++      aa_id = mapping[aa_type]
++    one_hot_arr[aa_index, aa_id] = 1
++
++  return one_hot_arr
++
++
++restype_1to3 = {
++    'A': 'ALA',
++    'R': 'ARG',
++    'N': 'ASN',
++    'D': 'ASP',
++    'C': 'CYS',
++    'Q': 'GLN',
++    'E': 'GLU',
++    'G': 'GLY',
++    'H': 'HIS',
++    'I': 'ILE',
++    'L': 'LEU',
++    'K': 'LYS',
++    'M': 'MET',
++    'F': 'PHE',
++    'P': 'PRO',
++    'S': 'SER',
++    'T': 'THR',
++    'W': 'TRP',
++    'Y': 'TYR',
++    'V': 'VAL',
++    'X': 'UNK'
++}
++
++non_standard_residue_substitutions = {
++    '2AS':'ASP', '3AH':'HIS', '5HP':'GLU', 'ACL':'ARG', 'AGM':'ARG', 'AIB':'ALA', 'ALM':'ALA', 'ALO':'THR', 'ALY':'LYS', 'ARM':'ARG',
++    'ASA':'ASP', 'ASB':'ASP', 'ASK':'ASP', 'ASL':'ASP', 'ASQ':'ASP', 'AYA':'ALA', 'BCS':'CYS', 'BHD':'ASP', 'BMT':'THR', 'BNN':'ALA',
++    'BUC':'CYS', 'BUG':'LEU', 'C5C':'CYS', 'C6C':'CYS', 'CAS':'CYS', 'CCS':'CYS', 'CEA':'CYS', 'CGU':'GLU', 'CHG':'ALA', 'CLE':'LEU', 'CME':'CYS',
++    'CSD':'ALA', 'CSO':'CYS', 'CSP':'CYS', 'CSS':'CYS', 'CSW':'CYS', 'CSX':'CYS', 'CXM':'MET', 'CY1':'CYS', 'CY3':'CYS', 'CYG':'CYS',
++    'CYM':'CYS', 'CYQ':'CYS', 'DAH':'PHE', 'DAL':'ALA', 'DAR':'ARG', 'DAS':'ASP', 'DCY':'CYS', 'DGL':'GLU', 'DGN':'GLN', 'DHA':'ALA',
++    'DHI':'HIS', 'DIL':'ILE', 'DIV':'VAL', 'DLE':'LEU', 'DLY':'LYS', 'DNP':'ALA', 'DPN':'PHE', 'DPR':'PRO', 'DSN':'SER', 'DSP':'ASP',
++    'DTH':'THR', 'DTR':'TRP', 'DTY':'TYR', 'DVA':'VAL', 'EFC':'CYS', 'FLA':'ALA', 'FME':'MET', 'GGL':'GLU', 'GL3':'GLY', 'GLZ':'GLY',
++    'GMA':'GLU', 'GSC':'GLY', 'HAC':'ALA', 'HAR':'ARG', 'HIC':'HIS', 'HIP':'HIS', 'HMR':'ARG', 'HPQ':'PHE', 'HTR':'TRP', 'HYP':'PRO',
++    'IAS':'ASP', 'IIL':'ILE', 'IYR':'TYR', 'KCX':'LYS', 'LLP':'LYS', 'LLY':'LYS', 'LTR':'TRP', 'LYM':'LYS', 'LYZ':'LYS', 'MAA':'ALA', 'MEN':'ASN',
++    'MHS':'HIS', 'MIS':'SER', 'MLE':'LEU', 'MPQ':'GLY', 'MSA':'GLY', 'MSE':'MET', 'MVA':'VAL', 'NEM':'HIS', 'NEP':'HIS', 'NLE':'LEU',
++    'NLN':'LEU', 'NLP':'LEU', 'NMC':'GLY', 'OAS':'SER', 'OCS':'CYS', 'OMT':'MET', 'PAQ':'TYR', 'PCA':'GLU', 'PEC':'CYS', 'PHI':'PHE',
++    'PHL':'PHE', 'PR3':'CYS', 'PRR':'ALA', 'PTR':'TYR', 'PYX':'CYS', 'SAC':'SER', 'SAR':'GLY', 'SCH':'CYS', 'SCS':'CYS', 'SCY':'CYS',
++    'SEL':'SER', 'SEP':'SER', 'SET':'SER', 'SHC':'CYS', 'SHR':'LYS', 'SMC':'CYS', 'SOC':'CYS', 'STY':'TYR', 'SVA':'SER', 'TIH':'ALA',
++    'TPL':'TRP', 'TPO':'THR', 'TPQ':'ALA', 'TRG':'LYS', 'TRO':'TRP', 'TYB':'TYR', 'TYI':'TYR', 'TYQ':'TYR', 'TYS':'TYR', 'TYY':'TYR'
++}
++
++###########################
++### Nucleic Acid
++###########################
++
++na_atom_types = [
++    'P', 'OP1', 'OP2', 'OP3',
++    'O5\'', 'C5\'', 'C4\'', 'O4\'', 'C3\'', 'O3\'', 'C2\'', 'O2\'', 'C1\'',
++    'N9', 'C8', 'N7', 'N1', 'C2', 'O2', 'N2', 'N3', 'C4', 'N4', 'O4', 'C5', 'C6', 'N6', 'C7', 'O6'
++]
++nuctypes = ['A', 'T', 'C', 'G', 'U']
++nuctypes_with_x = nuctypes + ['X']
++na_atom_type_num = len(na_atom_types)
++na_atom_order = {atom_type:idx for idx, atom_type in enumerate(na_atom_types)}
++nuctype_order = {nuctype:idx for idx, nuctype in enumerate(nuctypes)}
++nuctype_order_with_x = {nuctype:idx for idx, nuctype in enumerate(nuctypes_with_x)}
++nuctype_num = len(nuctypes)
++
++# NB: restype_3to1 differs from Bio.PDB.protein_letters_3to1 by being a simple
++# 1-to-1 mapping of 3 letter names to one letter names. The latter contains
++# many more, and less common, three letter names as keys and maps many of these
++# to the same one letter name (including 'X' and 'U' which we don't use here).
++restype_3to1 = {v: k for k, v in restype_1to3.items()}
++for non_std_restype, std_restype in non_standard_residue_substitutions.items():
++    restype_3to1[non_std_restype] = restype_3to1[std_restype]
++
++# Define a restype name for all unknown residues.
++unk_restype = 'UNK'
++
++resnames = [restype_1to3[r] for r in restypes] + [unk_restype]
++resname_to_idx = {resname: i for i, resname in enumerate(resnames)}
++
++
++# The mapping here uses hhblits convention, so that B is mapped to D, J and O
++# are mapped to X, U is mapped to C, and Z is mapped to E. Other than that the
++# remaining 20 amino acids are kept in alphabetical order.
++# There are 2 non-amino acid codes, X (representing any amino acid) and
++# "-" representing a missing amino acid in an alignment.  The id for these
++# codes is put at the end (20 and 21) so that they can easily be ignored if
++# desired.
++HHBLITS_AA_TO_ID = {
++    'A': 0,
++    'B': 2,
++    'C': 1,
++    'D': 2,
++    'E': 3,
++    'F': 4,
++    'G': 5,
++    'H': 6,
++    'I': 7,
++    'J': 20,
++    'K': 8,
++    'L': 9,
++    'M': 10,
++    'N': 11,
++    'O': 20,
++    'P': 12,
++    'Q': 13,
++    'R': 14,
++    'S': 15,
++    'T': 16,
++    'U': 1,
++    'V': 17,
++    'W': 18,
++    'X': 20,
++    'Y': 19,
++    'Z': 3,
++    '-': 21,
++}
++
++# Partial inversion of HHBLITS_AA_TO_ID.
++ID_TO_HHBLITS_AA = {
++    0: 'A',
++    1: 'C',  # Also U.
++    2: 'D',  # Also B.
++    3: 'E',  # Also Z.
++    4: 'F',
++    5: 'G',
++    6: 'H',
++    7: 'I',
++    8: 'K',
++    9: 'L',
++    10: 'M',
++    11: 'N',
++    12: 'P',
++    13: 'Q',
++    14: 'R',
++    15: 'S',
++    16: 'T',
++    17: 'V',
++    18: 'W',
++    19: 'Y',
++    20: 'X',  # Includes J and O.
++    21: '-',
++}
++
++restypes_with_x_and_gap = restypes + ['X', '-']
++MAP_HHBLITS_AATYPE_TO_OUR_AATYPE = tuple(
++    restypes_with_x_and_gap.index(ID_TO_HHBLITS_AA[i])
++    for i in range(len(restypes_with_x_and_gap)))
++
++
++def _make_standard_atom_mask() -> np.ndarray:
++  """Returns [num_res_types, num_atom_types] mask array."""
++  # +1 to account for unknown (all 0s).
++  mask = np.zeros([restype_num + 1, atom_type_num], dtype=np.int32)
++  for restype, restype_letter in enumerate(restypes):
++    restype_name = restype_1to3[restype_letter]
++    atom_names = residue_atoms[restype_name]
++    for atom_name in atom_names:
++      atom_type = atom_order[atom_name]
++      mask[restype, atom_type] = 1
++  return mask
++
++
++STANDARD_ATOM_MASK = _make_standard_atom_mask()
++
++
++# A one hot representation for the first and second atoms defining the axis
++# of rotation for each chi-angle in each residue.
++def chi_angle_atom(atom_index: int) -> np.ndarray:
++  """Define chi-angle rigid groups via one-hot representations."""
++  chi_angles_index = {}
++  one_hots = []
++
++  for k, v in chi_angles_atoms.items():
++    indices = [atom_types.index(s[atom_index]) for s in v]
++    indices.extend([-1]*(4-len(indices)))
++    chi_angles_index[k] = indices
++
++  for r in restypes:
++    res3 = restype_1to3[r]
++    one_hot = np.eye(atom_type_num)[chi_angles_index[res3]]
++    one_hots.append(one_hot)
++
++  one_hots.append(np.zeros([4, atom_type_num]))  # Add zeros for residue `X`.
++  one_hot = np.stack(one_hots, axis=0)
++  one_hot = np.transpose(one_hot, [0, 2, 1])
++
++  return one_hot
++
++chi_atom_1_one_hot = chi_angle_atom(1)
++chi_atom_2_one_hot = chi_angle_atom(2)
++
++# An array like chi_angles_atoms but using indices rather than names.
++chi_angles_atom_indices = [chi_angles_atoms[restype_1to3[r]] for r in restypes]
++chi_angles_atom_indices = tree.map_structure(
++    lambda atom_name: atom_order[atom_name], chi_angles_atom_indices)
++chi_angles_atom_indices = np.array([
++    chi_atoms + ([[0, 0, 0, 0]] * (4 - len(chi_atoms)))
++    for chi_atoms in chi_angles_atom_indices])
++
++# Mapping from (res_name, atom_name) pairs to the atom's chi group index
++# and atom index within that group.
++chi_groups_for_atom = collections.defaultdict(list)
++for res_name, chi_angle_atoms_for_res in chi_angles_atoms.items():
++  for chi_group_i, chi_group in enumerate(chi_angle_atoms_for_res):
++    for atom_i, atom in enumerate(chi_group):
++      chi_groups_for_atom[(res_name, atom)].append((chi_group_i, atom_i))
++chi_groups_for_atom = dict(chi_groups_for_atom)
++
++
++def _make_rigid_transformation_4x4(ex, ey, translation):
++  """Create a rigid 4x4 transformation matrix from two axes and transl."""
++  # Normalize ex.
++  ex_normalized = ex / np.linalg.norm(ex)
++
++  # make ey perpendicular to ex
++  ey_normalized = ey - np.dot(ey, ex_normalized) * ex_normalized
++  ey_normalized /= np.linalg.norm(ey_normalized)
++
++  # compute ez as cross product
++  eznorm = np.cross(ex_normalized, ey_normalized)
++  m = np.stack([ex_normalized, ey_normalized, eznorm, translation]).transpose()
++  m = np.concatenate([m, [[0., 0., 0., 1.]]], axis=0)
++  return m
++
++
++# create an array with (restype, atomtype) --> rigid_group_idx
++# and an array with (restype, atomtype, coord) for the atom positions
++# and compute affine transformation matrices (4,4) from one rigid group to the
++# previous group
++restype_atom37_to_rigid_group = np.zeros([21, 37], dtype=np.int32)
++restype_atom37_mask = np.zeros([21, 37], dtype=np.float32)
++restype_atom37_rigid_group_positions = np.zeros([21, 37, 3], dtype=np.float32)
++restype_atom14_to_rigid_group = np.zeros([21, 14], dtype=np.int32)
++restype_atom14_mask = np.zeros([21, 14], dtype=np.float32)
++restype_atom14_rigid_group_positions = np.zeros([21, 14, 3], dtype=np.float32)
++restype_rigid_group_default_frame = np.zeros([21, 8, 4, 4], dtype=np.float32)
++
++
++def _make_rigid_group_constants():
++  """Fill the arrays above."""
++  for restype, restype_letter in enumerate(restypes):
++    resname = restype_1to3[restype_letter]
++    for atomname, group_idx, atom_position in rigid_group_atom_positions[
++        resname]:
++      atomtype = atom_order[atomname]
++      restype_atom37_to_rigid_group[restype, atomtype] = group_idx
++      restype_atom37_mask[restype, atomtype] = 1
++      restype_atom37_rigid_group_positions[restype, atomtype, :] = atom_position
++
++      atom14idx = restype_name_to_atom14_names[resname].index(atomname)
++      restype_atom14_to_rigid_group[restype, atom14idx] = group_idx
++      restype_atom14_mask[restype, atom14idx] = 1
++      restype_atom14_rigid_group_positions[restype,
++                                           atom14idx, :] = atom_position
++
++  for restype, restype_letter in enumerate(restypes):
++    resname = restype_1to3[restype_letter]
++    atom_positions = {name: np.array(pos) for name, _, pos
++                      in rigid_group_atom_positions[resname]}
++
++    # backbone to backbone is the identity transform
++    restype_rigid_group_default_frame[restype, 0, :, :] = np.eye(4)
++
++    # pre-omega-frame to backbone (currently dummy identity matrix)
++    restype_rigid_group_default_frame[restype, 1, :, :] = np.eye(4)
++
++    # phi-frame to backbone
++    mat = _make_rigid_transformation_4x4(
++        ex=atom_positions['N'] - atom_positions['CA'],
++        ey=np.array([1., 0., 0.]),
++        translation=atom_positions['N'])
++    restype_rigid_group_default_frame[restype, 2, :, :] = mat
++
++    # psi-frame to backbone
++    mat = _make_rigid_transformation_4x4(
++        ex=atom_positions['C'] - atom_positions['CA'],
++        ey=atom_positions['CA'] - atom_positions['N'],
++        translation=atom_positions['C'])
++    restype_rigid_group_default_frame[restype, 3, :, :] = mat
++
++    # chi1-frame to backbone
++    if chi_angles_mask[restype][0]:
++      base_atom_names = chi_angles_atoms[resname][0]
++      base_atom_positions = [atom_positions[name] for name in base_atom_names]
++      mat = _make_rigid_transformation_4x4(
++          ex=base_atom_positions[2] - base_atom_positions[1],
++          ey=base_atom_positions[0] - base_atom_positions[1],
++          translation=base_atom_positions[2])
++      restype_rigid_group_default_frame[restype, 4, :, :] = mat
++
++    # chi2-frame to chi1-frame
++    # chi3-frame to chi2-frame
++    # chi4-frame to chi3-frame
++    # luckily all rotation axes for the next frame start at (0,0,0) of the
++    # previous frame
++    for chi_idx in range(1, 4):
++      if chi_angles_mask[restype][chi_idx]:
++        axis_end_atom_name = chi_angles_atoms[resname][chi_idx][2]
++        axis_end_atom_position = atom_positions[axis_end_atom_name]
++        mat = _make_rigid_transformation_4x4(
++            ex=axis_end_atom_position,
++            ey=np.array([-1., 0., 0.]),
++            translation=axis_end_atom_position)
++        restype_rigid_group_default_frame[restype, 4 + chi_idx, :, :] = mat
++
++
++_make_rigid_group_constants()
++
++
++def make_atom14_dists_bounds(overlap_tolerance=1.5,
++                             bond_length_tolerance_factor=15):
++  """compute upper and lower bounds for bonds to assess violations."""
++  restype_atom14_bond_lower_bound = np.zeros([21, 14, 14], np.float32)
++  restype_atom14_bond_upper_bound = np.zeros([21, 14, 14], np.float32)
++  restype_atom14_bond_stddev = np.zeros([21, 14, 14], np.float32)
++  residue_bonds, residue_virtual_bonds, _ = load_stereo_chemical_props()
++  for restype, restype_letter in enumerate(restypes):
++    resname = restype_1to3[restype_letter]
++    atom_list = restype_name_to_atom14_names[resname]
++
++    # create lower and upper bounds for clashes
++    for atom1_idx, atom1_name in enumerate(atom_list):
++      if not atom1_name:
++        continue
++      atom1_radius = van_der_waals_radius[atom1_name[0]]
++      for atom2_idx, atom2_name in enumerate(atom_list):
++        if (not atom2_name) or atom1_idx == atom2_idx:
++          continue
++        atom2_radius = van_der_waals_radius[atom2_name[0]]
++        lower = atom1_radius + atom2_radius - overlap_tolerance
++        upper = 1e10
++        restype_atom14_bond_lower_bound[restype, atom1_idx, atom2_idx] = lower
++        restype_atom14_bond_lower_bound[restype, atom2_idx, atom1_idx] = lower
++        restype_atom14_bond_upper_bound[restype, atom1_idx, atom2_idx] = upper
++        restype_atom14_bond_upper_bound[restype, atom2_idx, atom1_idx] = upper
++
++    # overwrite lower and upper bounds for bonds and angles
++    for b in residue_bonds[resname] + residue_virtual_bonds[resname]:
++      atom1_idx = atom_list.index(b.atom1_name)
++      atom2_idx = atom_list.index(b.atom2_name)
++      lower = b.length - bond_length_tolerance_factor * b.stddev
++      upper = b.length + bond_length_tolerance_factor * b.stddev
++      restype_atom14_bond_lower_bound[restype, atom1_idx, atom2_idx] = lower
++      restype_atom14_bond_lower_bound[restype, atom2_idx, atom1_idx] = lower
++      restype_atom14_bond_upper_bound[restype, atom1_idx, atom2_idx] = upper
++      restype_atom14_bond_upper_bound[restype, atom2_idx, atom1_idx] = upper
++      restype_atom14_bond_stddev[restype, atom1_idx, atom2_idx] = b.stddev
++      restype_atom14_bond_stddev[restype, atom2_idx, atom1_idx] = b.stddev
++  return {'lower_bound': restype_atom14_bond_lower_bound,  # shape (21,14,14)
++          'upper_bound': restype_atom14_bond_upper_bound,  # shape (21,14,14)
++          'stddev': restype_atom14_bond_stddev,  # shape (21,14,14)
++         }
+diff --git a/scripts/scoring_DMS_zero_shot/scoring_AIDO.Protein-RAG-proteingym-dms-zeroshot.sh b/scripts/scoring_DMS_zero_shot/scoring_AIDO.Protein-RAG-proteingym-dms-zeroshot.sh
+new file mode 100644
+index 0000000..d6522bd
+--- /dev/null
++++ b/scripts/scoring_DMS_zero_shot/scoring_AIDO.Protein-RAG-proteingym-dms-zeroshot.sh
+@@ -0,0 +1,24 @@
++source ../zero_shot_config.sh
++# Please follow proteingym/baselines/AIDO.Protein-RAG-proteingym-dms-zeroshot/README.md to install ragplm environment
++conda activate ragplm
++
++# Model can be found at https://huggingface.co/genbio-ai/AIDO.Protein-RAG-16B-proteingym-dms-zeroshot
++# Data (MSA/Structure) can be found at https://huggingface.co/datasets/genbio-ai/ProteinGYM-DMS-RAG-zeroshot
++
++# Following the commands to download the MSA/Structure data to the specific directories
++# OLD_PWD=$PWD
++# cd ../../proteingym/baselines/AIDO.Protein-RAG-proteingym-dms-zeroshot/
++# git clone https://huggingface.co/datasets/genbio-ai/ProteinGYM-DMS-RAG-zeroshot
++# cd ProteinGYM-DMS-RAG-zeroshot
++# mv msa_data dms_data.tar.gz struc_data.tar.gz query.fasta ..
++# cd ..
++# tar xf dms_data.tar.gz
++# tar xf struc_data.tar.gz
++# cd $OLD_PWD
++
++export DMS_output_score_folder="Path to folder where all model predictions should be stored"
++
++# One example: PTEN_HUMAN_Mighell_2018
++python ../../proteingym/baselines/prosst/compute_fitness.py \
++    --dms_ids PTEN_HUMAN_Mighell_2018 \
++    --output_path ${DMS_output_score_folder}

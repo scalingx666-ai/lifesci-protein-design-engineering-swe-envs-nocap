@@ -1,0 +1,2155 @@
+diff --git a/.gitignore b/.gitignore
+index a110965..31e0378 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -2,6 +2,18 @@
+ slurm
+ archives
+ output
++proteinnpt.egg-info
+ build
+ dist
+-proteinnpt.egg-info
+\ No newline at end of file
++ProteinNPT_data/
++# DMS files
++*.csv
++# Alignments
++*.a2m
++# Weights
++*.npy
++# Reference files
++!proteinnpt/*.csv  
++.idea/
++notebooks/
++logs/
+\ No newline at end of file
+diff --git a/proteinnpt/proteinnpt/data_processing.py b/proteinnpt/proteinnpt/data_processing.py
+index 85342d1..e6cd861 100755
+--- a/proteinnpt/proteinnpt/data_processing.py
++++ b/proteinnpt/proteinnpt/data_processing.py
+@@ -1,3 +1,4 @@
++import os
+ import sys
+ import numpy as np
+ import torch
+@@ -117,13 +118,14 @@ def process_batch(batch, model, alphabet, args, device, MSA_sequences=None, MSA_
+ 
+     # Embedding loading needs to happen here to ensure we also load training sequences at eval time
+     if args.sequence_embeddings_location is not None:
++        assert os.path.exists(args.sequence_embeddings_location), f"Sequence embeddings location doesn't exist: {args.sequence_embeddings_location}"
+         try:
+             indices_retrieved_embeddings = get_indices_retrieved_embeddings(batch,args.sequence_embeddings_location)
+             assert len(indices_retrieved_embeddings)==len(batch['mutant_mutated_seq_pairs']) , "At least one embedding was missing"
+             with h5py.File(args.sequence_embeddings_location, 'r') as h5f:
+                 sequence_embeddings = torch.tensor(np.array([h5f['embeddings'][i] for i in indices_retrieved_embeddings])).float()
+-        except:
+-            print("Error loading main sequence embeddings")
++        except Exception as e:
++            print("Error loading main sequence embeddings:", e)
+             sys.exit(0)
+     else:
+         sequence_embeddings = None
+diff --git a/proteinnpt/utils/msa_utils.py b/proteinnpt/utils/msa_utils.py
+index 16b9dd6..60e9eec 100755
+--- a/proteinnpt/utils/msa_utils.py
++++ b/proteinnpt/utils/msa_utils.py
+@@ -11,6 +11,16 @@
+ from Bio.Seq import Seq
+ import subprocess
+ 
++from proteinnpt.utils.weights import map_from_alphabet, map_matrix, calc_weights_fast
++
++# constants
++GAP = "-"
++MATCH_GAP = GAP
++INSERT_GAP = "."
++
++ALPHABET_PROTEIN_NOGAP = "ACDEFGHIKLMNPQRSTVWY"
++ALPHABET_PROTEIN_GAP = GAP + ALPHABET_PROTEIN_NOGAP
++
+ class MSA_processing:
+     def __init__(self,
+         MSA_location="",
+@@ -20,7 +30,10 @@ def __init__(self,
+         preprocess_MSA=True,
+         threshold_sequence_frac_gaps=0.5,
+         threshold_focus_cols_frac_gaps=1.0,
+-        remove_sequences_with_indeterminate_AA_in_focus_cols=True
++        remove_sequences_with_indeterminate_AA_in_focus_cols=True,
++        weights_calc_method="eve",
++        num_cpus=1,
++        skip_one_hot_encodings=False,
+         ):
+         
+         """
+@@ -43,23 +56,53 @@ def __init__(self,
+             - positions with a fraction of gap characters above threshold_focus_cols_pct_gaps will be set to lower case (and not included in the focus_cols)
+             - default is set to 0.3 (i.e., focus positions are the ones with 30% of gaps or less, i.e., 70% or more residue occupancy)
+         - remove_sequences_with_indeterminate_AA_in_focus_cols: (bool) Remove all sequences that have indeterminate AA (e.g., B, J, X, Z) at focus positions of the wild type
++        - weights_calc_method: (str) Method to use for calculating sequence weights. Options: "eve" or "identity". (default "eve")
++        - num_cpus: (int) Number of CPUs to use for parallel weights calculation processing. If set to -1, all available CPUs are used. If set to 1, weights are computed in serial.
++        - skip_one_hot_encodings: (bool) If True, only use this class to calculate weights. Skip the one-hot encodings (which can be very memory/compute intensive)
++            and don't calculate all singles.
+         """
++        np.random.seed(2021)
+         self.MSA_location = MSA_location
+         self.weights_location = weights_location
+         self.theta = theta
+-        self.alphabet = "ACDEFGHIKLMNPQRSTVWY"
++        self.alphabet = ALPHABET_PROTEIN_NOGAP
+         self.use_weights = use_weights
+         self.preprocess_MSA = preprocess_MSA
+         self.threshold_sequence_frac_gaps = threshold_sequence_frac_gaps
+         self.threshold_focus_cols_frac_gaps = threshold_focus_cols_frac_gaps
+         self.remove_sequences_with_indeterminate_AA_in_focus_cols = remove_sequences_with_indeterminate_AA_in_focus_cols
++        self.weights_calc_method = weights_calc_method
++        self.skip_one_hot_encodings = skip_one_hot_encodings
++
++        # Defined by gen_alignment
++        self.aa_dict = {}
++        self.focus_seq_name = ""
++        self.seq_name_to_sequence = defaultdict(str)
++        self.focus_seq, self.focus_cols, self.focus_seq_trimmed, self.seq_len, self.alphabet_size = [None] * 5
++        self.focus_start_loc, self.focus_stop_loc = None, None
++        self.uniprot_focus_col_to_wt_aa_dict, self.uniprot_focus_col_to_focus_idx = None, None
++        self.one_hot_encoding, self.weights, self.Neff, self.num_sequences = [None] * 4
+ 
++        # Fill in the instance variables
+         self.gen_alignment()
+ 
++        # Note: One-hot encodings might take up huge amounts of memory, and this could be skipped in many use cases
++        if not self.skip_one_hot_encodings:
++            print("One-hot encoding sequences")
++            self.one_hot_encoding = one_hot_3D(
++                seq_keys=self.seq_name_to_sequence.keys(),  # Note: Dicts are unordered for python < 3.6
++                seq_name_to_sequence=self.seq_name_to_sequence,
++                alphabet=self.alphabet,
++                seq_length=self.seq_len,
++            )
++            print ("Data Shape =", self.one_hot_encoding.shape)
++            
++        self.calc_weights(num_cpus=num_cpus, method=weights_calc_method)
++
+     def gen_alignment(self):
+         """ Read training alignment and store basics in class instance """
+         self.aa_dict = {}
+-        for i,aa in enumerate(self.alphabet):
++        for i, aa in enumerate(self.alphabet):
+             self.aa_dict[aa] = i
+ 
+         self.seq_name_to_sequence = defaultdict(str)
+@@ -69,57 +112,50 @@ def gen_alignment(self):
+                 line = line.rstrip()
+                 if line.startswith(">"):
+                     name = line
+-                    if i==0:
++                    if i == 0:
+                         self.focus_seq_name = name
+                 else:
+                     self.seq_name_to_sequence[name] += line
++        print("Number of sequences in MSA (before preprocessing):", len(self.seq_name_to_sequence))
+ 
+-        
+         ## MSA pre-processing to remove inadequate columns and sequences
+         if self.preprocess_MSA:
+-            msa_df = pd.DataFrame.from_dict(self.seq_name_to_sequence, orient='index', columns=['sequence'])
+-            # Data clean up
+-            msa_df.sequence = msa_df.sequence.apply(lambda x: x.replace(".","-")).apply(lambda x: ''.join([aa.upper() for aa in x]))
+-            # Remove columns that would be gaps in the wild type
+-            non_gap_wt_cols = [aa!='-' for aa in msa_df.sequence[self.focus_seq_name]]
+-            msa_df['sequence'] = msa_df['sequence'].apply(lambda x: ''.join([aa for aa,non_gap_ind in zip(x, non_gap_wt_cols) if non_gap_ind]))
+-            assert 0.0 <= self.threshold_sequence_frac_gaps <= 1.0,"Invalid fragment filtering parameter"
+-            assert 0.0 <= self.threshold_focus_cols_frac_gaps <= 1.0,"Invalid focus position filtering parameter"
+-            msa_array = np.array([list(seq) for seq in msa_df.sequence])
+-            gaps_array = np.array(list(map(lambda seq: [aa=='-' for aa in seq], msa_array)))
+-            # Identify fragments with too many gaps
+-            seq_gaps_frac = gaps_array.mean(axis=1)
+-            seq_below_threshold = seq_gaps_frac <= self.threshold_sequence_frac_gaps
+-            print("Proportion of sequences dropped due to fraction of gaps: "+str(round(float(1 - seq_below_threshold.sum()/seq_below_threshold.shape)*100,2))+"%")
+-            # Identify focus columns
+-            columns_gaps_frac = gaps_array[seq_below_threshold].mean(axis=0)
+-            index_cols_below_threshold = columns_gaps_frac <= self.threshold_focus_cols_frac_gaps
+-            print("Proportion of non-focus columns removed: "+str(round(float(1 - index_cols_below_threshold.sum()/index_cols_below_threshold.shape)*100,2))+"%")
+-            # Lower case non focus cols and filter fragment sequences
+-            msa_df['sequence'] = msa_df['sequence'].apply(lambda x: ''.join([aa.upper() if upper_case_ind else aa.lower() for aa, upper_case_ind in zip(x, index_cols_below_threshold)]))
+-            msa_df = msa_df[seq_below_threshold]
+-            # Overwrite seq_name_to_sequence with clean version
+-            self.seq_name_to_sequence = defaultdict(str)
+-            for seq_idx in range(len(msa_df['sequence'])):
+-                self.seq_name_to_sequence[msa_df.index[seq_idx]] = msa_df.sequence.iloc[seq_idx]
++            # Overwrite self.seq_name_to_sequence
++            self.seq_name_to_sequence = self.preprocess_msa(
++                seq_name_to_sequence=self.seq_name_to_sequence,
++                focus_seq_name=self.focus_seq_name,
++                threshold_sequence_frac_gaps=self.threshold_sequence_frac_gaps,
++                threshold_focus_cols_frac_gaps=self.threshold_focus_cols_frac_gaps
++            )
+ 
+         self.focus_seq = self.seq_name_to_sequence[self.focus_seq_name]
+-        self.focus_cols = [ix for ix, s in enumerate(self.focus_seq) if s == s.upper() and s!='-'] 
+-        self.focus_seq_trimmed = [self.focus_seq[ix] for ix in self.focus_cols]
++        self.focus_cols = [ix for ix, s in enumerate(self.focus_seq) if s == s.upper() and s != '-']
++        self.focus_seq_trimmed = "".join([self.focus_seq[ix] for ix in self.focus_cols])
+         self.seq_len = len(self.focus_cols)
+         self.alphabet_size = len(self.alphabet)
+ 
++        # Connect local sequence index with uniprot index (index shift inferred from 1st row of MSA)
++        focus_loc = self.focus_seq_name.split("/")[-1]
++        start, stop = focus_loc.split("-")
++        self.focus_start_loc = int(start)
++        self.focus_stop_loc = int(stop)
++        self.uniprot_focus_col_to_wt_aa_dict \
++            = {idx_col + int(start): self.focus_seq[idx_col] for idx_col in self.focus_cols}
++        self.uniprot_focus_col_to_focus_idx \
++            = {idx_col + int(start): idx_col for idx_col in self.focus_cols}
++
+         # Move all letters to CAPS; keeps focus columns only
+         self.raw_seq_name_to_sequence = self.seq_name_to_sequence.copy()
+-        for seq_name,sequence in self.seq_name_to_sequence.items():
+-            sequence = sequence.replace(".","-")
+-            self.seq_name_to_sequence[seq_name] = [sequence[ix].upper() for ix in self.focus_cols]
++        for seq_name, sequence in self.seq_name_to_sequence.items():
++            sequence = sequence.replace(".", "-")
++            self.seq_name_to_sequence[seq_name] = "".join(
++                [sequence[ix].upper() for ix in self.focus_cols])  # Makes a List[str] instead of str
+ 
+         # Remove sequences that have indeterminate AA (e.g., B, J, X, Z) in the focus columns
+         if self.remove_sequences_with_indeterminate_AA_in_focus_cols:
+             alphabet_set = set(list(self.alphabet))
+             seq_names_to_remove = []
+-            for seq_name,sequence in self.seq_name_to_sequence.items():
++            for seq_name, sequence in self.seq_name_to_sequence.items():
+                 for letter in sequence:
+                     if letter not in alphabet_set and letter != "-":
+                         seq_names_to_remove.append(seq_name)
+@@ -127,26 +163,88 @@ def gen_alignment(self):
+             seq_names_to_remove = list(set(seq_names_to_remove))
+             for seq_name in seq_names_to_remove:
+                 del self.seq_name_to_sequence[seq_name]
++        
++        print("Number of sequences after preprocessing:", len(self.seq_name_to_sequence))
++        self.num_sequences = len(self.seq_name_to_sequence.keys())
+ 
+-        # Encode the sequences
+-        print ("Encoding sequences")
+-        self.one_hot_encoding = np.zeros((len(self.seq_name_to_sequence.keys()),len(self.focus_cols),len(self.alphabet)))
+-        print("One-hot encoded sequences shape:" + str(self.one_hot_encoding.shape))
+-        for i,seq_name in enumerate(self.seq_name_to_sequence.keys()):
+-            sequence = self.seq_name_to_sequence[seq_name]
+-            for j,letter in enumerate(sequence):
+-                if letter in self.aa_dict: 
+-                    k = self.aa_dict[letter]
+-                    self.one_hot_encoding[i,j,k] = 1.0
++    # Using staticmethod to keep this under the MSAProcessing namespace, but this is apparently not best practice
++    @staticmethod
++    def preprocess_msa(seq_name_to_sequence, focus_seq_name, threshold_sequence_frac_gaps, threshold_focus_cols_frac_gaps):
++        """Remove inadequate columns and sequences from MSA, overwrite self.seq_name_to_sequence."""
++        print("Pre-processing MSA to remove inadequate columns and sequences...")
++        msa_df = pd.DataFrame.from_dict(seq_name_to_sequence, orient='index', columns=['sequence'])
++        # Data clean up
++        msa_df.sequence = msa_df.sequence.apply(lambda x: x.replace(".", "-")).apply(
++            lambda x: ''.join([aa.upper() for aa in x]))
++        # Remove columns that would be gaps in the wild type
++        non_gap_wt_cols = [aa != '-' for aa in msa_df.sequence[focus_seq_name]]
++        msa_df['sequence'] = msa_df['sequence'].apply(
++            lambda x: ''.join([aa for aa, non_gap_ind in zip(x, non_gap_wt_cols) if non_gap_ind]))
++        assert 0.0 <= threshold_sequence_frac_gaps <= 1.0, "Invalid fragment filtering parameter"
++        assert 0.0 <= threshold_focus_cols_frac_gaps <= 1.0, "Invalid focus position filtering parameter"
++        print("Calculating proportion of gaps")
++        msa_array = np.array([list(seq) for seq in msa_df.sequence])
++        gaps_array = np.array(list(map(lambda seq: [aa == '-' for aa in seq], msa_array)))
++        # Identify fragments with too many gaps
++        seq_gaps_frac = gaps_array.mean(axis=1)
++        seq_below_threshold = seq_gaps_frac <= threshold_sequence_frac_gaps
++        print("Proportion of sequences dropped due to fraction of gaps: " + str(
++            round(float(1 - seq_below_threshold.sum() / seq_below_threshold.shape) * 100, 2)) + "%")
++        # Identify focus columns
++        columns_gaps_frac = gaps_array[seq_below_threshold].mean(axis=0)
++        index_cols_below_threshold = columns_gaps_frac <= threshold_focus_cols_frac_gaps
++        print("Proportion of non-focus columns removed: " + str(
++            round(float(1 - index_cols_below_threshold.sum() / index_cols_below_threshold.shape) * 100, 2)) + "%")
++        # Lower case non focus cols and filter fragment sequences
++        def _lower_case_and_filter_fragments(seq):
++            return ''.join([aa.lower() if aa_ix in index_cols_below_threshold else aa for aa_ix, aa in enumerate(seq)])
++        msa_df['sequence'] = msa_df['sequence'].apply(
++            lambda seq: ''.join([aa.upper() if upper_case_ind else aa.lower() for aa, upper_case_ind in
++             zip(seq, index_cols_below_threshold)]))
++        msa_df = msa_df[seq_below_threshold]
++        # Overwrite seq_name_to_sequence with clean version
++        seq_name_to_sequence = defaultdict(str)
++        # Create a dictionary from msa_df.index to msa_df.sequence
++        seq_name_to_sequence = dict(zip(msa_df.index, msa_df.sequence))
++        # for seq_idx in range(len(msa_df['sequence'])):
++        #     seq_name_to_sequence[msa_df.index[seq_idx]] = msa_df.sequence[seq_idx]
++
++        return seq_name_to_sequence
+ 
++    def calc_weights(self, num_cpus=1, method="eve"):
++        """
++        From the EVE repo, but modified to skip printing out progress bar / time taken 
++        (because for ProteinNPT embeddings, weights will usually be computed on the fly for small subsamples of MSA).
++        
++        If num_cpus == 1, weights are computed in serial.
++        If num_cpus == -1, weights are computed in parallel using all available cores.
++        Note: This will use multiprocessing.cpu_count() to get the number of available cores, which on clusters may
++        return all cores, not just the number of cores available to the user.
++        """
++        # Refactored into its own function so that we can call it separately
+         if self.use_weights:
+-            try:
++            if os.path.isfile(self.weights_location):
++                print("Loading sequence weights from disk")
+                 self.weights = np.load(file=self.weights_location)
+-                print("Loaded sequence weights from disk")
+-            except:
+-                print ("Computing sequence weights")
+-                list_seq = self.one_hot_encoding.reshape((self.one_hot_encoding.shape[0], self.one_hot_encoding.shape[1] * self.one_hot_encoding.shape[2]))
+-                self.weights = compute_weight_all(list_seq,self.theta)
++            else:
++                print("Computing sequence weights")
++                if num_cpus == -1:
++                    num_cpus = get_num_cpus()
++
++                if method == "eve":
++                    alphabet_mapper = map_from_alphabet(ALPHABET_PROTEIN_GAP, default=GAP)
++                    arrays = []
++                    for seq in self.seq_name_to_sequence.values():
++                        arrays.append(np.array(list(seq)))
++                    sequences = np.vstack(arrays)
++                    sequences_mapped = map_matrix(sequences, alphabet_mapper)
++                    self.weights = calc_weights_fast(sequences_mapped, identity_threshold=1 - self.theta,
++                                                            empty_value=0, num_cpus=num_cpus)  # GAP = 0
++                elif method == "identity":
++                    self.weights = np.ones(self.one_hot_encoding.shape[0])
++                else:
++                    raise ValueError(f"Unknown method: {method}. Must be either 'eve' or 'identity'.")
++                print("Saving sequence weights to disk")
+                 np.save(file=self.weights_location, arr=self.weights)
+         else:
+             # If not using weights, use an isotropic weight matrix
+@@ -154,13 +252,42 @@ def gen_alignment(self):
+             self.weights = np.ones(self.one_hot_encoding.shape[0])
+ 
+         self.Neff = np.sum(self.weights)
+-        self.num_sequences = self.one_hot_encoding.shape[0]
+-        self.seq_name_to_weight={}
++        print("Neff =", str(self.Neff))
++        print("Number of sequences: ", self.num_sequences)
++        
++        assert self.weights.shape[0] == self.num_sequences  # == self.one_hot_encoding.shape[0]
++        self.seq_name_to_weight={}  # For later, if we want to remove certain sequences and associated weights
+         for i,seq_name in enumerate(self.seq_name_to_sequence.keys()):
+             self.seq_name_to_weight[seq_name]=self.weights[i]
++        
++        return self.weights
+ 
+-        print ("Neff =",str(self.Neff))
+-        print ("Data Shape =",self.one_hot_encoding.shape)
++# One-hot encoding of sequences
++def one_hot_3D(seq_keys, seq_name_to_sequence, alphabet, seq_length):
++    """
++    Take in a list of sequence names/keys and corresponding sequences, and generate a one-hot array according to an alphabet.
++    """
++    aa_dict = {letter: i for (i, letter) in enumerate(alphabet)}
++
++    one_hot_out = np.zeros((len(seq_keys), seq_length, len(alphabet)))
++    for i, seq_key in enumerate(seq_keys):
++        sequence = seq_name_to_sequence[seq_key]
++        for j, letter in enumerate(sequence):
++            if letter in aa_dict:
++                k = aa_dict[letter]
++                one_hot_out[i, j, k] = 1.0
++    # one_hot_out = torch.tensor(one_hot_out)
++    return one_hot_out
++
++def get_num_cpus():
++    if 'SLURM_CPUS_PER_TASK' in os.environ:
++        num_cpus = int(os.environ['SLURM_CPUS_PER_TASK'])
++        print("SLURM_CPUS_PER_TASK:", os.environ['SLURM_CPUS_PER_TASK'])
++        print("Using all available cores (calculated using SLURM_CPUS_PER_TASK):", num_cpus)
++    else:
++        num_cpus = len(os.sched_getaffinity(0)) 
++        print("Using all available cores (calculated using len(os.sched_getaffinity(0))):", num_cpus)
++    return num_cpus
+ 
+ @njit
+ def compute_weight(seq, list_seq, theta):
+@@ -218,6 +345,8 @@ def compute_sequence_weights(MSA_filename, MSA_weights_filename):
+     MSA_other_sequences=[]
+     weights=[]
+     MSA_reference_sequence=[]
++    
++    # Removes the WT sequences
+     for seq_name in processed_MSA.raw_seq_name_to_sequence.keys():
+         if seq_name == processed_MSA.focus_seq_name:
+             MSA_reference_sequence.append((seq_name,processed_MSA.raw_seq_name_to_sequence[seq_name]))
+@@ -226,9 +355,12 @@ def compute_sequence_weights(MSA_filename, MSA_weights_filename):
+             if seq_name in processed_MSA.seq_name_to_weight: 
+                 MSA_other_sequences.append((seq_name,processed_MSA.raw_seq_name_to_sequence[seq_name]))
+                 weights.append(processed_MSA.seq_name_to_weight[seq_name])
++    
+     if len(MSA_other_sequences)>0:
++        # Re-weight the non-wt sequences to sum to 1
+         MSA_non_ref_sequences_weights = np.array(weights) / np.array(list(processed_MSA.seq_name_to_weight.values())).sum()
+         print("Check sum weights MSA: "+str(np.array(weights).sum()))
++    
+     MSA_all_sequences = MSA_reference_sequence + MSA_other_sequences
+     return MSA_all_sequences, MSA_non_ref_sequences_weights
+ 
+@@ -250,9 +382,18 @@ def weighted_sample_MSA(MSA_all_sequences, MSA_non_ref_sequences_weights, number
+     msa = [(desc, seq.upper()) for desc, seq in msa]
+     return msa
+ 
+-def process_MSA(args, MSA_filename, MSA_weights_filename):
+-    filtered_MSA_filename = filter_msa(filename = args.MSA_data_folder + os.sep + MSA_filename, path_to_hhfilter = args.path_to_hhfilter)
+-    MSA_all_sequences, MSA_non_ref_sequences_weights = compute_sequence_weights(MSA_filename = filtered_MSA_filename, MSA_weights_filename = args.MSA_weight_data_folder + os.sep + MSA_weights_filename)
++def process_MSA(MSA_data_folder, MSA_weight_data_folder, MSA_filename, MSA_weights_filename, path_to_hhfilter):
++    """
++    Filter an MSA according to sequence identity (for e.g. MSATransformer) and then compute sequence weights
++    """
++    filtered_MSA_filename = filter_msa(filename=MSA_data_folder + os.sep + MSA_filename, path_to_hhfilter=path_to_hhfilter)
++    hhfiltered_weights_folder = os.path.join(MSA_weight_data_folder, "hhfiltered")
++    if not os.path.exists(hhfiltered_weights_folder):
++        # To be safe, this will not create the parent weights directory if it does not already exist.
++        # To create intermediate directories, we would use os.makedirs()
++        os.mkdir(hhfiltered_weights_folder)
++        
++    MSA_all_sequences, MSA_non_ref_sequences_weights = compute_sequence_weights(MSA_filename=filtered_MSA_filename, MSA_weights_filename=os.path.join(MSA_weight_data_folder, "hhfiltered", MSA_weights_filename))
+     return MSA_all_sequences, MSA_non_ref_sequences_weights
+ 
+ def align_new_sequences_to_msa(MSA_sequences, new_sequences, new_mutants, clustalomega_path):
+diff --git a/proteinnpt/utils/weights.py b/proteinnpt/utils/weights.py
+new file mode 100644
+index 0000000..f0b1d14
+--- /dev/null
++++ b/proteinnpt/utils/weights.py
+@@ -0,0 +1,257 @@
++# This class is copied from the EVE codebase https://github.com/OATML-Markslab/EVE, removing the progress bar (since we're calculating weights on the fly so don't need one)
++import multiprocessing
++import time
++from collections import defaultdict
++
++import numba
++from numba import prange
++# from numba_progress import ProgressBar
++
++import numpy as np
++from tqdm import tqdm
++
++def calc_weights_fast(matrix_mapped, identity_threshold, empty_value, num_cpus=1):
++    """
++        Modified from EVCouplings: https://github.com/debbiemarkslab/EVcouplings
++        
++        Note: Numba by default uses `multiprocessing.cpu_count()` threads. 
++        On a cluster where a process might only have access to a subset of CPUs, this may be less than the number of CPUs available.
++        The caller should ideally use len(os.sched_getaffinity(0)) to get the number of CPUs available to the process.
++        
++        Calculate weights for sequences in alignment by
++        clustering all sequences with sequence identity
++        greater or equal to the given threshold.
++        Parameters
++        ----------
++        identity_threshold : float
++            Sequence identity threshold
++        """
++    empty_idx = is_empty_sequence_matrix(matrix_mapped, empty_value=empty_value)  # e.g. sequences with just gaps or lowercase, no valid AAs
++    N = matrix_mapped.shape[0]
++
++    # Original EVCouplings code structure, plus gap handling
++    if num_cpus != 1:
++        # print("Calculating weights using Numba parallel (experimental) since num_cpus > 1. If you want to disable multiprocessing set num_cpus=1.")
++        # print("Default number of threads for Numba:", numba.config.NUMBA_NUM_THREADS)
++        
++        # num_cpus > numba.config.NUMBA_NUM_THREADS will give an error.
++        # But we'll leave it so that the user has to be explicit.
++        numba.set_num_threads(num_cpus)
++        print("Set number of threads to:", numba.get_num_threads())  # Sometimes Numba uses all the CPUs anyway
++        
++        num_cluster_members = calc_num_cluster_members_nogaps_parallel(matrix_mapped[~empty_idx], identity_threshold,
++                                                                       invalid_value=empty_value)
++        
++    else:
++        # Use the serial version
++        num_cluster_members = calc_num_cluster_members_nogaps(matrix_mapped[~empty_idx], identity_threshold,
++                                                              invalid_value=empty_value)
++
++    # Empty sequences: weight 0
++    weights = np.zeros((N))
++    weights[~empty_idx] = 1.0 / num_cluster_members
++    return weights
++
++# Below are util functions copied from EVCouplings
++def is_empty_sequence_matrix(matrix, empty_value):
++    assert len(matrix.shape) == 2, f"Matrix must be 2D; shape={matrix.shape}"
++    assert isinstance(empty_value, (int, float)), f"empty_value must be a number; type={type(empty_value)}"
++    # Check for each sequence if all positions are equal to empty_value
++    empty_idx = np.all((matrix == empty_value), axis=1)
++    return empty_idx
++
++
++def map_from_alphabet(alphabet, default):
++    """
++    Creates a mapping dictionary from a given alphabet.
++    Parameters
++    ----------
++    alphabet : str
++        Alphabet for remapping. Elements will
++        be remapped according to alphabet starting
++        from 0
++    default : Elements in matrix that are not
++        contained in alphabet will be treated as
++        this character
++    Raises
++    ------
++    ValueError
++        For invalid default character
++    """
++    map_ = {
++        c: i for i, c in enumerate(alphabet)
++    }
++
++    try:
++        default = map_[default]
++    except KeyError:
++        raise ValueError(
++            "Default {} is not in alphabet {}".format(default, alphabet)
++        )
++
++    return defaultdict(lambda: default, map_)
++
++
++
++def map_matrix(matrix, map_):
++    """
++    Map elements in a numpy array using alphabet
++    Parameters
++    ----------
++    matrix : np.array
++        Matrix that should be remapped
++    map_ : defaultdict
++        Map that will be applied to matrix elements
++    Returns
++    -------
++    np.array
++        Remapped matrix
++    """
++    return np.vectorize(map_.__getitem__)(matrix)
++
++
++# Fastmath should be safe here, as we can assume that there are no NaNs in the input etc.
++@numba.jit(nopython=True, fastmath=True)  #parallel=True
++def calc_num_cluster_members_nogaps(matrix, identity_threshold, invalid_value):
++    """
++    From EVCouplings: https://github.com/debbiemarkslab/EVcouplings/blob/develop/evcouplings/align/alignment.py#L1172.
++    Modified to use non-gapped length and not counting gaps as sequence similarity matches.
++    
++    Calculate number of sequences in alignment
++    within given identity_threshold of each other
++    Parameters
++    ----------
++    matrix : np.array
++        N x L matrix containing N sequences of length L.
++        Matrix must be mapped to range(0, num_symbols) using
++        map_matrix function
++    identity_threshold : float
++        Sequences with at least this pairwise identity will be
++        grouped in the same cluster.
++    Returns
++    -------
++    np.array
++        Vector of length N containing number of cluster
++        members for each sequence (inverse of sequence
++        weight)
++    """
++    N, L = matrix.shape
++    L = 1.0 * L
++
++    # Empty sequences are filtered out before this function and are ignored
++    # minimal cluster size is 1 (self)
++    num_neighbors = np.ones((N))
++    L_non_gaps = L - np.sum(matrix == invalid_value, axis=1)  # Edit: From EVE, use the non-gapped length
++    # compare all pairs of sequences
++    for i in range(N - 1):
++        for j in range(i + 1, N):
++            pair_matches = 0
++            for k in range(L):
++                # Edit(Lood): Don't count gaps as matches
++                if matrix[i, k] == matrix[j, k] and matrix[i, k] != invalid_value:
++                    pair_matches += 1
++
++            # Edit(Lood): Calculate identity as fraction of non-gapped positions (so asymmetric)
++            # Note: Changed >= to > to match EVE / DeepSequence code
++            if pair_matches / L_non_gaps[i] > identity_threshold:
++                num_neighbors[i] += 1
++            if pair_matches / L_non_gaps[j] > identity_threshold:
++                num_neighbors[j] += 1
++
++    return num_neighbors
++
++
++@numba.jit(nopython=True, fastmath=True, parallel=True)
++def calc_num_cluster_members_nogaps_parallel(matrix, identity_threshold, invalid_value):
++    """
++    Parallel implementation of calc_num_cluster_members_nogaps above.
++    
++    Calculate number of sequences in alignment
++    within given identity_threshold of each other
++    Parameters
++    ----------
++    matrix : np.array
++        N x L matrix containing N sequences of length L.
++        Matrix must be mapped to range(0, num_symbols) using
++        map_matrix function
++    identity_threshold : float
++        Sequences with at least this pairwise identity will be
++        grouped in the same cluster.
++    invalid_value : int
++        Value in matrix that is considered invalid, e.g. gap or lowercase character.
++    Returns
++    -------
++    np.array
++        Vector of length N containing number of cluster
++        members for each sequence (inverse of sequence
++        weight)
++    """
++    N, L = matrix.shape
++    L = 1.0 * L
++
++    # Empty sequences are filtered out before this function and are ignored
++    # minimal cluster size is 1 (self)
++    num_neighbors = np.ones((N))
++    L_non_gaps = L - np.sum(matrix == invalid_value, axis=1)  # Edit: From EVE, use the non-gapped length
++    # compare all pairs of sequences
++    # Edit: Rewrote loop without any dependencies between inner and outer loops, so that it can be parallelized
++    for i in prange(N):
++        num_neighbors_i = 1
++        for j in range(N):
++            if i == j:
++                continue
++            pair_matches = 0
++            for k in range(L):  # This should hopefully be vectorised by numba
++                # Edit(Lood): Don't count gaps as matches
++                if matrix[i, k] == matrix[j, k] and matrix[i, k] != invalid_value:
++                    pair_matches += 1
++
++            # Edit(Lood): Calculate identity as fraction of non-gapped positions (so this similarity is asymmetric)
++            # Note: Changed >= to > to match EVE / DeepSequence code
++            if pair_matches / L_non_gaps[i] > identity_threshold:
++                num_neighbors_i += 1
++
++        num_neighbors[i] = num_neighbors_i
++
++    return num_neighbors
++
++@numba.jit(nopython=True, fastmath=True, parallel=True)
++def calc_num_cluster_members_nogaps_parallel_print(matrix, identity_threshold, invalid_value, progress_proxy=None, update_frequency=1000):
++    """
++    Modified calc_num_cluster_members_nogaps_parallel to add tqdm progress bar - useful for multi-hour weights calc.
++    
++    progress_proxy : numba_progress.ProgressBar
++        A handle on the progress bar to update
++    update_frequency : int
++        Similar to miniters in tqdm, how many iterations between updating the progress bar (which then will only print every `update_interval` seconds)
++    """
++    
++    N, L = matrix.shape
++    L = 1.0 * L
++
++    # Empty sequences are filtered out before this function and are ignored
++    # minimal cluster size is 1 (self)
++    num_neighbors = np.ones((N))
++    L_non_gaps = L - np.sum(matrix == invalid_value, axis=1)  # Edit: From EVE, use the non-gapped length
++    # compare all pairs of sequences
++    # Edit: Rewrote loop without any dependencies between inner and outer loops, so that it can be parallelized
++    for i in prange(N):
++        num_neighbors_i = 1
++        for j in range(N):
++            if i == j:
++                continue
++            pair_matches = 0
++            for k in range(L):  # This should hopefully be vectorised by numba
++                # Edit(Lood): Don't count gaps as matches
++                if matrix[i, k] == matrix[j, k] and matrix[i, k] != invalid_value:
++                    pair_matches += 1
++            # Edit(Lood): Calculate identity as fraction of non-gapped positions (so this similarity is asymmetric)
++            # Note: Changed >= to > to match EVE / DeepSequence code
++            if pair_matches / L_non_gaps[i] > identity_threshold:
++                num_neighbors_i += 1
++
++        num_neighbors[i] = num_neighbors_i
++        if progress_proxy is not None and i % update_frequency == 0:
++            progress_proxy.update(update_frequency)
++
++    return num_neighbors
+diff --git a/proteinnpt_env.yml b/proteinnpt_env.yml
+index a430c77..24e019f 100755
+--- a/proteinnpt_env.yml
++++ b/proteinnpt_env.yml
+@@ -19,6 +19,7 @@ dependencies:
+   - numba
+   - pytorch=2.2.0
+   - pytorch-cuda=11.8
++  - numba
+   - pip:
+       - wandb
+       - transformers
+diff --git a/scripts/embeddings.py b/scripts/embeddings.py
+index 34ceb3f..311254a 100644
+--- a/scripts/embeddings.py
++++ b/scripts/embeddings.py
+@@ -22,10 +22,44 @@
+ from proteinnpt.utils.msa_utils import weighted_sample_MSA, process_MSA, align_new_sequences_to_msa
+ from proteinnpt.utils.data_utils import collate_fn_protein_npt, slice_sequences
+ 
+-def process_embeddings_batch(batch, model, model_type, alphabet, device, MSA_sequences=None, MSA_weights=None, MSA_start_position=None, MSA_end_position=None, num_MSA_sequences=None, eval_mode = True, start_idx=1, indel_mode=False, fast_MSA_mode=False, fast_MSA_aligned_sequences=None, fast_MSA_short_names_mapping=None, clustalomega_path=None):
+-    if args.model_type in ["MSA_Transformer","ESM1v"]:
++
++def parse_arguments():
++    parser = argparse.ArgumentParser(description='Extract embeddings')
++    parser.add_argument('--assay_reference_file_location', default=None, type=str, help='Path to reference file with list of assays to score')
++    parser.add_argument('--assay_index', default=0, type=int, help='Index of assay in the ProteinGym reference file to compute embeddings for')
++    parser.add_argument('--input_data_location', default=None, type=str, help='Location of input data with all mutated sequences [If a reference file is used, this is the location where are assays are stored. If a single csv file is passed, this is the full path to that assay data]')
++    parser.add_argument('--output_data_location', default=None, type=str, help='Location of output embeddings')
++    parser.add_argument('--model_type', default='Tranception', type=str, help='Model type to compute embeddings with')
++    parser.add_argument('--model_location', default=None, type=str, help='Location of model used to embed protein sequences')
++    parser.add_argument('--max_positions', default=1024, type=int, help='Maximum context length of embedding model')
++    parser.add_argument('--long_sequences_slicing_method', default='center', type=str, help='Method to slice long sequences [rolling, center, left]')
++    parser.add_argument('--batch_size', default=32, type=int, help='Eval batch size')
++    parser.add_argument('--indel_mode', action='store_true', help='Use this mode if extracting embeddings of indel assays')
++    parser.add_argument('--half_precision', action='store_true', help='Store embeddings as 16-bit floating point numbers (float16)')
++    #MSA specific parameters (only relevant for MSA Transformer)
++    parser.add_argument('--num_MSA_sequences', default=1000, type=int, help='Num MSA sequences to score each sequence with')
++    parser.add_argument('--MSA_data_folder', default=None, type=str, help='Folder where all MSAs are stored')
++    parser.add_argument('--MSA_weight_data_folder', default=None, type=str, help='Folder where MSA sequence weights are stored (for diversity sampling of MSAs)')
++    parser.add_argument('--path_to_hhfilter', default=None, type=str, help='Path to hhfilter (for filtering MSAs)')
++    parser.add_argument('--path_to_clustalomega', default=None, type=str, help='Path to clustal omega (to re-align sequences in indel assays) [indels only]')
++    parser.add_argument('--fast_MSA_mode', action='store_true', help='Use this mode to speed up embedding extraction for MSA Transformer by scoring multiple mutated sequences (batch_size of them) at once (has minor impact on quality)')
++    #If not using a reference file
++    parser.add_argument('--target_seq', default=None, type=str, help='Wild type sequence mutated in the assay (to be provided if not using a reference file)')
++    parser.add_argument('--MSA_location', default=None, type=str, help='Path to MSA file (.a2m)')
++    parser.add_argument('--weight_file_name', default=None, type=str, help='Name of weight file')
++    parser.add_argument('--MSA_start', default=None, type=int, help='Index of first AA covered by the MSA relative to target_seq coordinates (1-indexing)')
++    parser.add_argument('--MSA_end', default=None, type=int, help='Index of last AA covered by the MSA relative to target_seq coordinates (1-indexing)')
++    parser.add_argument("--use_cpu", action="store_true", help="Force the use of CPU instead of GPU (considerably slower). If this option is not chosen, the script will raise an error if the GPU is not available.")
++    return parser.parse_args()
++
++
++model_type_options = ["MSA_Transformer", "ESM1v", "Tranception"]
++
++
++def process_embeddings_batch(batch, model, model_type, alphabet, device, max_positions, long_sequences_slicing_method, MSA_sequences=None, MSA_weights=None, MSA_start_position=None, MSA_end_position=None, num_MSA_sequences=None, eval_mode = True, start_idx=1, indel_mode=False, fast_MSA_mode=False, fast_MSA_aligned_sequences=None, fast_MSA_short_names_mapping=None, clustalomega_path=None):
++    if model_type in ["MSA_Transformer","ESM1v"]:
+         raw_sequence_length = len(batch['mutant_mutated_seq_pairs'][0][1]) #Selects the first mutant-seq pair, and the sequence is 1-indexed in that pair
+-        raw_batch_size = len(batch['mutant_mutated_seq_pairs']) # Effective number of mutated sequences to be scored (could be lower than args.num_MSA_sequences in practice, eg., if we're at the end of the train_iterator)
++        raw_batch_size = len(batch['mutant_mutated_seq_pairs']) # Effective number of mutated sequences to be scored (could be lower than num_MSA_sequences in practice, eg., if we're at the end of the train_iterator)
+         # If model is MSAT and MSA does not cover full sequence length, we chop off all sequences to be scored as needed so that everything lines up properly.
+         if (model_type == "MSA_Transformer") and (MSA_start_position is not None) and (MSA_end_position is not None) and ((MSA_start_position > 1) or (MSA_end_position < raw_sequence_length)):
+             MSA_start_index = MSA_start_position - 1
+@@ -33,7 +67,7 @@ def process_embeddings_batch(batch, model, model_type, alphabet, device, MSA_seq
+             batch['mutant_mutated_seq_pairs'] = [ (mutant,seq[MSA_start_index:MSA_end_index]) for (mutant,seq) in batch['mutant_mutated_seq_pairs']]
+             # Recompute sequence length (has potentially been chopped off above)
+             raw_sequence_length = len(batch['mutant_mutated_seq_pairs'][0][1])
+-        #Sample MSA sequences
++        # Sample MSA sequences
+         if model_type == "MSA_Transformer":
+             assert MSA_weights is not None, "Trying to add MSA_sequences to scoring batch but no weights are provided"
+             if model.MSA_sample_sequences is None:
+@@ -45,24 +79,24 @@ def process_embeddings_batch(batch, model, model_type, alphabet, device, MSA_seq
+             # Concatenate MSA sequences with labelled assay sequences
+             batch['mutant_mutated_seq_pairs'] += model.MSA_sample_sequences
+         # Slice sequences around mutation if sequence longer than context length
+-        if args.max_positions is not None and raw_sequence_length + 1 > args.max_positions: # Adding one for the BOS token
+-            if args.long_sequences_slicing_method=="center" and args.model_type in ["MSA_Transformer"]:
++        if max_positions is not None and raw_sequence_length + 1 > max_positions: # Adding one for the BOS token
++            if long_sequences_slicing_method=="center" and model_type in ["MSA_Transformer"]:
+                 print("Center slicing method not adapted to PNPT embeddings as sequences would not be aligned in the same system anymore. Defaulting to 'left' mode.")
+-                args.long_sequences_slicing_method="left"
++                long_sequences_slicing_method="left"
+             batch['mutant_mutated_seq_pairs'], batch_target_labels, _ = slice_sequences(
+                 list_mutant_mutated_seq_pairs = batch['mutant_mutated_seq_pairs'], 
+-                max_positions=args.max_positions,
+-                method=args.long_sequences_slicing_method,
+-                rolling_overlap=args.max_positions//4,
++                max_positions=max_positions,
++                method=long_sequences_slicing_method,
++                rolling_overlap=max_positions//4,
+                 eval_mode=eval_mode,
+                 batch_target_labels=None, 
+                 start_idx=start_idx,
+                 target_names=None
+             )
+         # Tokenize protein sequences
+-        if args.model_type=="MSA_Transformer": 
++        if model_type=="MSA_Transformer": 
+             #Re-organize list of sequences to have training_num_assay_sequences_per_batch_per_gpu MSA batches, where in each the sequence to score is the first and the rest are the sampled MSA sequences.
+-            num_sequences = raw_batch_size + args.num_MSA_sequences
++            num_sequences = raw_batch_size + num_MSA_sequences
+             assert len(batch['mutant_mutated_seq_pairs']) == num_sequences, "Unexpected number of sequences"
+             sequences_to_score = batch['mutant_mutated_seq_pairs'][:raw_batch_size]
+             MSA_sequences = batch['mutant_mutated_seq_pairs'][raw_batch_size:]
+@@ -85,7 +119,7 @@ def process_embeddings_batch(batch, model, model_type, alphabet, device, MSA_seq
+                 batch['mutant_mutated_seq_pairs'] = [ [sequence] + MSA_sequences for sequence in sequences_to_score]    
+         token_batch_converter = alphabet.get_batch_converter()
+         batch_sequence_names, batch_AA_sequences, batch_token_sequences = token_batch_converter(batch['mutant_mutated_seq_pairs'])    
+-        if args.model_type!="MSA_Transformer": 
++        if model_type!="MSA_Transformer": 
+             num_MSAs_in_batch, num_sequences_in_alignments, seqlen = batch_token_sequences.size()
+             batch_token_sequences = batch_token_sequences.view(num_sequences_in_alignments, seqlen) #drop the dummy batch dimension from the tokenizer when not using MSAT
+         batch_token_sequences = batch_token_sequences.to(device)
+@@ -93,99 +127,109 @@ def process_embeddings_batch(batch, model, model_type, alphabet, device, MSA_seq
+             'input_tokens': batch_token_sequences,
+             'mutant_mutated_seq_pairs': batch['mutant_mutated_seq_pairs']
+         }
+-    elif args.model_type=="Tranception":
++    elif model_type=="Tranception":
+         for k, v in batch.items():
+             if isinstance(v, torch.Tensor):
+                 batch[k] = v.to(model.device)
+         processed_batch = batch
++    else:
++        print("Model type has to be one of 'Tranception'|'MSA_Transformer'|'ESM1v'")
++        return None
++    
+     return processed_batch
+ 
+-if __name__ == "__main__":
+-    parser = argparse.ArgumentParser(description='Extract embeddings')
+-    parser.add_argument('--assay_reference_file_location', default=None, type=str, help='Path to reference file with list of assays to score')
+-    parser.add_argument('--assay_index', default=0, type=int, help='Index of assay in the ProteinGym reference file to compute embeddings for')
+-    parser.add_argument('--input_data_location', default=None, type=str, help='Location of input data with all mutated sequences [If a reference file is used, this is the location where are assays are stored. If a single csv file is passed, this is the full path to that assay data]')
+-    parser.add_argument('--output_data_location', default=None, type=str, help='Location of output embeddings')
+-    parser.add_argument('--model_type', default='Tranception', type=str, help='Model type to compute embeddings with')
+-    parser.add_argument('--model_location', default=None, type=str, help='Location of model used to embed protein sequences')
+-    parser.add_argument('--max_positions', default=1024, type=int, help='Maximum context length of embedding model')
+-    parser.add_argument('--long_sequences_slicing_method', default='center', type=str, help='Method to slice long sequences [rolling, center, left]')
+-    parser.add_argument('--batch_size', default=32, type=int, help='Eval batch size')
+-    parser.add_argument('--indel_mode', action='store_true', help='Use this mode if extracting embeddings of indel assays')
+-    parser.add_argument('--half_precision', action='store_true', help='Store embeddings as 16-bit floating point numbers (float16)')
+-    #MSA specific parameters (only relevant for MSA Transformer)
+-    parser.add_argument('--num_MSA_sequences', default=1000, type=int, help='Num MSA sequences to score each sequence with')
+-    parser.add_argument('--MSA_data_folder', default=None, type=str, help='Folder where all MSAs are stored')
+-    parser.add_argument('--MSA_weight_data_folder', default=None, type=str, help='Folder where MSA sequence weights are stored (for diversity sampling of MSAs)')
+-    parser.add_argument('--path_to_hhfilter', default=None, type=str, help='Path to hhfilter (for filtering MSAs)')
+-    parser.add_argument('--path_to_clustalomega', default=None, type=str, help='Path to clustal omega (to re-align sequences in indel assays) [indels only]')
+-    parser.add_argument('--fast_MSA_mode', action='store_true', help='Use this mode to speed up embedding extraction for MSA Transformer by scoring multiple mutated sequences (batch_size of them) at once (has minor impact on quality)')
+-    #If not using a reference file
+-    parser.add_argument('--target_seq', default=None, type=str, help='Wild type sequence mutated in the assay (to be provided if not using a reference file)')
+-    parser.add_argument('--MSA_location', default=None, type=str, help='Path to MSA file (.a2m)')
+-    parser.add_argument('--weight_file_name', default=None, type=str, help='Name of weight file')
+-    parser.add_argument('--MSA_start', default=None, type=int, help='Index of first AA covered by the MSA relative to target_seq coordinates (1-indexing)')
+-    parser.add_argument('--MSA_end', default=None, type=int, help='Index of last AA covered by the MSA relative to target_seq coordinates (1-indexing)')
+-    args = parser.parse_args()
+ 
+-    assert (args.indel_mode and not args.fast_MSA_mode and args.batch_size==1) or (args.fast_MSA_mode and args.model_type=="MSA_Transformer") or (not args.indel_mode), "Indel mode typically run with batch size of 1, unless when using fast_MSA_mode for MSA Transformer"
++def main(
++    assay_reference_file_location=None,
++    assay_index=0,
++    input_data_location=None,
++    output_data_location=None,
++    model_type='Tranception',
++    model_location=None,
++    max_positions=1024,
++    long_sequences_slicing_method='center',
++    batch_size=32,
++    indel_mode=False,
++    half_precision=False,
++    num_MSA_sequences=1000,
++    MSA_data_folder=None,
++    MSA_weight_data_folder=None,
++    path_to_hhfilter=None,
++    path_to_clustalomega=None,
++    fast_MSA_mode=False,
++    target_seq=None,
++    MSA_location=None,
++    weight_file_name=None,
++    MSA_start=None,
++    MSA_end=None,
++    use_cpu=False,
++    ):
++    
++    if not use_cpu and not torch.cuda.is_available():
++        print("Error: CUDA not available. This script is intended to run on a GPU, to use a CPU run with --use_cpu")
++        exit(1)
++    elif use_cpu and torch.cuda.is_available():
++        print("Note: CUDA is available, but will not be used because --use_cpu is specified. To use the GPU, remove the --use_cpu flag.")
++    
++    assert (indel_mode and not fast_MSA_mode and batch_size==1) or (fast_MSA_mode and model_type=="MSA_Transformer") or (not indel_mode), "Indel mode typically run with batch size of 1, unless when using fast_MSA_mode for MSA Transformer"
+ 
+     # Path to the input CSV file
+-    if args.assay_reference_file_location is not None:
+-        assay_reference_file = pd.read_csv(args.assay_reference_file_location)
+-        assay_id=assay_reference_file["DMS_id"][args.assay_index]
++    if assay_reference_file_location is not None:
++        assay_reference_file = pd.read_csv(assay_reference_file_location)
++        assay_id=assay_reference_file["DMS_id"][assay_index]
+         assay_file_name = assay_reference_file["DMS_filename"][assay_reference_file["DMS_id"]==assay_id].values[0]
+-        args.input_data_location = args.input_data_location + os.sep + assay_file_name
++        input_data_location = input_data_location + os.sep + assay_file_name
+         target_seq = assay_reference_file["target_seq"][assay_reference_file["DMS_id"]==assay_id].values[0]
+     else:
+-        assert args.target_seq is not None, "Reference file provided and target_seq not provided"
+-        assay_id = args.input_data_location.split(".csv")[0].split(os.sep)[-1]
+-        assay_file_name = args.input_data_location.split(os.sep)[-1]
+-        target_seq = args.target_seq
+-        if args.MSA_location:
+-            args.MSA_filename = args.MSA_location.split(os.sep)[-1]
+-            args.MSA_data_folder = os.sep.join(args.MSA_location.split(os.sep)[:-1])
+-        if (args.MSA_start is None) or (args.MSA_end is None): 
+-            if args.MSA_data_folder: print("MSA start and end not provided -- Assuming the MSA is covering the full WT sequence")
+-            args.MSA_start = 1
+-            args.MSA_end = len(args.target_seq)
++        assert target_seq is not None, "Reference file provided and target_seq not provided"
++        assay_id = input_data_location.split(".csv")[0].split(os.sep)[-1]
++        assay_file_name = input_data_location.split(os.sep)[-1]
++        target_seq = target_seq
++        if MSA_location:
++            MSA_filename = MSA_location.split(os.sep)[-1]
++            MSA_data_folder = os.sep.join(MSA_location.split(os.sep)[:-1])
++        if (MSA_start is None) or (MSA_end is None): 
++            if MSA_data_folder: print("MSA start and end not provided -- Assuming the MSA is covering the full WT sequence")
++            MSA_start = 1
++            MSA_end = len(target_seq)
+ 
+     print("Assay: {}".format(assay_file_name))
+ 
+     # Load the PyTorch model from the checkpoint
+-    if args.model_type in ["MSA_Transformer","ESM1v"]:
++    if model_type in ["MSA_Transformer","ESM1v"]:
+         alphabet = Alphabet.from_architecture("msa_transformer")
+         alphabet_size = len(alphabet)
+-        model, _ = load_model_and_alphabet(args.model_location)
++        model, _ = load_model_and_alphabet(model_location)
+         model.MSA_sample_sequences=None
+-    elif args.model_type=="Tranception":
+-        config = json.load(open(args.model_location+os.sep+'config.json'))
++    elif model_type=="Tranception":
++        config = json.load(open(model_location+os.sep+'config.json'))
+         config = TranceptionConfig(**config)
+         config.tokenizer = get_tranception_tokenizer()
+         config.full_target_seq = target_seq
+         config.inference_time_retrieval_type = None
+         config.retrieval_aggregation_mode = None
+         alphabet = None # Only used in process_embeddings_batch for ESM models
+-        model = TranceptionLMHeadModel.from_pretrained(pretrained_model_name_or_path=args.model_location,config=config)
++        model = TranceptionLMHeadModel.from_pretrained(pretrained_model_name_or_path=model_location,config=config)
+ 
+     # Set the model to evaluation mode & move to cuda
+     model.eval()
+-    model.cuda()
++    if not use_cpu:
++        model.cuda()
+     #DMS file
+-    df = pd.read_csv(args.input_data_location)
++    df = pd.read_csv(input_data_location)
+     if 'mutated_sequence' not in df: df['mutated_sequence'] = df['mutant'] # May happen on indel assays
+     df = df[['mutant','mutated_sequence']]
+ 
+     # Path to the output file for storing embeddings and original sequences
+-    if not os.path.exists(args.output_data_location): os.mkdir(args.output_data_location)
+-    output_embeddings_path = args.output_data_location + os.sep + assay_file_name.split(".csv")[0] + '.h5'
++    if not os.path.exists(output_data_location): os.mkdir(output_data_location)
++    output_embeddings_path = output_data_location + os.sep + assay_file_name.split(".csv")[0] + '.h5'
+ 
+-    if args.model_type=="MSA_Transformer":
+-        MSA_filename = assay_reference_file["MSA_filename"][assay_reference_file["DMS_id"]==assay_id].values[0] if args.assay_reference_file_location is not None else args.MSA_filename
+-        MSA_weights_filename = assay_reference_file["weight_file_name"][assay_reference_file["DMS_id"]==assay_id].values[0] if args.assay_reference_file_location is not None else args.weight_file_name
+-        MSA_sequences, MSA_weights = process_MSA(args, MSA_filename, MSA_weights_filename)
+-        MSA_start_position = int(assay_reference_file["MSA_start"][assay_reference_file["DMS_id"]==assay_id].values[0]) if args.assay_reference_file_location is not None else args.MSA_start
+-        MSA_end_position = int(assay_reference_file["MSA_end"][assay_reference_file["DMS_id"]==assay_id].values[0]) if args.assay_reference_file_location is not None else args.MSA_end
++    if model_type=="MSA_Transformer":
++        MSA_filename = assay_reference_file["MSA_filename"][assay_reference_file["DMS_id"]==assay_id].values[0] if assay_reference_file_location is not None else MSA_filename
++        MSA_weights_filename = assay_reference_file["weight_file_name"][assay_reference_file["DMS_id"]==assay_id].values[0] if assay_reference_file_location is not None else weight_file_name
++        MSA_sequences, MSA_weights = process_MSA(MSA_data_folder=MSA_data_folder, MSA_weight_data_folder=MSA_weight_data_folder, MSA_filename=MSA_filename, MSA_weights_filename=MSA_weights_filename, path_to_hhfilter=path_to_hhfilter)
++        MSA_start_position = int(assay_reference_file["MSA_start"][assay_reference_file["DMS_id"]==assay_id].values[0]) if assay_reference_file_location is not None else MSA_start
++        MSA_end_position = int(assay_reference_file["MSA_end"][assay_reference_file["DMS_id"]==assay_id].values[0]) if assay_reference_file_location is not None else MSA_end
+     else:
+         MSA_sequences = None
+         MSA_weights = None
+@@ -201,9 +245,9 @@ def process_embeddings_batch(batch, model, model_type, alphabet, device, MSA_seq
+     # Pre-processing over gaps in sequences: 
+     # If single-sequence input model --> remove gaps everywhere
+     # If MSA input (eg., MSA Transformer) --> keep all gaps and align MSA to the gaps of the first sequence (assumes the MSA was created for that first sequence without gaps). If no gaps in that first sequence we dont do anything.
+-    if args.model_type in ["Tranception","ESM1v"]:
++    if model_type in ["Tranception","ESM1v"]:
+         df['mutated_sequence'] = df['mutated_sequence'].apply(lambda x: x.replace("-",""))
+-    elif args.model_type in ["MSA_Transformer"]:
++    elif model_type in ["MSA_Transformer"]:
+         first_sequence = df['mutated_sequence'].values[0]
+         dash_positions = [i for i, char in enumerate(first_sequence) if char == "-"] #Indices of gaps in first sequence to score
+         if len(dash_positions)>0:
+@@ -223,23 +267,23 @@ def process_embeddings_batch(batch, model, model_type, alphabet, device, MSA_seq
+     # Create a data loader to iterate over the input sequences. 
+     # For ESM models (MSA Transformer in particular), the bulk of the work is done within process_embeddings_batch
+     # For Tranception, utils for slicing already exist so we directly process & tokenize sequences below
+-    if args.model_type in ["MSA_Transformer","ESM1v"]:
++    if model_type in ["MSA_Transformer","ESM1v"]:
+         dataset_dict = {}
+         dataset_dict['mutant_mutated_seq_pairs'] = list(zip(list(df['mutant']),list(df['mutated_sequence'])))
+         dataset = Dataset.from_dict(dataset_dict)
+         dataloader = DataLoader(
+                         dataset=dataset, 
+-                        batch_size=args.batch_size, 
++                        batch_size=batch_size, 
+                         shuffle=False,
+                         num_workers=0, 
+                         pin_memory=True,
+                         collate_fn=collate_fn_protein_npt
+                     )
+-    elif args.model_type=="Tranception":
++    elif model_type=="Tranception":
+         sliced_df = get_sequence_slices(df, 
+             target_seq=target_seq, 
+             model_context_len = model.config.n_ctx - 2, 
+-            indel_mode=args.indel_mode, 
++            indel_mode=indel_mode, 
+             scoring_window="optimal"
+         )
+         mutant_index=0
+@@ -251,7 +295,7 @@ def process_embeddings_batch(batch, model, model_type, alphabet, device, MSA_seq
+         sampler = SequentialSampler(ds)
+         dataloader = torch.utils.data.DataLoader(
+             ds, 
+-            batch_size=args.batch_size, 
++            batch_size=batch_size, 
+             sampler=sampler, 
+             collate_fn=data_collator, 
+             num_workers=0, 
+@@ -261,11 +305,11 @@ def process_embeddings_batch(batch, model, model_type, alphabet, device, MSA_seq
+ 
+     # Loop over the batches of sequences in the input file
+     with torch.no_grad():
+-        if args.fast_MSA_mode:
++        if fast_MSA_mode:
+             model.MSA_sample_sequences = weighted_sample_MSA(
+                         MSA_all_sequences=MSA_sequences, 
+                         MSA_non_ref_sequences_weights=MSA_weights, 
+-                        number_sampled_MSA_sequences=args.num_MSA_sequences
++                        number_sampled_MSA_sequences=num_MSA_sequences
+                     )
+             fast_MSA_short_names_mapping = {}
+             fast_MSA_short_names = []
+@@ -274,46 +318,48 @@ def process_embeddings_batch(batch, model, model_type, alphabet, device, MSA_seq
+                 short_name = 'mutant_to_score_'+str(seq_index)
+                 fast_MSA_short_names_mapping[seq] = short_name
+                 fast_MSA_short_names.append(short_name)
+-            fast_MSA_aligned_sequences = align_new_sequences_to_msa(model.MSA_sample_sequences, list(df['mutated_sequence']), fast_MSA_short_names, clustalomega_path=args.path_to_clustalomega)
++            fast_MSA_aligned_sequences = align_new_sequences_to_msa(model.MSA_sample_sequences, list(df['mutated_sequence']), fast_MSA_short_names, clustalomega_path=path_to_clustalomega)
+             model.MSA_sample_sequences = [tup for tup in fast_MSA_aligned_sequences if tup[0] not in set(fast_MSA_short_names)]
+         else:
+             fast_MSA_aligned_sequences = None
+             fast_MSA_short_names_mapping = None
+         
+-        for batch in tqdm.tqdm(dataloader):
++        for batch in tqdm.tqdm(dataloader, desc="Embedding sequences", total=len(dataloader)):
+             processed_batch = process_embeddings_batch(
+                                 batch = batch,
+                                 model = model,
+-                                model_type = args.model_type,
+-                                alphabet = alphabet, 
++                                model_type = model_type,
++                                alphabet = alphabet,
+                                 MSA_sequences = MSA_sequences, 
+                                 MSA_weights = MSA_weights,
+                                 MSA_start_position = MSA_start_position, 
+                                 MSA_end_position = MSA_end_position,
+-                                num_MSA_sequences = args.num_MSA_sequences,
++                                num_MSA_sequences = num_MSA_sequences,
++                                max_positions = max_positions,
++                                long_sequences_slicing_method = long_sequences_slicing_method,
+                                 device = next(model.parameters()).device,
+                                 eval_mode=True,
+-                                indel_mode=args.indel_mode,
+-                                fast_MSA_mode=args.fast_MSA_mode,
++                                indel_mode=indel_mode,
++                                fast_MSA_mode=fast_MSA_mode,
+                                 fast_MSA_aligned_sequences=fast_MSA_aligned_sequences,
+                                 fast_MSA_short_names_mapping=fast_MSA_short_names_mapping,
+-                                clustalomega_path=args.path_to_clustalomega
++                                clustalomega_path=path_to_clustalomega
+                             )
+-            if args.model_type=="MSA_Transformer":
++            if model_type=="MSA_Transformer":
+                 tokens = processed_batch['input_tokens']
+                 assert tokens.ndim == 3, "Finding dimension of tokens to be: {}".format(tokens.ndim)
+                 num_MSAs_in_batch, num_sequences_in_alignments, seqlen = tokens.size()
+                 batch_size = num_MSAs_in_batch
+                 output = model(tokens, repr_layers=[12])
+                 embeddings = output["representations"][12][:] # B, N, L, D
+-                if args.fast_MSA_mode: # A single batch with multiple sequences to score in it to speed things up
+-                    embeddings = embeddings[:,:args.batch_size,:,:] # 1, N, L, D 
+-                    embeddings = [embeddings[:,i,:,:] for i in range(args.batch_size)]
+-                    logits = output["logits"][:,:args.batch_size].view(args.batch_size,-1,alphabet_size)
+-                    tokens = tokens[:,:args.batch_size].view(args.batch_size,-1)
+-                    pseudo_ppx = - CrossEntropyLoss(reduction='none', label_smoothing=0.0)(logits.reshape(-1, alphabet_size), tokens.reshape(-1)).view(args.batch_size, seqlen)
++                if fast_MSA_mode: # A single batch with multiple sequences to score in it to speed things up
++                    embeddings = embeddings[:,:batch_size,:,:] # 1, N, L, D 
++                    embeddings = [embeddings[:,i,:,:] for i in range(batch_size)]
++                    logits = output["logits"][:,:batch_size].view(batch_size,-1,alphabet_size)
++                    tokens = tokens[:,:batch_size].view(batch_size,-1)
++                    pseudo_ppx = - CrossEntropyLoss(reduction='none', label_smoothing=0.0)(logits.reshape(-1, alphabet_size), tokens.reshape(-1)).view(batch_size, seqlen)
+                     pseudo_ppx = pseudo_ppx.mean(dim=-1).view(-1)
+-                    batch['mutant_mutated_seq_pairs'] = batch['mutant_mutated_seq_pairs'][0][:args.batch_size]
++                    batch['mutant_mutated_seq_pairs'] = batch['mutant_mutated_seq_pairs'][0][:batch_size]
+                 else:
+                     embeddings = embeddings[:,0,:,:] # In each MSA batch the first sequence is what we care about. The other MSA sequences were present just to compute embeddings and logits
+                     logits = output["logits"][:,0] # Filtering logits of points to score
+@@ -322,7 +368,7 @@ def process_embeddings_batch(batch, model, model_type, alphabet, device, MSA_seq
+                     pseudo_ppx = pseudo_ppx.mean(dim=-1).view(-1) #Average across sequence length
+                     batch['mutant_mutated_seq_pairs'] = [seq[0] for seq in batch['mutant_mutated_seq_pairs']] # Remove MSA sequences from batch by selecting the first sequence in each MSA input sets
+                 mutant, sequence = zip(*batch['mutant_mutated_seq_pairs'])
+-            elif args.model_type == "ESM1v":
++            elif model_type == "ESM1v":
+                 tokens = processed_batch['input_tokens']
+                 assert tokens.ndim == 2, "Finding dimension of tokens to be: {}".format(tokens.ndim)
+                 batch_size, seqlen = tokens.size()
+@@ -333,7 +379,7 @@ def process_embeddings_batch(batch, model, model_type, alphabet, device, MSA_seq
+                 pseudo_ppx = - CrossEntropyLoss(reduction='none', label_smoothing=0.0)(logits.view(-1, alphabet_size), tokens.view(-1)).view(batch_size, seqlen)
+                 pseudo_ppx = pseudo_ppx.mean(dim=-1).view(-1)
+                 mutant, sequence = zip(*batch['mutant_mutated_seq_pairs'])
+-            elif args.model_type=="Tranception":
++            elif model_type=="Tranception":
+                 output = model(**processed_batch, return_dict=True, output_hidden_states=True)
+                 embeddings = output.hidden_states[-1] # Extract embeddings from last layer
+                 logits = output.logits
+@@ -352,19 +398,19 @@ def process_embeddings_batch(batch, model, model_type, alphabet, device, MSA_seq
+             assert len(embeddings.shape)==3, "Embedding tensor is not of proper size (batch_size,seq_len,embedding_dim)"
+             B,L,D=embeddings.shape
+             embeddings = [embedding.view(1,L,D).cpu() for embedding in embeddings]
+-            if args.half_precision: embeddings = [embedding.half() for embedding in embeddings]
++            if half_precision: embeddings = [embedding.half() for embedding in embeddings]
+             embeddings_list += embeddings
+             sequences_list.append(list(sequence))
+             mutants_list.append(list(mutant))
+ 
+     # Concatenate the embeddings 
+-    if args.indel_mode:
++    if indel_mode:
+         embedding_len_set = set([seq.size(1) for seq in embeddings_list])
+         num_embeddings = len(embeddings_list)
+         max_seq_length = max(embedding_len_set)
+         embedding_dim = embeddings_list[0].shape[-1] # embeddings_list is a list of embeddings, each of them of shape (1,seq_len,embedding_dim)
+         embeddings = torch.zeros(num_embeddings,max_seq_length,embedding_dim)
+-        if args.half_precision: embeddings = embeddings.half()
++        if half_precision: embeddings = embeddings.half()
+         for emb_index, embedding in enumerate(embeddings_list):
+             assert len(embedding.shape)==3, "embedding index {} is of incorrect size: {}".format(emb_index, embedding.shape)
+             embedding_len = embedding.shape[1]
+@@ -386,4 +432,32 @@ def process_embeddings_batch(batch, model, model_type, alphabet, device, MSA_seq
+     # Store data as HDF5
+     with h5py.File(output_embeddings_path, 'w') as h5f:
+         for key, value in embeddings_dict.items():
+-            h5f.create_dataset(key, data=value)
+\ No newline at end of file
++            h5f.create_dataset(key, data=value)
++
++
++if __name__ == "__main__":
++    args = parse_arguments()
++    main(
++        assay_reference_file_location=args.assay_reference_file_location,
++        assay_index=args.assay_index,
++        input_data_location=args.input_data_location,
++        output_data_location=args.output_data_location,
++        model_type=args.model_type,
++        model_location=args.model_location,
++        max_positions=args.max_positions,
++        long_sequences_slicing_method=args.long_sequences_slicing_method,
++        batch_size=args.batch_size,
++        indel_mode=args.indel_mode,
++        half_precision=args.half_precision,
++        #MSA specific parameters
++        num_MSA_sequences=args.num_MSA_sequences,
++        MSA_data_folder=args.MSA_data_folder,
++        MSA_weight_data_folder=args.MSA_weight_data_folder,
++        path_to_hhfilter=args.path_to_hhfilter,
++        path_to_clustalomega=args.path_to_clustalomega,
++        fast_MSA_mode=args.fast_MSA_mode,
++        #If not using a reference file
++        target_seq=args.target_seq,
++        MSA_location=args.MSA_location,
++        use_cpu=args.use_cpu,
++    )
+diff --git a/scripts/embeddings_subs.sh b/scripts/embeddings_subs.sh
+index 4f33a2a..a5b3849 100644
+--- a/scripts/embeddings_subs.sh
++++ b/scripts/embeddings_subs.sh
+@@ -1,5 +1,5 @@
+ source ./config.sh
+-source activate proteinnpt_env
++conda activate proteinnpt_env
+ 
+ export assay_index=0 #Replace with index of desired DMS assay in the ProteinGym reference file (`utils/proteingym`)
+ export batch_size=1
+diff --git a/scripts/pipeline.py b/scripts/pipeline.py
+index b6f6fab..0981abb 100644
+--- a/scripts/pipeline.py
++++ b/scripts/pipeline.py
+@@ -8,296 +8,318 @@
+ from proteinnpt.utils import cv_split
+ from proteinnpt.utils.tranception.utils.scoring_utils import get_mutated_sequence
+ from proteinnpt.utils.msa_utils import MSA_processing
++from embeddings import main as run_embeddings
+ 
+ import os
+ os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
+ 
+-parser = argparse.ArgumentParser(description='End-to-end ProteinNPT pipeline on new assays')
++def parse_args():
++    parser = argparse.ArgumentParser(description='End-to-end ProteinNPT pipeline on new assays')
+ 
+-### Required parameters
+-parser.add_argument('--assay_data_location', default=None, type=str, required=True, help='Path to assay data csv (expects a csv, with at least three columns: mutant or mutated_sequence | DMS_score | fold_variable_name)')
+-parser.add_argument('--target_seq', default=None, type=str, required=True, help='WT sequence mutated in the assay')
+-parser.add_argument('--proteinnpt_data_location', type=str, required=True, help='Path to core ProteinNPT datasets (e.g., MSA files, DMS assays, pretrained model checkpoints). Training output will also be stored there (i.e., checkpoints and test set predictions).')
+-parser.add_argument('--MSA_location', default=None, type=str, help='Path to MSA file (expects .a2m) - Required for PNPT, MSAT Transformer and Tranception')
+-### Optional parameters
+-parser.add_argument('--indel_mode', action='store_true', help='Use this mode if working with indel assays')
+-parser.add_argument('--model_name_suffix', default='base_pipeline', type=str, help='Suffix to reference model')
+-parser.add_argument('--model_name', default="PNPT_MSAT_final", type=str, help='Name of model used for training and inference [Optional -- defaults to ProteinNPT]')
+-parser.add_argument('--fold_variable_name', default="train_test_split", type=str, help='Name of cross-validation fold variable name in the assay data (Optional -- defaults to "train_test_split" with 0 for train, 1 for test)')
+-parser.add_argument('--test_fold_index', default=-1, type=int, help='Index of test fold (if "-1", we loop through all folds iteratively)')
+-parser.add_argument('--number_folds', default=5, type=int, help='Number of folds to create if fold_variable_name not in assay file')
+-parser.add_argument('--model_config_location', default=None, type=str, help='Path to main model config file that specifies all parameters as needed [Optional - if None, we default to the config from model_type]')
+-parser.add_argument('--target_config_location', default=None, type=str, help='Config file for assays to be used for modelings [Optional - if None, we default to single property prediction, and expects the variable name is DMS_score in the assay csv]')
+-parser.add_argument('--sequence_embeddings_folder', default=None, type=str, help='Location of stored embeddings on disk [Optional -- defaults to standard embeddings location in data folder]')
+-parser.add_argument('--zero_shot_predictions_folder', default=None, type=str, help='Location of zero-shot predictions on disk [Optional -- defaults to standard zero-shot predictions location in data folder]')
+-parser.add_argument('--MSA_weights_folder', default=None, type=str, help='Location of MSA sequence weights on disk [Optional -- defaults to standard MSA sequence weights location in data folder]')
+-parser.add_argument('--max_positions', default=1024, type=int, help='Maximum context length of embedding model')
+-parser.add_argument('--batch_size', default=1, type=int, help='Eval batch size')
+-parser.add_argument('--embeddings_MSAT_num_MSA_sequences', default=384, type=int, help='Num MSA sequences to score each sequence with')
+-parser.add_argument('--MSA_sequence_weights_theta', default=0.2, type=float, help='Theta parameter used for sequence weights computation')
+-parser.add_argument('--MSA_start', default=None, type=int, help='Index of first AA covered by the MSA relative to target_seq coordinates (1-indexing)')
+-parser.add_argument('--MSA_end', default=None, type=int, help='Index of last AA covered by the MSA relative to target_seq coordinates (1-indexing)')
+-parser.add_argument('--ESM_zero_shot_scoring_strategy', default='masked-marginals', type=str, help='Masking strategy to compute ESM zero-shot predictions')
+-parser.add_argument('--deactivate_zero_shot_prediction', action='store_true', help='Whether to deactivate use of zero-shot fitness predictions as auxiliary labels')
++    ### Required parameters
++    parser.add_argument('--assay_data_location', default=None, type=str, required=True, help='Path to assay data csv (expects a csv, with at least three columns: mutant or mutated_sequence | DMS_score | fold_variable_name)')
++    parser.add_argument('--target_seq', default=None, type=str, required=True, help='WT sequence mutated in the assay')
++    parser.add_argument('--proteinnpt_data_location', type=str, required=True, help='Path to core ProteinNPT datasets (e.g., MSA files, DMS assays, pretrained model checkpoints). Training output will also be stored there (i.e., checkpoints and test set predictions).')
++    parser.add_argument('--MSA_location', default=None, type=str, help='Path to MSA file (expects .a2m) - Required for PNPT, MSAT Transformer and Tranception')
++    ### Optional parameters
++    parser.add_argument('--indel_mode', action='store_true', help='Use this mode if working with indel assays')
++    parser.add_argument('--model_name_suffix', default='base_pipeline', type=str, help='Suffix to reference model')
++    parser.add_argument('--model_name', default="PNPT_MSAT_final", type=str, help='Name of model used for training and inference [Optional -- defaults to ProteinNPT]')
++    parser.add_argument('--fold_variable_name', default="train_test_split", type=str, help='Name of cross-validation fold variable name in the assay data (Optional -- defaults to "train_test_split" with 0 for train, 1 for test)')
++    parser.add_argument('--test_fold_index', default=-1, type=int, help='Index of test fold (if "-1", we loop through all folds iteratively)')
++    parser.add_argument('--number_folds', default=5, type=int, help='Number of folds to create if fold_variable_name not in assay file')
++    parser.add_argument('--model_config_location', default=None, type=str, help='Path to main model config file that specifies all parameters as needed [Optional - if None, we default to the config from model_type]')
++    parser.add_argument('--target_config_location', default=None, type=str, help='tConfig file for assays to be used for modelings [Optional - if None, we default to single property prediction, and expects the variable name is DMS_score in the assay csv]')
++    parser.add_argument('--sequence_embeddings_folder', default=None, type=str, help='Location of stored embeddings on disk [Optional -- defaults to standard embeddings location in data folder]')
++    parser.add_argument('--zero_shot_predictions_folder', default=None, type=str, help='Location of zero-shot predictions on disk [Optional -- defaults to standard zero-shot predictions location in data folder]')
++    parser.add_argument('--MSA_weights_folder', default=None, type=str, help='Location of MSA sequence weights on disk [Optional -- defaults to standard MSA sequence weights location in data folder]')
++    parser.add_argument('--max_positions', default=1024, type=int, help='Maximum context length of embedding model')
++    parser.add_argument('--batch_size', default=1, type=int, help='Eval batch size')
++    parser.add_argument('--embeddings_MSAT_num_MSA_sequences', default=384, type=int, help='Num MSA sequences to score each sequence with')
++    parser.add_argument('--MSA_sequence_weights_theta', default=0.2, type=float, help='Theta parameter used for sequence weights computation')
++    parser.add_argument('--MSA_start', default=None, type=int, help='Index of first AA covered by the MSA relative to target_seq coordinates (1-indexing)')
++    parser.add_argument('--MSA_end', default=None, type=int, help='Index of last AA covered by the MSA relative to target_seq coordinates (1-indexing)')
++    parser.add_argument('--ESM_zero_shot_scoring_strategy', default='masked-marginals', type=str, help='Masking strategy to compute ESM zero-shot predictions')
++    parser.add_argument('--deactivate_zero_shot_prediction', action='store_true', help='Whether to deactivate use of zero-shot fitness predictions as auxiliary labels')
++    parser.add_argument("--torch_hub_location", help="If your model checkpoints aren't stored in the ProteinNPT data folder, specify the path to your PyTorch hub.") # Note: Could also extend this to huggingface hub
++    parser.add_argument("--use_cpu", action="store_true", help="Force the use of CPU instead of GPU (considerably slower). If this option is not chosen, the script will raise an error if the GPU is not available.")
+ 
+-args = parser.parse_args()
++    args = parser.parse_args()
++    return args
+ 
+-default_config_mapping = {
+-    "PNPT_MSAT_final": "../proteinnpt/proteinnpt/model_configs/PNPT_final.json",
+-    "Embeddings_MSAT_final": "../proteinnpt/baselines/model_configs/Embeddings_MSAT_final.json",
+-    "Embeddings_Tranception_final": "../proteinnpt/baselines/model_configs/Embeddings_Tranception_final.json",
+-    "Embeddings_ESM1v_final": "../proteinnpt/baselines/model_configs/Embeddings_ESM1v_final.json",
+-    "OHE_MSAT_final": "../proteinnpt/baselines/model_configs/OHE_MSAT_final.json",
+-}
+ 
+-model_location_mapping = {
+-    "MSA_Transformer": os.path.join(args.proteinnpt_data_location, "ESM", "MSA_Transformer", "esm_msa1b_t12_100M_UR50S.pt"),
+-    "Tranception": os.path.join(args.proteinnpt_data_location, "Tranception", "Tranception_Large"),
+-    "ESM1v": os.path.join(args.proteinnpt_data_location, "ESM", "ESM1v", "esm1v_t33_650M_UR90S_1.pt"),
+-    "ESM1v-2": os.path.join(args.proteinnpt_data_location, "ESM", "ESM1v", "esm1v_t33_650M_UR90S_2.pt"),
+-    "ESM1v-3": os.path.join(args.proteinnpt_data_location, "ESM", "ESM1v", "esm1v_t33_650M_UR90S_3.pt"),
+-    "ESM1v-4": os.path.join(args.proteinnpt_data_location, "ESM", "ESM1v", "esm1v_t33_650M_UR90S_4.pt"),
+-    "ESM1v-5": os.path.join(args.proteinnpt_data_location, "ESM", "ESM1v", "esm1v_t33_650M_UR90S_5.pt"),
+-}
++if __name__ == "__main__":
++    args = parse_args()
+ 
+-#Set defaults
+-if not args.model_config_location: args.model_config_location = default_config_mapping[args.model_name]
+-model_config = json.load(open(args.model_config_location))
+-if args.deactivate_zero_shot_prediction: model_config['augmentation'] = "None"
+-if args.target_config_location is None: args.target_config_location = "../proteinnpt/utils/target_configs/fitness.json"
+-model_name = model_config['model_name_suffix'] if model_config['model_name_suffix']!="PNPT_MSAT_final" else "ProteinNPT"
+-DMS_id = args.assay_data_location.split(".csv")[0].split(os.sep)[-1]
+-print("Training {} model on the {} assay".format(model_name,DMS_id))
++    default_config_mapping = {
++        "PNPT_MSAT_final": "../proteinnpt/proteinnpt/model_configs/PNPT_final.json",
++        "Embeddings_MSAT_final": "../proteinnpt/baselines/model_configs/Embeddings_MSAT_final.json",
++        "Embeddings_Tranception_final": "../proteinnpt/baselines/model_configs/Embeddings_Tranception_final.json",
++        "Embeddings_ESM1v_final": "../proteinnpt/baselines/model_configs/Embeddings_ESM1v_final.json",
++        "OHE_MSAT_final": "../proteinnpt/baselines/model_configs/OHE_MSAT_final.json",
++    }
+ 
+-assay_data = pd.read_csv(args.assay_data_location,low_memory=False)
+-assert "mutant" in assay_data.columns or "mutated_sequence" in assay_data.columns, "Could not find mutant nor mutated_sequence columns in assay file"
+-if "mutated_sequence" not in assay_data.columns:
+-    assay_data["mutated_sequence"] = assay_data['mutant'].apply(lambda x: scoring_utils.get_mutated_sequence(args.target_seq, x))
+-if "mutant" not in assay_data.columns:
+-    assay_data['mutant'] = assay_data.index.to_series().apply(lambda x: "mutant_" + str(x))
+-if args.fold_variable_name not in assay_data.columns:
+-    print("fold_variable_name not found in assay file. Assigning {} folds at random".format(args.number_folds))
+-    assay_data = cv_split.create_folds_random(assay_data, n_folds=args.number_folds)
+-assay_data.to_csv(args.assay_data_location,index=False)
++    # if args.torch_hub_location:
++    #     # All of the models seem to be in the root of the PyTorch hub (note: Tranception isn't on PyTorch hub?)
++    #     model_location_mapping = {
++    #         "MSA_Transformer": os.path.join(args.torch_hub_location,  "esm_msa1b_t12_100M_UR50S.pt"),
++    #         "Tranception": os.path.join(args.torch_hub_location, "Tranception_Large"),
++    #         "ESM1v": os.path.join(args.torch_hub_location, "esm1v_t33_650M_UR90S_1.pt"),
++    #         "ESM1v-2": os.path.join(args.torch_hub_location, "esm1v_t33_650M_UR90S_2.pt"),
++    #         "ESM1v-3": os.path.join(args.torch_hub_location, "esm1v_t33_650M_UR90S_3.pt"),
++    #         "ESM1v-4": os.path.join(args.torch_hub_location, "esm1v_t33_650M_UR90S_4.pt"),
++    #         "ESM1v-5": os.path.join(args.torch_hub_location, "esm1v_t33_650M_UR90S_5.pt"),
++    #     }
+ 
+-if args.sequence_embeddings_folder is None: 
+-    args.sequence_embeddings_folder = args.proteinnpt_data_location + os.sep + "data" + os.sep + "embeddings" + os.sep + model_config['aa_embeddings']
+-else:
+-    if not os.path.exists(args.sequence_embeddings_folder): os.mkdir(args.sequence_embeddings_folder)
+-    args.sequence_embeddings_folder = args.sequence_embeddings_folder + os.sep + model_config['aa_embeddings']
+-embeddings_location = args.sequence_embeddings_folder + os.sep + DMS_id + ".h5"
+-if args.MSA_weights_folder is None: args.MSA_weights_folder = args.proteinnpt_data_location + os.sep + "data/MSA/MSA_weights"
+-weight_file_name = DMS_id + '_theta_' + str(args.MSA_sequence_weights_theta) + ".npy"
++    model_location_mapping = {
++        "MSA_Transformer": os.path.join(args.proteinnpt_data_location, "ESM", "MSA_Transformer", "esm_msa1b_t12_100M_UR50S.pt"),
++        "Tranception": os.path.join(args.proteinnpt_data_location, "Tranception", "Tranception_Large"),
++        "ESM1v": os.path.join(args.proteinnpt_data_location, "ESM", "ESM1v", "esm1v_t33_650M_UR90S_1.pt"),
++        "ESM1v-2": os.path.join(args.proteinnpt_data_location, "ESM", "ESM1v", "esm1v_t33_650M_UR90S_2.pt"),
++        "ESM1v-3": os.path.join(args.proteinnpt_data_location, "ESM", "ESM1v", "esm1v_t33_650M_UR90S_3.pt"),
++        "ESM1v-4": os.path.join(args.proteinnpt_data_location, "ESM", "ESM1v", "esm1v_t33_650M_UR90S_4.pt"),
++        "ESM1v-5": os.path.join(args.proteinnpt_data_location, "ESM", "ESM1v", "esm1v_t33_650M_UR90S_5.pt"),
++    }
+ 
+-if not os.path.exists(embeddings_location) and model_config['aa_embeddings']!="One_hot_encoding":
+-    print("#"*100+"\n Step1: Computing sequence embeddings for the {} assay \n".format(DMS_id)+"#"*100)
+-    #Sequence weights computation
+-    MSA_sequence_weights_location =  args.MSA_weights_folder + os.sep + weight_file_name
+-    if not os.path.exists(MSA_sequence_weights_location) and model_config['aa_embeddings'] in ["MSA_Transformer","Tranception"]: #Doing preprocessing for Tranception since used in zero-shot prediction (Step2)
+-        print("Computing MSA sequence weights")
+-        _ = MSA_processing(
+-                MSA_location=args.MSA_location,
+-                theta=args.MSA_sequence_weights_theta,
+-                use_weights=True,
+-                weights_location=MSA_sequence_weights_location
+-        )
+-    #Embeddings computation
+-    embeddings_run_parameters = "--model_type {} \
+-    --model_location {} \
+-    --input_data_location {} \
+-    --output_data_location {} \
+-    --batch_size {} \
+-    --max_positions {} \
+-    --target_seq {} ".format(
+-        model_config['aa_embeddings'],
+-        model_location_mapping[model_config['aa_embeddings']],
+-        args.assay_data_location,
+-        args.sequence_embeddings_folder,
+-        args.batch_size,
+-        args.max_positions,
+-        args.target_seq
+-        )
+-    if model_config['aa_embeddings']=="MSA_Transformer": 
+-        embeddings_run_parameters += "--num_MSA_sequences {} ".format(args.embeddings_MSAT_num_MSA_sequences)
+-        embeddings_run_parameters += "--MSA_location {} ".format(args.MSA_location)
+-        embeddings_run_parameters += "--MSA_weight_data_folder {} ".format(args.MSA_weights_folder)
+-        embeddings_run_parameters += "--weight_file_name {} ".format(weight_file_name)
+-        embeddings_run_parameters += "--path_to_hhfilter {} ".format(args.proteinnpt_data_location + os.sep + "utils/hhfilter")
+-    if args.MSA_start: embeddings_run_parameters += "--MSA_start {} ".format(args.MSA_start)
+-    if args.MSA_end: embeddings_run_parameters += "--MSA_end {} ".format(args.MSA_end)
+-    if args.indel_mode: embeddings_run_parameters += "--path_to_clustalomega {} --indel_mode ".format(args.proteinnpt_data_location + os.sep + "utils/clustal-omega")
+-    os.system("python embeddings.py "+embeddings_run_parameters)
+-elif model_config['aa_embeddings'] == "One_hot_encoding":
+-    print("#"*100+"\n Step1: Model uses OHE sequence representation - Skipping embedding computation \n"+"#"*100)
+-else:
+-    print("#"*100+"\n Step1: Found embeddings for the {} assay on disk \n".format(DMS_id)+"#"*100)
++    #Set defaults
++    if not args.model_config_location: args.model_config_location = default_config_mapping[args.model_name]
++    model_config = json.load(open(args.model_config_location))
++    if args.deactivate_zero_shot_prediction: model_config['augmentation'] = "None"
++    if args.target_config_location is None: args.target_config_location = "../proteinnpt/utils/target_configs/fitness.json"
++    model_name = model_config['model_name_suffix'] if model_config['model_name_suffix']!="PNPT_MSAT_final" else "ProteinNPT"
++    DMS_id = args.assay_data_location.split(".csv")[0].split(os.sep)[-1]
++    print("Training {} model on the {} assay".format(model_name,DMS_id))
+ 
++    assay_data = pd.read_csv(args.assay_data_location,low_memory=False)
++    assert "mutant" in assay_data.columns or "mutated_sequence" in assay_data.columns, "Could not find mutant nor mutated_sequence columns in assay file"
++    if "mutated_sequence" not in assay_data.columns:
++        assay_data["mutated_sequence"] = assay_data['mutant'].apply(lambda x: get_mutated_sequence(args.target_seq, x))
++    if "mutant" not in assay_data.columns:
++        assay_data['mutant'] = assay_data.index.to_series().apply(lambda x: "mutant_" + str(x))
++    if args.fold_variable_name not in assay_data.columns:
++        print("fold_variable_name not found in assay file. Assigning {} folds at random".format(args.number_folds))
++        assay_data = cv_split.create_folds_random(assay_data, n_folds=args.number_folds)
++    assay_data.to_csv(args.assay_data_location,index=False)
+ 
+-if args.zero_shot_predictions_folder is None:
+-    args.zero_shot_predictions_folder = args.proteinnpt_data_location + os.sep + "data" + os.sep + "zero_shot_fitness_predictions"
+-else:
+-    if not os.path.exists(args.zero_shot_predictions_folder): os.mkdir(args.zero_shot_predictions_folder)
+-zero_shot_scores_folder = args.zero_shot_predictions_folder + os.sep + "indels" if args.indel_mode else args.zero_shot_predictions_folder + os.sep + "substitutions"
+-zero_shot_fitness_predictions_location = zero_shot_scores_folder + os.sep + DMS_id + ".csv"
+-score_name_mapping_original_names = {
+-        "Tranception" : "avg_score",
+-        "ESM1v" : "Ensemble_ESM1v",
+-        "MSA_Transformer" : "esm_msa1b_t12_100M_UR50S_ensemble"
+-    }
+-score_name_mapping_clean_names = {
+-        "Tranception" : "Tranception_L",
+-        "ESM1v" : "ESM1v_ensemble",
+-        "MSA_Transformer" : "MSA_Transformer_ensemble"
+-    }
+-if os.path.exists(zero_shot_fitness_predictions_location):
+-    zero_shot_file = pd.read_csv(zero_shot_fitness_predictions_location)
+-    if model_config['aa_embeddings'] in score_name_mapping_clean_names:
+-        zero_shot_model_computed = score_name_mapping_clean_names[model_config['aa_embeddings']] in zero_shot_file.columns
+-    elif model_config['aa_embeddings']=="One_hot_encoding":
+-        zs_model_name = model_config["model_type"].split("_pred")[0]
+-        zero_shot_model_computed = zs_model_name in zero_shot_file.columns
++    if args.sequence_embeddings_folder is None:
++        # Note: This is different to where embeddings are stored when only doing e.g. single_subs or indels
++        args.sequence_embeddings_folder = args.proteinnpt_data_location + os.sep + "data" + os.sep + "embeddings" + os.sep + model_config['aa_embeddings']
+     else:
+-        zero_shot_model_computed=False
+-if model_config['augmentation'] == "None" or (model_config['aa_embeddings'] in ["MSA_Transformer","ESM1v"] and args.indel_mode):
+-    print("#"*100+"\n Step2: No zero-shot fitness predictions used for the {} assay \n".format(DMS_id)+"#"*100)
+-elif not os.path.exists(zero_shot_fitness_predictions_location) or not zero_shot_model_computed:
+-    print("#"*100+"\n Step2: Computing zero-shot fitness predictions for the {} assay \n".format(DMS_id)+"#"*100)
+-    if model_config['aa_embeddings']=="MSA_Transformer":
+-        zero_shot_run_parameters = "--model-location {} \
+-            --model_type MSA_Transformer \
+-            --dms-input {} \
+-            --dms-output {} \
+-            --scoring-strategy {} \
+-            --msa-path {} \
+-            --target_seq {} \
+-            --msa-weights-folder {} \
+-            --weight_file_name {} \
+-            --path_to_clustalomega {} \
+-            --seeds 1 2 3 4 5 ".format(
+-                model_location_mapping[model_config['aa_embeddings']],
+-                args.assay_data_location,
+-                zero_shot_scores_folder + os.sep + "MSA_Transformer",
+-                args.ESM_zero_shot_scoring_strategy,
+-                args.MSA_location,
+-                args.target_seq,
+-                args.MSA_weights_folder,
+-                weight_file_name,
+-                args.proteinnpt_data_location + os.sep + "utils/clustal-omega"
+-            )
+-        if args.MSA_start: zero_shot_run_parameters += "--MSA_start {} ".format(args.MSA_start)
+-        if args.MSA_end: zero_shot_run_parameters += "--MSA_end {} ".format(args.MSA_end)
+-        os.system("python zero_shot_fitness_esm.py "+zero_shot_run_parameters)
+-    elif model_config['aa_embeddings']=="ESM1v":
+-        zero_shot_run_parameters = "--model-location {} {} {} {} {} \
+-            --model_type ESM1v \
+-            --dms-input {} \
+-            --dms-output {} \
+-            --target_seq {} \
+-            --scoring-strategy {} \
+-            --scoring-window optimal".format(
+-                model_location_mapping["ESM1v"],
+-                model_location_mapping["ESM1v-2"],
+-                model_location_mapping["ESM1v-3"],
+-                model_location_mapping["ESM1v-4"],
+-                model_location_mapping["ESM1v-5"],
+-                args.assay_data_location,
+-                zero_shot_scores_folder + os.sep + "ESM1v",
+-                args.target_seq,
+-                args.ESM_zero_shot_scoring_strategy
+-            )
+-        os.system("python zero_shot_fitness_esm.py "+zero_shot_run_parameters)
+-    elif model_config['aa_embeddings']=="Tranception":
+-        DMS_data_folder = os.sep.join(args.assay_data_location.split(os.sep)[:-1])
+-        DMS_file_name = args.assay_data_location.split(os.sep)[-1]
+-        MSA_data_folder = os.sep.join(args.MSA_location.split(os.sep)[:-1])
+-        MSA_filename = args.MSA_location.split(os.sep)[-1]
+-        zero_shot_run_parameters = "--checkpoint {} \
+-            --DMS_data_folder {} \
+-            --DMS_file_name {} \
+-            --output_scores_folder {} \
+-            --inference_time_retrieval \
+-            --batch_size_inference {} \
+-            --target_seq {} \
+-            --MSA_folder {} \
+-            --MSA_filename {} \
+-            --MSA_weights_folder {} \
+-            --MSA_weight_file_name {} ".format(
+-                model_location_mapping["Tranception"],
+-                DMS_data_folder,
+-                DMS_file_name,
+-                zero_shot_scores_folder + os.sep + "Tranception",
+-                args.batch_size,
+-                args.target_seq,
+-                MSA_data_folder,
+-                MSA_filename,
+-                args.MSA_weights_folder,
+-                weight_file_name
++        if not os.path.exists(args.sequence_embeddings_folder): os.mkdir(args.sequence_embeddings_folder)
++        args.sequence_embeddings_folder = args.sequence_embeddings_folder + os.sep + model_config['aa_embeddings']
++    embeddings_location = args.sequence_embeddings_folder + os.sep + DMS_id + ".h5"
++    if args.MSA_weights_folder is None:
++        args.MSA_weights_folder = args.proteinnpt_data_location + os.sep + "data/MSA/MSA_weights"
++    weight_file_name = DMS_id + '_theta_' + str(args.MSA_sequence_weights_theta) + ".npy"
++    if not os.path.exists(embeddings_location) and model_config['aa_embeddings']!="One_hot_encoding":
++        print("#"*100+"\n Step1: Computing sequence embeddings for the {} assay \n".format(DMS_id)+"#"*100)
++        #Sequence weights computation
++        MSA_sequence_weights_location = args.MSA_weights_folder + os.sep + weight_file_name
++
++        # Note that these weights for MSAT aren't used because it recomputes weights on the hhfiltered set
++        if not os.path.exists(MSA_sequence_weights_location) and model_config['aa_embeddings'] in ["Tranception"]: #["MSA_Transformer","Tranception"]: #Doing preprocessing for Tranception since used in zero-shot prediction (Step2)
++            print("Computing MSA sequence weights")
++            _ = MSA_processing(
++                    MSA_location=args.MSA_location,
++                    theta=args.MSA_sequence_weights_theta,
++                    use_weights=True,
++                    weights_location=MSA_sequence_weights_location
+             )
+-        if args.MSA_start: zero_shot_run_parameters += "--MSA_start {} ".format(args.MSA_start)
+-        if args.MSA_end: zero_shot_run_parameters += "--MSA_end {} ".format(args.MSA_end)
+-        if args.indel_mode: zero_shot_run_parameters += "--indel_mode --clustal_omega_location {} ".format(args.proteinnpt_data_location + os.sep + "utils/clustal-omega")
+-        os.system("python zero_shot_fitness_tranception.py "+zero_shot_run_parameters)
+-    #Merge zero-shot files
+-    merge = assay_data.copy()[['mutant','mutated_sequence']]
+-    merge['mutated_sequence_with_gaps'] = merge['mutated_sequence']
+-    merge['mutated_sequence'] = merge['mutated_sequence'].apply(lambda x: x.replace("-",""))
+-    num_mutants = len(merge)
+-    model_list = ["Tranception", "ESM1v", "MSA_Transformer"] if not args.indel_mode else ["Tranception"]
+-    for model_name in model_list:
+-        model_score_file_path = zero_shot_scores_folder + os.sep + model_name + os.sep + DMS_id + ".csv"
+-        if os.path.exists(model_score_file_path):
+-            scores = pd.read_csv(model_score_file_path,low_memory=False)
+-            if 'mutated_sequence' in scores: 
+-                scores = scores[['mutated_sequence',score_name_mapping_original_names[model_name]]].drop_duplicates()
+-                merge_key = 'mutated_sequence'
+-            else:
+-                scores = scores[['mutant',score_name_mapping_original_names[model_name]]].drop_duplicates()
+-                merge_key = 'mutant'
+-            scores.columns = [merge_key, score_name_mapping_clean_names[model_name]]
+-            merge = pd.merge(merge,scores,on=merge_key,how='inner')
+-            assert num_mutants==len(merge), "Some mutants were dropped during the merge: {} (pre-merge) vs {} (post-merge)".format(num_mutants,len(merge))
+-    merge.to_csv(zero_shot_fitness_predictions_location, index=False)
+ 
+-else:
+-    print("#"*100+"\n Step2: Found zero-shot fitness predictions for the {} assay on disk \n".format(DMS_id)+"#"*100)
++        embedding_model = model_config['aa_embeddings']
++        print("Using embedding model: {}".format(embedding_model))
++        if embedding_model == "MSA_Transformer":
++            msat_kwargs = {
++                "num_MSA_sequences": args.embeddings_MSAT_num_MSA_sequences,
++                "MSA_location": args.MSA_location,
++                "MSA_weight_data_folder": args.MSA_weights_folder,
++                "weight_file_name": weight_file_name,
++                "path_to_hhfilter": args.proteinnpt_data_location + os.sep + "utils/hhfilter",
++            }
++
++        run_embeddings(
++            input_data_location=args.assay_data_location,
++            output_data_location=args.sequence_embeddings_folder,
++            model_type=embedding_model,
++            model_location=model_location_mapping[embedding_model],
++            max_positions=args.max_positions,
++            batch_size=args.batch_size,
++            target_seq=args.target_seq,
++            MSA_start=args.MSA_start, # If not set, this will be None
++            MSA_end=args.MSA_end,
++            path_to_clustalomega=os.path.join(args.proteinnpt_data_location, "utils/clustal-omega") if args.indel_mode else None,
++            use_cpu=args.use_cpu,
++            **msat_kwargs,
++        )
++
++    elif model_config['aa_embeddings'] == "One_hot_encoding":
++        print("#"*100+"\n Step1: Model uses OHE sequence representation - Skipping embedding computation \n"+"#"*100)
++    else:
++        print("#"*100+"\n Step1: Found embeddings for the {} assay on disk \n".format(DMS_id)+"#"*100)
++
++    # Step 2: Zero-shot fitness prediction
++    if args.zero_shot_predictions_folder is None:
++        args.zero_shot_predictions_folder = args.proteinnpt_data_location + os.sep + "data" + os.sep + "zero_shot_fitness_predictions"
++    else:
++        if not os.path.exists(args.zero_shot_predictions_folder): os.mkdir(args.zero_shot_predictions_folder)
++    zero_shot_scores_folder = args.zero_shot_predictions_folder + os.sep + "indels" if args.indel_mode else args.zero_shot_predictions_folder + os.sep + "substitutions"
++    zero_shot_fitness_predictions_location = zero_shot_scores_folder + os.sep + DMS_id + ".csv"
++    score_name_mapping_original_names = {
++            "Tranception" : "avg_score",
++            "ESM1v" : "Ensemble_ESM1v",
++            "MSA_Transformer" : "esm_msa1b_t12_100M_UR50S_ensemble"
++        }
++    score_name_mapping_clean_names = {
++            "Tranception" : "Tranception_L",
++            "ESM1v" : "ESM1v_ensemble",
++            "MSA_Transformer" : "MSA_Transformer_ensemble"
++        }
++    if os.path.exists(zero_shot_fitness_predictions_location):
++        zero_shot_file = pd.read_csv(zero_shot_fitness_predictions_location)
++        if model_config['aa_embeddings'] in score_name_mapping_clean_names:
++            zero_shot_model_computed = score_name_mapping_clean_names[model_config['aa_embeddings']] in zero_shot_file.columns
++        elif model_config['aa_embeddings']=="One_hot_encoding":
++            zs_model_name = model_config["model_type"].split("_pred")[0]
++            zero_shot_model_computed = zs_model_name in zero_shot_file.columns
++        else:
++            zero_shot_model_computed=False
++    if model_config['augmentation'] == "None" or (model_config['aa_embeddings'] in ["MSA_Transformer","ESM1v"] and args.indel_mode):
++        print("#"*100+"\n Step2: No zero-shot fitness predictions used for the {} assay \n".format(DMS_id)+"#"*100)
++    elif not os.path.exists(zero_shot_fitness_predictions_location) or not zero_shot_model_computed:
++        print("#"*100+"\n Step2: Computing zero-shot fitness predictions for the {} assay \n".format(DMS_id)+"#"*100)
++        if model_config['aa_embeddings']=="MSA_Transformer":
++            zero_shot_run_parameters = "--model-location {} \
++                --model_type MSA_Transformer \
++                --dms-input {} \
++                --dms-output {} \
++                --scoring-strategy {} \
++                --msa-path {} \
++                --target_seq {} \
++                --msa-weights-folder {} \
++                --weight_file_name {} \
++                --seeds 1 2 3 4 5 ".format(
++                        model_location_mapping[model_config['aa_embeddings']],
++                        args.assay_data_location,
++                        zero_shot_scores_folder + os.sep + "MSA_Transformer",
++                        args.ESM_zero_shot_scoring_strategy,
++                        args.MSA_location,
++                        args.target_seq,
++                        args.MSA_weights_folder,
++                        weight_file_name,
++                    )
++            if args.MSA_start: zero_shot_run_parameters += "--MSA_start {} ".format(args.MSA_start)
++            if args.MSA_end: zero_shot_run_parameters += "--MSA_end {} ".format(args.MSA_end)
++        elif model_config['aa_embeddings']=="ESM1v":
++            zero_shot_run_parameters = "--model-location {} {} {} {} {} \
++                --model_type ESM1v \
++                --dms-input {} \
++                --dms-output {} \
++                --target_seq {} \
++                --scoring-strategy {} \
++                --scoring-window optimal".format(
++                    model_location_mapping["ESM1v"],
++                    model_location_mapping["ESM1v-2"],
++                    model_location_mapping["ESM1v-3"],
++                    model_location_mapping["ESM1v-4"],
++                    model_location_mapping["ESM1v-5"],
++                    args.assay_data_location,
++                    zero_shot_scores_folder + os.sep + "ESM1v",
++                    args.target_seq,
++                    args.ESM_zero_shot_scoring_strategy
++                )
++        elif model_config['aa_embeddings']=="Tranception":
++            DMS_data_folder = os.sep.join(args.assay_data_location.split(os.sep)[:-1])
++            DMS_file_name = args.assay_data_location.split(os.sep)[-1]
++            MSA_data_folder = os.sep.join(args.MSA_location.split(os.sep)[:-1])
++            MSA_filename = args.MSA_location.split(os.sep)[-1]
++            zero_shot_run_parameters = "--checkpoint {} \
++                --DMS_data_folder {} \
++                --DMS_file_name {} \
++                --output_scores_folder {} \
++                --inference_time_retrieval \
++                --batch_size_inference {} \
++                --target_seq {} \
++                --MSA_folder {} \
++                --MSA_filename {} \
++                --MSA_weights_folder {} \
++                --MSA_weight_file_name {} ".format(
++                    model_location_mapping["Tranception"],
++                    DMS_data_folder,
++                    DMS_file_name,
++                    zero_shot_scores_folder + os.sep + "Tranception",
++                    args.batch_size,args.target_seq,
++                    MSA_data_folder,
++                    MSA_filename,
++                    args.MSA_weights_folder,
++                    weight_file_name
++                )
++            if args.MSA_start: zero_shot_run_parameters += "--MSA_start {} ".format(args.MSA_start)
++            if args.MSA_end: zero_shot_run_parameters += "--MSA_end {} ".format(args.MSA_end)
++            if args.indel_mode: zero_shot_run_parameters += "--indel_mode --clustal_omega_location {} ".format(args.proteinnpt_data_location + os.sep + "utils/clustal-omega")
+ 
++        subprocess.run("python zero_shot_fitness_esm.py "+zero_shot_run_parameters, check=True, shell=True)
+ 
+-print("#"*100+"\n Step3: Training the {} model on the {} assay \n".format(model_name,DMS_id)+"#"*100)
+-if args.indel_mode and model_config['aa_embeddings'] in ['ESM1v','MSA_Transformer']: model_config['augmentation'] = "None"
+-MSA_data_folder = os.sep.join(args.MSA_location.split(os.sep)[:-1]) if args.MSA_location else None
+-training_run_parameters = "--data_location {} \
+-    --assay_data_location {} \
+-    --model_config_location {} \
+-    --fold_variable_name {} \
+-    --target_config_location {} \
+-    --zero_shot_fitness_predictions_location {} \
+-    --training_fp16 \
+-    --sequence_embeddings_folder {} \
+-    --MSA_data_folder {} \
+-    --MSA_location {} \
+-    --MSA_weight_data_folder {} \
+-    --MSA_sequence_weights_filename {} \
+-    --target_seq {} \
+-    --test_fold_index {} \
+-    --augmentation {} \
+-    --model_name_suffix {} ".format(
+-        args.proteinnpt_data_location,
+-        args.assay_data_location,
+-        args.model_config_location,
+-        args.fold_variable_name,
+-        args.target_config_location,
+-        zero_shot_scores_folder,
+-        args.sequence_embeddings_folder,
+-        MSA_data_folder,
+-        args.MSA_location,
+-        args.MSA_weights_folder,
+-        weight_file_name,
+-        args.target_seq,
+-        args.test_fold_index,
+-        model_config['augmentation'],
+-        args.model_name_suffix   
+-    )
+-if args.MSA_start: training_run_parameters += "--MSA_start {} ".format(args.MSA_start)
+-if args.MSA_end: training_run_parameters += "--MSA_end {} ".format(args.MSA_end) 
+-if args.indel_mode: training_run_parameters += "--indel_mode"
+-os.system("python train.py "+training_run_parameters)
+\ No newline at end of file
++        #Merge zero-shot files
++        merge = assay_data.copy()[['mutant','mutated_sequence']]
++        merge['mutated_sequence_with_gaps'] = merge['mutated_sequence']
++        merge['mutated_sequence'] = merge['mutated_sequence'].apply(lambda x: x.replace("-",""))
++        num_mutants = len(merge)
++        model_list = ["Tranception", "ESM1v", "MSA_Transformer"] if not args.indel_mode else ["Tranception"]
++        for model_name in model_list:
++            model_score_file_path = zero_shot_scores_folder + os.sep + model_name + os.sep + DMS_id + ".csv"
++            if os.path.exists(model_score_file_path):
++                scores = pd.read_csv(model_score_file_path,low_memory=False)
++                if 'mutated_sequence' in scores:
++                    scores = scores[['mutated_sequence',score_name_mapping_original_names[model_name]]].drop_duplicates()
++                    merge_key = 'mutated_sequence'
++                else:
++                    scores = scores[['mutant',score_name_mapping_original_names[model_name]]].drop_duplicates()
++                    merge_key = 'mutant'
++                scores.columns = [merge_key, score_name_mapping_clean_names[model_name]]
++                merge = pd.merge(merge,scores,on=merge_key,how='inner')
++                assert num_mutants==len(merge), "Some mutants were dropped during the merge: {} (pre-merge) vs {} (post-merge)".format(num_mutants,len(merge))
++        merge.to_csv(zero_shot_fitness_predictions_location, index=False)
++
++    else:
++        print("#"*100+"\n Step2: Found zero-shot fitness predictions for the {} assay on disk \n".format(DMS_id)+"#"*100)
++
++
++    print("#"*100+"\n Step3: Training the {} model on the {} assay \n".format(model_name,DMS_id)+"#"*100)
++    if args.indel_mode and model_config['aa_embeddings'] in ['ESM1v','MSA_Transformer']: model_config['augmentation'] = "None"
++    MSA_data_folder = os.sep.join(args.MSA_location.split(os.sep)[:-1]) if args.MSA_location else None
++    training_run_parameters = "--data_location {} \
++        --assay_data_location {} \
++        --model_config_location {} \
++        --fold_variable_name {} \
++        --target_config_location {} \
++        --zero_shot_fitness_predictions_location {} \
++        --training_fp16 \
++        --sequence_embeddings_folder {} \
++        --MSA_data_folder {} \
++        --MSA_location {} \
++        --MSA_weight_data_folder {} \
++        --MSA_sequence_weights_filename {} \
++        --target_seq {} \
++        --test_fold_index {} \
++        --augmentation {} \
++        --model_name_suffix {} ".format(
++            args.proteinnpt_data_location,
++            args.assay_data_location,
++            args.model_config_location,
++            args.fold_variable_name,
++            args.target_config_location,
++            zero_shot_scores_folder,
++            args.sequence_embeddings_folder,
++            MSA_data_folder,
++            args.MSA_location,
++            args.MSA_weights_folder,
++            weight_file_name,
++            args.target_seq,
++            args.test_fold_index,
++            model_config['augmentation'],
++            args.model_name_suffix
++        )
++    if args.MSA_start: training_run_parameters += "--MSA_start {} ".format(args.MSA_start)
++    if args.MSA_end: training_run_parameters += "--MSA_end {} ".format(args.MSA_end)
++    if args.indel_mode: training_run_parameters += "--indel_mode"
++    subprocess.run("python train.py "+training_run_parameters, check=True, shell=True)
+\ No newline at end of file
+diff --git a/scripts/pipeline.sh b/scripts/pipeline.sh
+index cce8d7b..df99bcc 100644
+--- a/scripts/pipeline.sh
++++ b/scripts/pipeline.sh
+@@ -1,7 +1,6 @@
+-export proteinnpt_data_path="Replace this string with the path to the folder where you downloaded the core ProteinNPT files (ProteinNPT_data.zip)"
+-export proteinnpt_repo_path="Replace this string with the path to the root of your local copy of the ProteinNPT folder"
+-source activate proteinnpt_env
+-#source $proteinnpt_data_path/proteinnpt_env/bin/activate #Uncomment if using python venv instead of conda
++source config.sh  # To get $proteinnpt_data_path
++conda activate proteinnpt_env
++#source $proteinnpt_data_path/proteinnpt_env/bin/activate # Uncomment if using python venv instead of conda
+ 
+ export assay_data_location="Replace this string with the path to the assay data"
+ export MSA_location="Replace this string with the path to the MSA data"
+diff --git a/scripts/setup.sh b/scripts/setup.sh
+index bfb3250..ff356bb 100644
+--- a/scripts/setup.sh
++++ b/scripts/setup.sh
+@@ -1,6 +1,4 @@
+-# This setup file should be run only once and will setup the conda environment and download pretrained protein models checkpoints. Only the next two lines should be updated based on your particular setup
+-export proteinnpt_data_path="Replace this string with the path to the folder where you downloaded the core ProteinNPT files (ProteinNPT_data.zip)"
+-export proteinnpt_repo_path="Replace this string with the path to the root of your local copy of the ProteinNPT folder"
++source config.sh  # To get the paths to $proteinnpt_data_path and $proteinnpt_repo_path
+ 
+ # Environment setup - Conda
+ conda env create -f $proteinnpt_repo_path/proteinnpt_env.yml
+diff --git a/scripts/train.py b/scripts/train.py
+index 69ff180..3b62c18 100644
+--- a/scripts/train.py
++++ b/scripts/train.py
+@@ -26,10 +26,10 @@ def setup_config_and_paths(args):
+             if args.__dict__[key] is None:
+                 args.__dict__[key] = args.main_config[key]
+                 args_setup_from_config.add(key)
+-    
++
+     # File paths config
+     for local_path in ['embedding_model_location','MSA_data_folder','MSA_weight_data_folder','path_to_hhfilter']:
+-        if getattr(args, local_path) and local_path in args_setup_from_config: 
++        if getattr(args, local_path) and local_path in args_setup_from_config:
+             setattr(args, local_path, args.data_location + os.sep + getattr(args, local_path))
+     if not os.path.exists(args.data_location + os.sep + 'model_predictions'): os.mkdir(args.data_location + os.sep + 'model_predictions')
+     if not os.path.exists(args.data_location + os.sep + 'checkpoint'): os.mkdir(args.data_location + os.sep + 'checkpoint')
+@@ -100,7 +100,7 @@ def log_performance_fold(args,target_names,test_eval_results,trainer_final_statu
+     test_logs['Test total loss per seq.'] = test_eval_results['eval_total_loss'] / normalization
+     spearmans = {}
+     num_obs_spearmans = {}
+-    for target_name in target_names: 
++    for target_name in target_names:
+         if args.target_config[target_name]["dim"]==1:
+             spearmans[target_name] = pnpt_spearmanr(test_eval_results['output_scores']['predictions_'+target_name], test_eval_results['output_scores']['labels_'+target_name])
+         else:
+@@ -147,7 +147,7 @@ def log_performance_all_folds(args,target_names,all_test_predictions_across_fold
+                 loss = CrossEntropyLoss(reduction="mean")(torch.tensor(predictions_np).view(-1, args.target_config[target_name]["dim"]), torch.tensor(all_test_predictions_across_folds['labels_'+target_name][~missing_mask]).view(-1).long()).item()
+                 loss_standardized = None
+                 spearman = pnpt_spearmanr(all_test_predictions_across_folds['predictions_'+target_name].apply(lambda x: x[-1]), all_test_predictions_across_folds['labels_'+target_name])
+-                spearman_standardized = None 
++                spearman_standardized = None
+             num_obs_spearman = pnpt_count_non_nan(all_test_predictions_across_folds['labels_'+target_name])
+             spearman_std_dev = np.array(spearmans_across_folds[target_name]).std()
+             perf += ("," + str(loss) +","+str(spearman) + ","+ str(spearman_std_dev) + "," + str(num_obs_spearman) + "," + str(loss_standardized) +","+str(spearman_standardized))
+@@ -247,12 +247,23 @@ def main(args):
+         MSA_start_position = args.MSA_start
+         MSA_end_position = args.MSA_end
+     train_data, val_data, test_data, target_processing = get_train_val_test_data(args = args, assay_file_names = assay_file_names)
+-    MSA_sequences, MSA_weights = process_MSA(args, MSA_filename, MSA_weights_filename) if args.aa_embeddings=="MSA_Transformer" else (None, None)
++    if args.aa_embeddings == "MSA_Transformer":
++        MSA_sequences, MSA_weights = process_MSA(
++            MSA_data_folder=args.MSA_data_folder,
++            MSA_weight_data_folder=args.MSA_weight_data_folder,
++            MSA_filename=MSA_filename,
++            MSA_weights_filename=MSA_weights_filename,
++            path_to_hhfilter=args.path_to_hhfilter
++        )
++    else:
++        MSA_sequences = None
++        MSA_weights = None
+     
+     if args.use_wandb:
+         combined_dict = {**vars(args), "parameter_count": sum(p.numel() for p in model.parameters()), "assay_id": assay_id, "UniProt_id": UniProt_id}
+         wandb.init(project=os.getenv("WANDB_PROJECT"), config=combined_dict, name=model_name, dir=args.wandb_location, save_code=True)
+     
++    print("tmp: Starting training")
+     # Define trainer
+     trainer = Trainer(
+             model= model,
+@@ -283,7 +294,7 @@ def main(args):
+     print('Final training step: {} | Num training epochs: {} | Total train time: {} hrs'.format(trainer_final_status['total_training_steps'], trainer_final_status['total_training_epochs'], str(trainer_final_status['total_train_time'] / 3600)))
+ 
+     # Eval performance on test set & log to wandb & persist predictions / performance to disk
+-    if args.model_type=="ProteinNPT":
++    if args.model_type == "ProteinNPT":
+             test_eval_results = trainer.eval(
+                 test_data=test_data,
+                 train_data=train_data,
+@@ -347,7 +358,7 @@ def main(args):
+     #Model parameters
+     parser.add_argument('--model_type', default=None, type=str, help='Model type')
+     parser.add_argument('--model_name_suffix', default=None, type=str, help='Suffix to reference model')
+-    parser.add_argument('--sequence_embeddings_folder', default=None, type=str, help='Location of stored embeddings on disk')
++    parser.add_argument('--sequence_embeddings_folder', required=True, type=str, help='Location of stored embeddings on disk')
+     parser.add_argument('--embedding_model_location', default=None, type=str, help='Location of model used to embed protein sequences')
+     parser.add_argument('--aa_embeddings', default=None, type=str, help='Type of protein sequence embedding [MSA_Transformer|Tranception|ESM1v|Linear_embedding]')
+     parser.add_argument('--long_sequences_slicing_method', default='center', type=str, help='Method to slice long sequences [rolling, center, left]. We do not slice OHE input')
+@@ -402,7 +413,8 @@ def main(args):
+     args = parser.parse_args()
+     
+     setup_config_and_paths(args)
+-    
++    print("Embeddings folder:", args.embedding_model_location)
++
+     if (args.MSA_start is None) or (args.MSA_end is None):
+         if args.MSA_location is not None: print("MSA start and end not provided -- Assuming the MSA is covering the full WT sequence")
+         args.MSA_start = 1
+diff --git a/scripts/zero_shot_fitness_esm.py b/scripts/zero_shot_fitness_esm.py
+index 2da933d..8064a8b 100644
+--- a/scripts/zero_shot_fitness_esm.py
++++ b/scripts/zero_shot_fitness_esm.py
+@@ -20,24 +20,10 @@ def standardization(x):
+     """Assumes input is numpy array or pandas series"""
+     return (x - x.mean()) / x.std()
+ 
+-def read_msa(filename: str, nseq: int, sampling_strategy: str, random_seed: int, weight_filename: str, filter_msa: bool, path_to_hhfilter: str, hhfilter_min_cov=75, hhfilter_max_seq_id=100, hhfilter_min_seq_id=0) -> List[Tuple[str, str]]:
+-    """ Reads the first nseq sequences from an MSA file, automatically removes insertions."""
++def sample_msa(filename: str, nseq: int, sampling_strategy: str, random_seed: int, weight_filename=None, processed_msa=None):
++    """Reads the first nseq sequences from an MSA file, automatically removes insertions."""
+     print("Sampling sequences from MSA with strategy: "+str(sampling_strategy))
+     random.seed(random_seed)
+-    if filter_msa:
+-        input_folder = '/'.join(filename.split('/')[:-1])
+-        msa_name = filename.split('/')[-1].split('.')[0]
+-        if not os.path.isdir(input_folder+os.sep+'preprocessed'):
+-            os.mkdir(input_folder+os.sep+'preprocessed')
+-        if not os.path.isdir(input_folder+os.sep+'hhfiltered'):
+-            os.mkdir(input_folder+os.sep+'hhfiltered')
+-        preprocessed_filename = input_folder+os.sep+'preprocessed'+os.sep+msa_name
+-        os.system('cat '+filename+' | tr  "."  "-" >> '+preprocessed_filename+'.a2m')
+-        os.system('dd if='+preprocessed_filename+'.a2m of='+preprocessed_filename+'_UC.a2m conv=ucase')
+-        output_filename = input_folder+os.sep+'hhfiltered'+os.sep+msa_name+'_hhfiltered_cov_'+str(hhfilter_min_cov)+'_maxid_'+str(hhfilter_max_seq_id)+'_minid_'+str(hhfilter_min_seq_id)+'.a2m'
+-        os.system(path_to_hhfilter+os.sep+'bin/hhfilter -cov '+str(hhfilter_min_cov)+' -id '+str(hhfilter_max_seq_id)+' -qid '+str(hhfilter_min_seq_id)+' -i '+preprocessed_filename+'_UC.a2m -o '+output_filename)
+-        filename = output_filename
+-
+     if sampling_strategy=='first_x_rows':
+         msa = [
+             (record.description, str(record.seq))
+@@ -50,34 +36,78 @@ def read_msa(filename: str, nseq: int, sampling_strategy: str, random_seed: int,
+         nseq = min(len(msa),nseq)
+         msa = random.sample(msa, nseq)
+     elif sampling_strategy=='sequence-reweighting':
+-        MSA = MSA_processing(
+-            MSA_location=filename,
+-            use_weights=True,
+-            weights_location=weight_filename
+-        )
+-        print("Neff: "+str(MSA.Neff))
+-        print("Name of focus_seq: "+str(MSA.focus_seq_name))
+-        all_sequences_msa=[]
++        # If MSA has already been processed, just use it here
++        if processed_msa is None:
++            if weight_filename is None:
++                print("Need weight filename if using sequence-reweighting sample strategy")
++            MSA = MSA_processing(
++                MSA_location=filename,
++                use_weights=True,
++                weights_location=weight_filename
++            )
++            print("Name of focus_seq: "+str(MSA.focus_seq_name))
++        else:
++            MSA = processed_msa
++
+         weights=[]
+         msa=[]
+-        for seq_name in MSA.raw_seq_name_to_sequence.keys():
+-            if seq_name == MSA.focus_seq_name:
+-                msa.append((seq_name,MSA.raw_seq_name_to_sequence[seq_name]))
+-                del MSA.seq_name_to_weight[seq_name]
+-            else:
+-                if seq_name in MSA.seq_name_to_weight:
+-                    all_sequences_msa.append((seq_name,MSA.raw_seq_name_to_sequence[seq_name]))
+-                    weights.append(MSA.seq_name_to_weight[seq_name])
+-        if len(all_sequences_msa)>0:
+-            weights = np.array(weights) / np.array(list(MSA.seq_name_to_weight.values())).sum()
+-            print("Check sum weights MSA: "+str(weights.sum()))
+-            msa.extend(random.choices(all_sequences_msa, weights=weights, k=nseq-1))
++
++        # Make sure we always keep the WT in the subsampled MSA
++        msa = [(MSA.focus_seq_name,MSA.raw_seq_name_to_sequence[MSA.focus_seq_name])]
++
++        non_wt_weights = np.array([w for k, w in MSA.seq_name_to_weight.items() if k != MSA.focus_seq_name])
++        non_wt_sequences = [(k, s) for k, s in MSA.seq_name_to_sequence.items() if k != MSA.focus_seq_name]
++        non_wt_weights = non_wt_weights / non_wt_weights.sum() # Renormalize weights
++
++        # Sample the rest of the MSA according to their weights
++        if len(non_wt_sequences) > 0:
++            msa.extend(random.choices(non_wt_sequences, weights=non_wt_weights, k=nseq-1))
++
++        # This is intended to filter out weights, but after hhfiltering our msa is already the correct set
++        # for seq_name in MSA.raw_seq_name_to_sequence.keys():
++        #     if seq_name == MSA.focus_seq_name:
++        #         msa.append((seq_name,MSA.raw_seq_name_to_sequence[seq_name]))
++        #         del MSA.seq_name_to_weight[seq_name]
++        #     else:
++        #         if seq_name in MSA.seq_name_to_weight:
++        #             all_sequences_msa.append((seq_name,MSA.raw_seq_name_to_sequence[seq_name]))
++        #             weights.append(MSA.seq_name_to_weight[seq_name])
++        # if len(all_sequences_msa)>0:
++        #     weights = np.array(weights) / np.array(list(MSA.seq_name_to_weight.values())).sum()
++        #     print("Check sum weights MSA: "+str(weights.sum()))
++        #     msa.extend(random.choices(all_sequences_msa, weights=weights, k=nseq-1))
++
++        print("Check sum weights MSA: "+str(non_wt_weights.sum()))
++
+     msa = [(desc, seq.upper()) for desc, seq in msa]
+     print("First 10 elements of sampled MSA: ")
+     print(msa[:10])
+     #[('CCDB_ECOLI/1-101', 'MQFKVYTYKRESRYRLFVDVQSDIIDTPGRRMVIPLASARLLSDKVSRELYPVVHIGDESWRMMTTDMASVPVSVIGEEVADLSHRENDIKNAINLMFWGI'), ('UniRef100_A0A6M6E7X5/22-113', '.........--GKNIPCVILQNNKGNASNTTIIVPIIAESNYIKSSPTYVHIRKYNLDEDSIAVCDQIRVIDKKRITKAAKALSEEKKQIEDGI--.....'), ('UniRef100_A0A6M6E7X5/144-229', '.........--EKAFPALVIGRDNK-EKQTLLIAPLLQAKKR.YLLPTQAKIPNGCLSDGKILSLEQMRVIDKSRIVSQNIKFSDTLLEIE-----.....'), ('UniRef100_A0A6M6E7X5/256-332', '........SEQRGLRPCLIIQNDTGNKLSTTIVLPLTSSVPKVDLVVNVIVKQEEFVGRSSIVLCNQIQTIDSSRIKQV-----------------.....'), ('UniRef100_A0A6M6E7X5/406-489', '.........------PAVCIQNSYGNHYSVLIVAPLISSKRT.RLLPTQVKIDFNDSGELMVAALEQVRVIDKRRVVDVLDELPEEKKEILNAYCVS....'), ('UniRef100_UPI000B4B97B8/22-115', '........SEQKGERPAVVVQNDFGNRASTTLIVPLTSNFKT.-EIPTHVNISSKELGVDSIALCEQVRVISKERIIQVRTILSKEVKEIDDALLISF...'), ('UniRef100_UPI000B4B97B8/135-229', '........NEQKGNRPAIVIQNDVGNKYSTLIVAPLQLKKKK.-RLPTHVEIPGNLISKDSIALLEQVRVVDKERVTGVVQNLTEEFKNIEEALLVSF...'), ('UniRef100_UPI0009C11867/73-161', '.......GSEQNGLRPVVIIQNNLGNKYGTLIVAPITSQDKK.-DLPVHSEIYNNSLEKDSTILLEQVTTIDKNKVKEFVGHLTRNEKKLNIALAR.....'), ('UniRef100_F4A1A6/19-111', '........SEQGGVRPVLVVQNDIGNKYSTVIVAAITSQINK.AKLPTHVEISASDYGKDSVILLEQIRTIDKKRLREKIGYLSAETKKVDEALQISF...'), ('UniRef100_A0A150FSC1/22-114', '........SEQGGVRPVLVIQNDIGNKYSTVIVAAITSQINK.AKLPIHIEIKANGLNKDSVVLLEQIRTIDKKRLREKIGHFDEEKEKVDQAIQISL...')]
+     return msa
+ 
++def process_msa(filename: str, weight_filename: str, filter_msa: bool, path_to_hhfilter: str, hhfilter_min_cov=75, hhfilter_max_seq_id=100, hhfilter_min_seq_id=0) -> List[Tuple[str, str]]:
++    if filter_msa:
++        input_folder = '/'.join(filename.split('/')[:-1])
++        msa_name = filename.split('/')[-1].split('.')[0]
++        if not os.path.isdir(input_folder+os.sep+'preprocessed'):
++            os.mkdir(input_folder+os.sep+'preprocessed')
++        if not os.path.isdir(input_folder+os.sep+'hhfiltered'):
++            os.mkdir(input_folder+os.sep+'hhfiltered')
++        preprocessed_filename = input_folder+os.sep+'preprocessed'+os.sep+msa_name
++        os.system('cat '+filename+' | tr  "."  "-" >> '+preprocessed_filename+'.a2m')
++        os.system('dd if='+preprocessed_filename+'.a2m of='+preprocessed_filename+'_UC.a2m conv=ucase')
++        output_filename = input_folder+os.sep+'hhfiltered'+os.sep+msa_name+'_hhfiltered_cov_'+str(hhfilter_min_cov)+'_maxid_'+str(hhfilter_max_seq_id)+'_minid_'+str(hhfilter_min_seq_id)+'.a2m'
++        os.system(path_to_hhfilter+os.sep+'bin/hhfilter -cov '+str(hhfilter_min_cov)+' -id '+str(hhfilter_max_seq_id)+' -qid '+str(hhfilter_min_seq_id)+' -i '+preprocessed_filename+'_UC.a2m -o '+output_filename)
++        filename = output_filename
++
++    MSA = MSA_processing(
++        MSA_location=filename,
++        use_weights=True,
++        weights_location=weight_filename
++    )
++    print("Name of focus_seq: "+str(MSA.focus_seq_name))
++    return MSA
++
+ def create_parser():
+     parser = argparse.ArgumentParser(
+         description="Label a deep mutational scan with predictions from an ensemble of ESM-1v models."  # noqa
+@@ -85,9 +115,9 @@ def create_parser():
+     parser.add_argument(
+         "--model_type",
+         type=str,
+-        help="MSA_transformer Vs ESM1v Vs ESM1b",
+-        default="MSA_transformer",
++        default="MSA_Transformer",
+         nargs="+",
++        choices=["MSA_Transformer", "ESM1v", "ESM1b"],
+     )
+     parser.add_argument(
+         "--model-location",
+@@ -210,11 +240,11 @@ def create_parser():
+         help='Whether to overwrite prior scores in the dataframe'
+     )
+     #No ref file provided
+-    parser.add_argument('--target_seq', default=None, type=str, required=True, help='WT sequence mutated in the assay')
++    parser.add_argument('--target_seq', default=None, type=str, help='WT sequence mutated in the assay')
+     parser.add_argument('--weight_file_name', default=None, type=str, help='Wild type sequence mutated in the assay (to be provided if not using a reference file)')
+     parser.add_argument('--MSA_start', default=None, type=int, help='Index of first AA covered by the MSA relative to target_seq coordinates (1-indexing)')
+     parser.add_argument('--MSA_end', default=None, type=int, help='Index of last AA covered by the MSA relative to target_seq coordinates (1-indexing)')
+-    
++
+     parser.add_argument("--nogpu", action="store_true", help="Do not use GPU even if available")
+     return parser
+ 
+@@ -288,7 +318,7 @@ def main(args):
+         target_seq_start_index = row["start_idx"] if "start_idx" in mapping_protein_seq_DMS.columns and row["start_idx"]!="" else 1
+         target_seq_end_index = target_seq_start_index + len(args.sequence) 
+         
+-        if "MSA_transformer" in args.model_type:  # model_type is a list
++        if "MSA_Transformer" in args.model_type:  # model_type is a list
+             # Check MSA_filename exists (might be NaN / empty)
+             msa_filename = row["MSA_filename"]
+             if msa_filename == "":
+@@ -298,7 +328,6 @@ def main(args):
+             
+             msa_start_index = int(row["MSA_start"]) if "MSA_start" in mapping_protein_seq_DMS.columns else 1
+             msa_end_index = int(row["MSA_end"]) if "MSA_end" in mapping_protein_seq_DMS.columns else len(args.sequence)
+-            print(f"Tmp: MSA_start: {msa_start_index}, MSA_end: {msa_end_index}")
+             
+             MSA_weight_file_name = args.msa_weights_folder + os.sep + row["weight_file_name"] if ("weight_file_name" in mapping_protein_seq_DMS.columns and args.msa_weights_folder is not None) else None
+             if ((target_seq_start_index!=msa_start_index) or (target_seq_end_index!=msa_end_index)):
+@@ -340,6 +369,9 @@ def main(args):
+ 
+         if isinstance(model, MSATransformer):
+             args.offset_idx = msa_start_index
++            # Process MSA once, then sample from it
++            processed_msa = process_msa(filename=args.msa_path, weight_filename=MSA_weight_file_name, filter_msa=args.filter_msa, hhfilter_min_cov=args.hhfilter_min_cov, hhfilter_max_seq_id=args.hhfilter_max_seq_id, hhfilter_min_seq_id=args.hhfilter_min_seq_id, path_to_hhfilter=args.path_to_hhfilter)
++
+             for seed in args.seeds:
+                 if os.path.exists(args.dms_output):
+                     prior_score_df = pd.read_csv(args.dms_output)
+@@ -349,8 +381,7 @@ def main(args):
+                         continue
+                 else:
+                     prior_score_df = None 
+-                data = [read_msa(filename=args.msa_path, nseq=args.msa_samples, sampling_strategy=args.msa_sampling_strategy, random_seed=seed, weight_filename=MSA_weight_file_name,
+-                                filter_msa=args.filter_msa, hhfilter_min_cov=args.hhfilter_min_cov, hhfilter_max_seq_id=args.hhfilter_max_seq_id, hhfilter_min_seq_id=args.hhfilter_min_seq_id, path_to_hhfilter=args.path_to_hhfilter)]
++                data = [sample_msa(sampling_strategy=args.msa_sampling_strategy, filename=args.msa_path, nseq=args.msa_samples, weight_filename=MSA_weight_file_name, processed_msa=processed_msa, random_seed=seed)]
+                 assert (args.scoring_strategy in ["masked-marginals","pseudo-ppl"]), "Zero-shot scoring strategy not supported with MSA Transformer"
+ 
+                 batch_labels, batch_strs, batch_tokens = batch_converter(data)
+@@ -358,10 +389,10 @@ def main(args):
+ 
+                 if args.scoring_strategy == "masked-marginals":
+                     all_token_probs = []
+-                    for i in tqdm(range(batch_tokens.size(2))):
++                    for i in tqdm(range(batch_tokens.size(2)), desc="Scoring masked-marginals"):
+                         batch_tokens_masked = batch_tokens.clone()
+                         batch_tokens_masked[0, 0, i] = alphabet.mask_idx  # mask out first sequence
+-                        if batch_tokens.size(-1) > 1024: 
++                        if batch_tokens.size(-1) > 1024:
+                             large_batch_tokens_masked=batch_tokens_masked.clone()
+                             start, end = get_optimal_window(mutation_position_relative=i, seq_len_wo_special=len(args.sequence)+2, model_window=1024)
+                             print("Start index {} - end index {}".format(start,end))
+@@ -373,7 +404,7 @@ def main(args):
+                                 model(batch_tokens_masked.cuda())["logits"], dim=-1
+                             )
+                         all_token_probs.append(token_probs[:, 0, i-start].detach().cpu())  # vocab size
+-                    token_probs = torch.cat(all_token_probs, dim=0).unsqueeze(0) 
++                    token_probs = torch.cat(all_token_probs, dim=0).unsqueeze(0)
+                     df[f"{model_location}_seed{seed}"] = df.apply(
+                         lambda row: label_row(
+                             row[args.mutation_col], args.sequence, token_probs.detach().cpu(), alphabet, args.offset_idx
+@@ -385,7 +416,7 @@ def main(args):
+                     if 'mutated_sequence' not in df:
+                         df['mutated_sequence'] = df.progress_apply(
+                             lambda row: get_mutated_sequence(
+-                                row[args.mutant_col], args.sequence, offset_idx
++                                row[args.mutant_col], args.sequence, args.offset_idx
+                                 ),
+                             axis=1,
+                         )
+@@ -467,7 +498,7 @@ def main(args):
+             elif args.scoring_strategy == "masked-marginals":
+                 print("Scoring with masked-marginals and model {}".format(model_location))
+                 all_token_probs = []
+-                for i in tqdm(range(batch_tokens.size(1))):
++                for i in tqdm(range(batch_tokens.size(1)), desc="Scoring masked-marginals"):
+                     batch_tokens_masked = batch_tokens.clone()
+                     batch_tokens_masked[0, i] = alphabet.mask_idx
+                     if batch_tokens.size(1) > 1024 and args.scoring_window=="optimal": 
+@@ -500,7 +531,7 @@ def main(args):
+                 if 'mutated_sequence' not in df:
+                     df['mutated_sequence'] = df.progress_apply(
+                         lambda row: get_mutated_sequence(
+-                            row[args.mutant_col], args.sequence, offset_idx
++                            row[args.mutant_col], args.sequence, args.offset_idx
+                             ),
+                         axis=1,
+                     )
+@@ -519,7 +550,7 @@ def main(args):
+             model_location = model_location.split("/")[-1].split(".")[0]
+             df["Ensemble_ESM1v"] += df[model_location]
+         df["Ensemble_ESM1v"] /= len(args.model_location)
+-    elif "MSA_transformer" in args.model_type:
++    elif "MSA_Transformer" in args.model_type:
+         df[f"{model_location}_ensemble"] = 0.0
+         for seed in args.seeds:
+             df[f"{model_location}_ensemble"] += df[f"{model_location}_seed{seed}"]
+@@ -530,4 +561,4 @@ def main(args):
+ if __name__ == "__main__":
+     parser = create_parser()
+     args = parser.parse_args()
+-    main(args)
+\ No newline at end of file
++    main(args)

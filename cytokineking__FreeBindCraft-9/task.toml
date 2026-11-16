@@ -1,0 +1,62 @@
+version = "1.0"
+
+[task]
+name = "default/cytokineking__FreeBindCraft-9"
+description = "expose `target_chain` as parameter to `pr_alternative_score_interface`"
+
+[metadata]
+difficulty = "small"
+category = "bugfix"
+keywords = [
+    "FreeBindCraft",
+    "pr_diff",
+]
+
+[metadata.repo2env]
+pipeline = "pr_diff"
+pipeline_version = "0.3.0"
+repo = "cytokineking/FreeBindCraft"
+ref = "893d81703201b82d7e62ae7a33a6a9268cb08efe"
+reference = "https://github.com/cytokineking/FreeBindCraft/pull/9"
+source_access = "auto"
+built_at = "2026-11-16T03:24:01.275682+00:00"
+reward_kinds = [
+    "diff_similarity",
+]
+spec_version = "0.2.0"
+content_hash = "sha256:73b95d1d4e3a7e7bb8b2a7ec457c26c0a001fe402cab956a46d56a5d3081b1fd"
+
+[metadata.repo2env.pr_diff]
+pr_merged_at = "2025-08-31T20:21:03Z"
+diff_format = "unified"
+context_files = [
+    "functions/pr_alternative_utils.py",
+]
+
+[metadata.repo2env.reward_calibration]
+baseline_reward = 0.0
+loc_changed = 15
+difficulty = "small"
+
+[metadata.repo2env.evaluation]
+schema_version = "1"
+status = "unverified"
+stage = "generation"
+reason_codes = [
+    "validation_not_run",
+]
+detail = "Generated task; validation has not been established."
+provenance = "unknown"
+evidence = []
+
+[metadata.repo2env.reproducibility]
+mode = "local_only"
+image_ref = "python:3.12-slim"
+image_tag = "python:3.12-slim"
+image_visibility = "private"
+
+[agent]
+timeout_sec = 1800.0
+
+[verifier]
+timeout_sec = 300.0

@@ -1,0 +1,65 @@
+version = "1.0"
+
+[task]
+name = "default/RosettaCommons__rosetta-680"
+description = "Fix key map range indexing"
+
+[metadata]
+difficulty = "medium"
+category = "bugfix"
+keywords = [
+    "rosetta",
+    "pr_diff",
+]
+
+[metadata.repo2env]
+pipeline = "pr_diff"
+pipeline_version = "0.3.0"
+repo = "RosettaCommons/rosetta"
+ref = "cf532f89b6bbb7e67fd75031f3cc2aa95fb5ce19"
+reference = "https://github.com/RosettaCommons/rosetta/pull/680"
+source_access = "auto"
+built_at = "2026-11-15T22:35:08.413166+00:00"
+reward_kinds = [
+    "diff_similarity",
+]
+spec_version = "0.2.0"
+content_hash = "sha256:d774cebccd7cfe3c8c018399b905e497a2168ad86498a23c00dcdd83537de560"
+
+[metadata.repo2env.pr_diff]
+pr_merged_at = "2026-05-12T23:16:15Z"
+diff_format = "unified"
+context_files = [
+    "source/src/utility/keys/ClassKeyMap.hh",
+    "source/src/utility/keys/SmallKeyMap.hh",
+    "source/test/utility/keys/ClassKeyMap.cxxtest.hh",
+    "source/test/utility/keys/SmallKeyMap.cxxtest.hh",
+]
+
+[metadata.repo2env.reward_calibration]
+baseline_reward = 0.0
+loc_changed = 54
+difficulty = "medium"
+
+[metadata.repo2env.evaluation]
+schema_version = "1"
+status = "unverified"
+stage = "generation"
+reason_codes = [
+    "validation_not_run",
+]
+detail = "Generated task; validation has not been established."
+provenance = "unknown"
+evidence = []
+
+[metadata.repo2env.reproducibility]
+mode = "local_only"
+image_ref = "python:3.12-slim"
+image_tag = "python:3.12-slim"
+image_visibility = "private"
+
+[agent]
+timeout_sec = 1800.0
+
+[verifier]
+timeout_sec = 300.0

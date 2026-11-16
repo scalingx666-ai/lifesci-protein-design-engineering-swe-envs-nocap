@@ -1,0 +1,63 @@
+version = "1.0"
+
+[task]
+name = "default/RosettaCommons__rosetta-221"
+description = "Bugfix for RosettaCM and branched glycans"
+
+[metadata]
+difficulty = "medium"
+category = "bugfix"
+keywords = [
+    "rosetta",
+    "pr_diff",
+]
+
+[metadata.repo2env]
+pipeline = "pr_diff"
+pipeline_version = "0.3.0"
+repo = "RosettaCommons/rosetta"
+ref = "d1d7693ff7c1d8c282106c6daaed09d0aef9e291"
+reference = "https://github.com/RosettaCommons/rosetta/pull/221"
+source_access = "auto"
+built_at = "2026-11-15T22:37:42.501967+00:00"
+reward_kinds = [
+    "diff_similarity",
+]
+spec_version = "0.2.0"
+content_hash = "sha256:ab5a7731d925ccae8715611523a77ca9f5d87a69ae751d43f0de895e26392ac4"
+
+[metadata.repo2env.pr_diff]
+pr_merged_at = "2025-02-04T21:14:13Z"
+diff_format = "unified"
+context_files = [
+    "source/src/core/conformation/util.cc",
+    "source/src/protocols/hybridization/HybridizeProtocol.cc",
+]
+
+[metadata.repo2env.reward_calibration]
+baseline_reward = 0.0
+loc_changed = 78
+difficulty = "medium"
+
+[metadata.repo2env.evaluation]
+schema_version = "1"
+status = "unverified"
+stage = "generation"
+reason_codes = [
+    "validation_not_run",
+]
+detail = "Generated task; validation has not been established."
+provenance = "unknown"
+evidence = []
+
+[metadata.repo2env.reproducibility]
+mode = "local_only"
+image_ref = "python:3.12-slim"
+image_tag = "python:3.12-slim"
+image_visibility = "private"
+
+[agent]
+timeout_sec = 1800.0
+
+[verifier]
+timeout_sec = 300.0

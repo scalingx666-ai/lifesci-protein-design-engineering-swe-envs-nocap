@@ -1,0 +1,63 @@
+version = "1.0"
+
+[task]
+name = "default/001TMF__blatant-why-2"
+description = "fix data leakage bug: remove ipsae from RF features since it's the target"
+
+[metadata]
+difficulty = "easy"
+category = "bugfix"
+keywords = [
+    "blatant-why",
+    "pr_diff",
+]
+
+[metadata.repo2env]
+pipeline = "pr_diff"
+pipeline_version = "0.3.0"
+repo = "001TMF/blatant-why"
+ref = "3f392106beedb38fec0d8189f7b4601356d8ce1c"
+reference = "https://github.com/001TMF/blatant-why/pull/2"
+source_access = "auto"
+built_at = "2026-11-16T11:07:32.601164+00:00"
+reward_kinds = [
+    "diff_similarity",
+]
+spec_version = "0.2.0"
+content_hash = "sha256:3dc81ddac4762665dfef37caeb9aea29d0833d4e84345e13ccd33d7df6bf31c2"
+
+[metadata.repo2env.pr_diff]
+pr_merged_at = "2026-10-16T00:12:10Z"
+diff_format = "unified"
+context_files = [
+    "src/proteus_cli/campaign/active_learning.py",
+    "templates/.claude/mcp_servers/campaign/server.py",
+]
+
+[metadata.repo2env.reward_calibration]
+baseline_reward = 0.0
+loc_changed = 5
+difficulty = "trivial"
+
+[metadata.repo2env.evaluation]
+schema_version = "1"
+status = "unverified"
+stage = "generation"
+reason_codes = [
+    "validation_not_run",
+]
+detail = "Generated task; validation has not been established."
+provenance = "unknown"
+evidence = []
+
+[metadata.repo2env.reproducibility]
+mode = "local_only"
+image_ref = "python:3.12-slim"
+image_tag = "python:3.12-slim"
+image_visibility = "private"
+
+[agent]
+timeout_sec = 1800.0
+
+[verifier]
+timeout_sec = 300.0

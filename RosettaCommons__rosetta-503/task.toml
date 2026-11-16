@@ -1,0 +1,75 @@
+version = "1.0"
+
+[task]
+name = "default/RosettaCommons__rosetta-503"
+description = "Supporting a universal PyRosetta initialization file"
+
+[metadata]
+difficulty = "large"
+category = "bugfix"
+keywords = [
+    "rosetta",
+    "pr_diff",
+]
+
+[metadata.repo2env]
+pipeline = "pr_diff"
+pipeline_version = "0.3.0"
+repo = "RosettaCommons/rosetta"
+ref = "078f4d967cbadf98d7347ac72b9d3c03cc0fedf4"
+reference = "https://github.com/RosettaCommons/rosetta/pull/503"
+source_access = "auto"
+built_at = "2026-11-15T22:36:40.142597+00:00"
+reward_kinds = [
+    "diff_similarity",
+]
+spec_version = "0.2.0"
+content_hash = "sha256:02426ec2e70f3255909514288bc8add0ffaa46ec9faaad2eab43eaf4e97746b9"
+
+[metadata.repo2env.pr_diff]
+pr_merged_at = "2025-09-24T16:26:10Z"
+diff_format = "unified"
+context_files = [
+    "source/src/python/PyRosetta/src/pyrosetta/__init__.py",
+    "source/src/python/PyRosetta/src/pyrosetta/distributed/io.py",
+    "source/src/python/PyRosetta/src/pyrosetta/distributed/packed_pose/core.py",
+    "source/src/python/PyRosetta/src/pyrosetta/exceptions.py",
+    "source/src/python/PyRosetta/src/pyrosetta/tests/bindings/init/__init__.py",
+    "source/src/python/PyRosetta/src/pyrosetta/tests/bindings/init/dump_init_file.py",
+    "source/src/python/PyRosetta/src/pyrosetta/tests/bindings/init/init_from_file.py",
+    "source/src/python/PyRosetta/src/pyrosetta/tests/bindings/init/poses_from_init_file.py",
+    "source/src/python/PyRosetta/src/pyrosetta/tests/bindings/init/test_init_files.py",
+    "source/src/python/PyRosetta/src/pyrosetta/tests/bindings/init/write_test_files.py",
+    "source/src/python/PyRosetta/src/pyrosetta/tests/distributed/test_smoke.py",
+    "source/src/python/PyRosetta/src/pyrosetta/utility/__init__.py",
+    "source/src/python/PyRosetta/src/pyrosetta/utility/initialization.py",
+    "source/src/python/PyRosetta/src/test/T900_distributed.py",
+]
+
+[metadata.repo2env.reward_calibration]
+baseline_reward = 0.0
+loc_changed = 2123
+difficulty = "large"
+
+[metadata.repo2env.evaluation]
+schema_version = "1"
+status = "unverified"
+stage = "generation"
+reason_codes = [
+    "validation_not_run",
+]
+detail = "Generated task; validation has not been established."
+provenance = "unknown"
+evidence = []
+
+[metadata.repo2env.reproducibility]
+mode = "local_only"
+image_ref = "python:3.12-slim"
+image_tag = "python:3.12-slim"
+image_visibility = "private"
+
+[agent]
+timeout_sec = 1800.0
+
+[verifier]
+timeout_sec = 300.0

@@ -1,0 +1,62 @@
+version = "1.0"
+
+[task]
+name = "default/RosettaCommons__rosetta-482"
+description = "Fix stdout in ProtocolSettingsMetric.cc"
+
+[metadata]
+difficulty = "easy"
+category = "bugfix"
+keywords = [
+    "rosetta",
+    "pr_diff",
+]
+
+[metadata.repo2env]
+pipeline = "pr_diff"
+pipeline_version = "0.3.0"
+repo = "RosettaCommons/rosetta"
+ref = "fce88fc4bd527d5f2e5903499b30e7c1c401b2f1"
+reference = "https://github.com/RosettaCommons/rosetta/pull/482"
+source_access = "auto"
+built_at = "2026-11-15T22:36:51.400246+00:00"
+reward_kinds = [
+    "diff_similarity",
+]
+spec_version = "0.2.0"
+content_hash = "sha256:1dcd55ed84ef7cb6139d7de1c13fdcf1e0f37fc1d1ba4de74bc400c1e8f865d9"
+
+[metadata.repo2env.pr_diff]
+pr_merged_at = "2025-07-28T18:52:53Z"
+diff_format = "unified"
+context_files = [
+    "source/src/core/simple_metrics/composite_metrics/ProtocolSettingsMetric.cc",
+]
+
+[metadata.repo2env.reward_calibration]
+baseline_reward = 0.0
+loc_changed = 2
+difficulty = "trivial"
+
+[metadata.repo2env.evaluation]
+schema_version = "1"
+status = "unverified"
+stage = "generation"
+reason_codes = [
+    "validation_not_run",
+]
+detail = "Generated task; validation has not been established."
+provenance = "unknown"
+evidence = []
+
+[metadata.repo2env.reproducibility]
+mode = "local_only"
+image_ref = "python:3.12-slim"
+image_tag = "python:3.12-slim"
+image_visibility = "private"
+
+[agent]
+timeout_sec = 1800.0
+
+[verifier]
+timeout_sec = 300.0

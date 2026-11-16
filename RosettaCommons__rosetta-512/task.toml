@@ -1,0 +1,65 @@
+version = "1.0"
+
+[task]
+name = "default/RosettaCommons__rosetta-512"
+description = "Add cooldown time for PyRosettaCluster unit tests"
+
+[metadata]
+difficulty = "medium"
+category = "bugfix"
+keywords = [
+    "rosetta",
+    "pr_diff",
+]
+
+[metadata.repo2env]
+pipeline = "pr_diff"
+pipeline_version = "0.3.0"
+repo = "RosettaCommons/rosetta"
+ref = "58d657c59974c1aa8f9f091e576de2e6cf1d9775"
+reference = "https://github.com/RosettaCommons/rosetta/pull/512"
+source_access = "auto"
+built_at = "2026-11-15T22:36:38.287869+00:00"
+reward_kinds = [
+    "diff_similarity",
+]
+spec_version = "0.2.0"
+content_hash = "sha256:aca11e02ad9b188b2fcfee0dbde876bd495727c5545fa3f37774e31a021e9ad6"
+
+[metadata.repo2env.pr_diff]
+pr_merged_at = "2025-09-03T18:23:31Z"
+diff_format = "unified"
+context_files = [
+    "source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/__init__.py",
+    "source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/core.py",
+    "source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/logging_support.py",
+    "source/src/python/PyRosetta/src/test/T900_distributed.py",
+]
+
+[metadata.repo2env.reward_calibration]
+baseline_reward = 0.0
+loc_changed = 29
+difficulty = "medium"
+
+[metadata.repo2env.evaluation]
+schema_version = "1"
+status = "unverified"
+stage = "generation"
+reason_codes = [
+    "validation_not_run",
+]
+detail = "Generated task; validation has not been established."
+provenance = "unknown"
+evidence = []
+
+[metadata.repo2env.reproducibility]
+mode = "local_only"
+image_ref = "python:3.12-slim"
+image_tag = "python:3.12-slim"
+image_visibility = "private"
+
+[agent]
+timeout_sec = 1800.0
+
+[verifier]
+timeout_sec = 300.0

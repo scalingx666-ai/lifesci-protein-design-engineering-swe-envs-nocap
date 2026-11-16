@@ -1,0 +1,282 @@
+diff --git a/cloud/runner.py b/cloud/runner.py
+index 9475bab..6e15c76 100644
+--- a/cloud/runner.py
++++ b/cloud/runner.py
+@@ -3,7 +3,7 @@
+ from flexs import baselines
+ import flexs.utils.sequence_utils as s_utils
+ 
+-def run_explorer_robustness(args, landscape, wt):
++def run_explorer_robustness(args, landscape, wt, problem_name, start_num):
+     alphabet = s_utils.RNAA if args.landscapes == "rna" else s_utils.DNAA
+     if args.explorer == "adalead":
+         def make_explorer(model, ss):
+@@ -15,9 +15,9 @@ def make_explorer(model, ss):
+                 sequences_batch_size=args.sequences_batch_size,
+                 model_queries_per_batch=args.model_queries_per_batch,
+                 alphabet=alphabet,
+-                log_file=f"runs/{args.explorer}_{args.landscapes}_ss{ss}"
++                log_file=f"runs/{args.explorer}/{args.landscapes}_{problem_name}_start{start_num}_ss{ss}"
+             )
+-        results = flexs.evaluate.robustness(landscape, make_explorer)
++        results = flexs.evaluate.robustness(landscape, make_explorer, verbose=False)
+     elif args.explorer == "cbas" or args.explorer == "dbas":
+         g = baselines.explorers.cbas_dbas.VAE(
+             seq_length=len(wt),
+@@ -29,7 +29,6 @@ def make_explorer(model, ss):
+             epsilon_std=1.0,
+             beta=1,
+             validation_split=0,
+-            mutation_rate=2,
+             verbose=False,
+         )
+         def make_explorer(model, ss):
+@@ -42,11 +41,11 @@ def make_explorer(model, ss):
+                 starting_sequence=wt,
+                 sequences_batch_size=args.sequences_batch_size,
+                 model_queries_per_batch=args.model_queries_per_batch,
++                mutation_rate=2.0/len(wt),
+                 alphabet=alphabet,
+-                log_file=f"runs/{args.explorer}_{args.landscapes}_ss{ss}"
++                log_file=f"runs/{args.explorer}/{args.landscapes}_{problem_name}_start{start_num}_ss{ss}"
+             )
+-            # mutation rate?
+-        results = flexs.evaluate.robustness(landscape, make_explorer)
++        results = flexs.evaluate.robustness(landscape, make_explorer, verbose=False)
+     elif args.explorer == "cmaes":
+         def make_explorer(model, ss):
+             return baselines.explorers.CMAES(
+@@ -58,9 +57,9 @@ def make_explorer(model, ss):
+                 alphabet=alphabet,
+                 population_size=40,
+                 max_iter=400,
+-                log_file=f"runs/{args.explorer}_{args.landscapes}_ss{ss}"
++                log_file=f"runs/{args.explorer}/{args.landscapes}_{problem_name}_start{start_num}_ss{ss}"
+             )
+-        results = flexs.evaluate.robustness(landscape, make_explorer)
++        results = flexs.evaluate.robustness(landscape, make_explorer, verbose=False)
+     elif args.explorer == "dynappo":
+         def make_explorer(model, ss):
+             return baselines.explorers.DynaPPO(
+@@ -71,9 +70,9 @@ def make_explorer(model, ss):
+                 num_experiment_rounds=10,
+                 num_model_rounds=8,
+                 alphabet=alphabet,
+-                log_file=f"runs/{args.explorer}_{args.landscapes}_ss{ss}"
++                log_file=f"runs/{args.explorer}/{args.landscapes}_{problem_name}_start{start_num}_ss{ss}"
+             )
+-        results = flexs.evaluate.robustness(landscape, make_explorer)
++        results = flexs.evaluate.robustness(landscape, make_explorer, verbose=False)
+     return results
+ 
+ def run_all(args):
+@@ -83,14 +82,14 @@ def run_all(args):
+             landscape = flexs.landscapes.RNABinding(**problem["params"])
+             for s in range(5):
+                 wt = problem["starts"][s]
+-                results = run_explorer_robustness(args, landscape, wt)
++                results = run_explorer_robustness(args, landscape, wt, p, s)
+     elif args.landscapes == "tf":
+         for p in ["POU3F4_REF_R1", "PAX3_G48R_R1", "SIX6_REF_R1", "VAX2_REF_R1", "VSX1_REF_R1"]:
+             problem = flexs.landscapes.tf_binding.registry()[p]
+             landscape = flexs.landscapes.TFBinding(**problem["params"])
+             for s in range(13):
+                 wt = problem["starts"][s]
+-                results = run_explorer_robustness(args, landscape, wt)
++                results = run_explorer_robustness(args, landscape, wt, p, s)
+ 
+ if __name__ == "__main__":
+     parser = argparse.ArgumentParser()
+diff --git a/cloud/table1_data.py b/cloud/table1_data.py
+new file mode 100644
+index 0000000..1328393
+--- /dev/null
++++ b/cloud/table1_data.py
+@@ -0,0 +1,119 @@
++"""Get data for Table 1 in paper."""
++import flexs
++from flexs import baselines
++import flexs.utils.sequence_utils as s_utils
++from typing import Callable
++
++def _robustness(
++    landscape: flexs.Landscape,
++    make_explorer: Callable[[flexs.Model, float], flexs.Explorer]
++):
++    """
++    This is essentially the robustness evaluator, but with the models hard-coded.
++    """
++    results = []
++
++    for ss in [0.0, 1.0]:
++        print(f"Evaluating for robustness with model accuracy; signal_strength: {ss}")
++
++        model = baselines.models.NoisyAbstractModel(landscape, signal_strength=ss)
++        explorer = make_explorer(model, ss, tag=f"ss{ss}")
++        res = explorer.run(landscape, verbose=False)
++
++        results.append((ss, res))
++    
++    print("Evaluating for robustness with model accuracy; using 3xCNN ensemble")
++    cnn_ensemble = flexs.Ensemble([
++        baselines.models.CNN(len(wt), alphabet=s_utils.RNAA, num_filters=32, hidden_size=100, loss='MSE')
++        for i in range(3)
++    ])
++    explorer = make_explorer(cnn_ensemble, ss, tag="cnn")
++    res = explorer.run(landscape, verbose=False)
++
++    results.append((None, res))
++
++    return results
++
++def run_explorers(explorer, landscape, wt, problem_name, start_num):
++    alphabet = s_utils.RNAA
++    sequences_batch_size = 100
++    model_queries_per_batch = 2000
++
++    if explorer == "adalead":
++        def make_explorer(model, ss, tag):
++            return baselines.explorers.Adalead(
++                model,
++                rounds=10,
++                recomb_rate=0.2,
++                starting_sequence=wt,
++                sequences_batch_size=sequences_batch_size,
++                model_queries_per_batch=model_queries_per_batch,
++                alphabet=alphabet,
++                log_file=f"runs/{explorer}/{problem_name}_start{start_num}_{tag}"
++            )
++        results = _robustness(landscape, make_explorer)
++    elif explorer == "cbas" or explorer == "dbas":
++        g = baselines.explorers.cbas_dbas.VAE(
++            seq_length=len(wt),
++            alphabet=alphabet,
++            batch_size=100,
++            latent_dim=2,
++            intermediate_dim=250,
++            epochs=10,
++            epsilon_std=1.0,
++            beta=1,
++            validation_split=0,
++            verbose=False,
++        )
++        def make_explorer(model, ss, tag):
++            return baselines.explorers.CbAS(
++                model,
++                generator=g,
++                rounds=10,
++                Q=0.8,
++                algo=explorer,
++                starting_sequence=wt,
++                sequences_batch_size=sequences_batch_size,
++                model_queries_per_batch=model_queries_per_batch,
++                mutation_rate=2.0/len(wt),
++                alphabet=alphabet,
++                log_file=f"runs/{explorer}/{problem_name}_start{start_num}_{tag}"
++            )
++        results = _robustness(landscape, make_explorer)
++    elif explorer == "cmaes":
++        def make_explorer(model, ss, tag):
++            return baselines.explorers.CMAES(
++                model,
++                rounds=10,
++                starting_sequence=wt,
++                sequences_batch_size=sequences_batch_size,
++                model_queries_per_batch=model_queries_per_batch,
++                alphabet=alphabet,
++                population_size=40,
++                max_iter=400,
++                log_file=f"runs/{explorer}/{problem_name}_start{start_num}_{tag}"
++            )
++        results = _robustness(landscape, make_explorer)
++    elif explorer == "dynappo":
++        def make_explorer(model, ss, tag):
++            return baselines.explorers.DynaPPO(
++                rounds=10,
++                starting_sequence=wt,
++                sequences_batch_size=sequences_batch_size,
++                model_queries_per_batch=model_queries_per_batch,
++                num_experiment_rounds=10,
++                num_model_rounds=8,
++                alphabet=alphabet,
++                log_file=f"runs/{explorer}/{problem_name}_start{start_num}_{tag}"
++            )
++        results = _robustness(landscape, make_explorer)
++    return results
++
++if __name__ == "__main__":
++    for explorer in ["cmaes", "adalead", "cbas", "dbas"]: # WARNING: NO DYNAPPO YET
++        for p in ["L14_RNA1", "L14_RNA1+2"]:
++            problem = flexs.landscapes.rna.registry()[p]
++            landscape = flexs.landscapes.RNABinding(**problem["params"])
++            for s in range(5):
++                wt = problem["starts"][s]
++                results = run_explorers(explorer, landscape, wt, p, s)
+diff --git a/flexs/baselines/models/noisy_abstract_model.py b/flexs/baselines/models/noisy_abstract_model.py
+index 4230eda..bad3e7c 100644
+--- a/flexs/baselines/models/noisy_abstract_model.py
++++ b/flexs/baselines/models/noisy_abstract_model.py
+@@ -62,7 +62,10 @@ def _fitness_function(self, sequences):
+ 
+             signal = self.landscape.get_fitness([seq]).item()
+             neighbor_fitness = self.landscape.get_fitness([neighbor_seq]).item()
+-            noise = np.random.exponential(scale=neighbor_fitness)
++            if neighbor_fitness >= 0:
++                noise = np.random.exponential(scale=neighbor_fitness)
++            else:
++                noise = np.random.choice(list(self.cache.values()))
+ 
+             alpha = self.ss ** distance
+             new_fitnesses.append(alpha * signal + (1 - alpha) * noise)
+diff --git a/flexs/evaluate.py b/flexs/evaluate.py
+index e457357..66ceac6 100644
+--- a/flexs/evaluate.py
++++ b/flexs/evaluate.py
+@@ -9,6 +9,7 @@ def robustness(
+     landscape: flexs.Landscape,
+     make_explorer: Callable[[flexs.Model, float], flexs.Explorer],
+     signal_strengths: List[float] = [0, 0.5, 0.75, 0.9, 1],
++    verbose: bool = True,
+ ):
+     """
+     Evaluate explorer outputs as a function of the noisyness of its model.
+@@ -18,7 +19,7 @@ def robustness(
+     Args:
+         landscape: The landscape to run on.
+         make_explorer: A function that takes in a model and signal strength
+-            (for potential bookeeping/logging purposes) and an explorer.
++            (for potential bookkeeping/logging purposes) and an explorer.
+         signal_strengths: A list of signal strengths between 0 and 1.
+     """
+     results = []
+@@ -27,7 +28,7 @@ def robustness(
+ 
+         model = baselines.models.NoisyAbstractModel(landscape, signal_strength=ss)
+         explorer = make_explorer(model, ss)
+-        res = explorer.run(landscape)
++        res = explorer.run(landscape, verbose=verbose)
+ 
+         results.append((ss, res))
+ 
+diff --git a/flexs/explorer.py b/flexs/explorer.py
+index 3084283..e332908 100644
+--- a/flexs/explorer.py
++++ b/flexs/explorer.py
+@@ -12,6 +12,8 @@
+ 
+ import flexs
+ 
++from tqdm import tqdm
++
+ 
+ class Explorer(abc.ABC):
+     """
+@@ -144,7 +146,7 @@ def run(
+ 
+         # For each round, train model on available data, propose sequences,
+         # measure them on the true landscape, add to available data, and repeat.
+-        for r in range(1, self.rounds + 1):
++        for r in tqdm(range(1, self.rounds + 1)):
+             round_start_time = datetime.now()
+             self.model.train(
+                 sequences_data["sequence"].to_numpy(),

@@ -1,0 +1,69 @@
+version = "1.0"
+
+[task]
+name = "default/RosettaCommons__rosetta-576"
+description = "Restoring the RandomGenerator state with PyRosetta initialization files"
+
+[metadata]
+difficulty = "large"
+category = "bugfix"
+keywords = [
+    "rosetta",
+    "pr_diff",
+]
+
+[metadata.repo2env]
+pipeline = "pr_diff"
+pipeline_version = "0.3.0"
+repo = "RosettaCommons/rosetta"
+ref = "552382f5ef84f3c058ac922b717ceee014073be6"
+reference = "https://github.com/RosettaCommons/rosetta/pull/576"
+source_access = "auto"
+built_at = "2026-11-15T22:36:13.294076+00:00"
+reward_kinds = [
+    "diff_similarity",
+]
+spec_version = "0.2.0"
+content_hash = "sha256:c7bfd82aae70b3ff2b8c8de7b088a90aa89e7dea60785c0827b5657d5f9649b1"
+
+[metadata.repo2env.pr_diff]
+pr_merged_at = "2025-12-12T00:19:01Z"
+diff_format = "unified"
+context_files = [
+    "source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/__init__.py",
+    "source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/tools.py",
+    "source/src/python/PyRosetta/src/pyrosetta/distributed/io.py",
+    "source/src/python/PyRosetta/src/pyrosetta/tests/bindings/init/init_from_file.py",
+    "source/src/python/PyRosetta/src/pyrosetta/tests/bindings/init/restore_rg_state.py",
+    "source/src/python/PyRosetta/src/pyrosetta/tests/bindings/init/test_init_files.py",
+    "source/src/python/PyRosetta/src/pyrosetta/tests/distributed/cluster/reproduce_from_init_file.py",
+    "source/src/python/PyRosetta/src/pyrosetta/utility/initialization.py",
+]
+
+[metadata.repo2env.reward_calibration]
+baseline_reward = 0.0
+loc_changed = 165
+difficulty = "large"
+
+[metadata.repo2env.evaluation]
+schema_version = "1"
+status = "unverified"
+stage = "generation"
+reason_codes = [
+    "validation_not_run",
+]
+detail = "Generated task; validation has not been established."
+provenance = "unknown"
+evidence = []
+
+[metadata.repo2env.reproducibility]
+mode = "local_only"
+image_ref = "python:3.12-slim"
+image_tag = "python:3.12-slim"
+image_visibility = "private"
+
+[agent]
+timeout_sec = 1800.0
+
+[verifier]
+timeout_sec = 300.0

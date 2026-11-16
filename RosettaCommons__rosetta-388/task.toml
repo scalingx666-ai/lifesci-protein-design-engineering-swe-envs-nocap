@@ -1,0 +1,62 @@
+version = "1.0"
+
+[task]
+name = "default/RosettaCommons__rosetta-388"
+description = "fix Mac RC release package"
+
+[metadata]
+difficulty = "easy"
+category = "bugfix"
+keywords = [
+    "rosetta",
+    "pr_diff",
+]
+
+[metadata.repo2env]
+pipeline = "pr_diff"
+pipeline_version = "0.3.0"
+repo = "RosettaCommons/rosetta"
+ref = "695b0f21aed8ace84a900449ce857ab632f8e4d1"
+reference = "https://github.com/RosettaCommons/rosetta/pull/388"
+source_access = "auto"
+built_at = "2026-11-15T22:37:19.646654+00:00"
+reward_kinds = [
+    "diff_similarity",
+]
+spec_version = "0.2.0"
+content_hash = "sha256:1953e4a3b24d272675480530068fcd855b61e9b51448d22f27d4e81429535a25"
+
+[metadata.repo2env.pr_diff]
+pr_merged_at = "2025-04-10T18:18:47Z"
+diff_format = "unified"
+context_files = [
+    "source/tools/build/basic.settings",
+]
+
+[metadata.repo2env.reward_calibration]
+baseline_reward = 0.0
+loc_changed = 2
+difficulty = "trivial"
+
+[metadata.repo2env.evaluation]
+schema_version = "1"
+status = "unverified"
+stage = "generation"
+reason_codes = [
+    "validation_not_run",
+]
+detail = "Generated task; validation has not been established."
+provenance = "unknown"
+evidence = []
+
+[metadata.repo2env.reproducibility]
+mode = "local_only"
+image_ref = "python:3.12-slim"
+image_tag = "python:3.12-slim"
+image_visibility = "private"
+
+[agent]
+timeout_sec = 1800.0
+
+[verifier]
+timeout_sec = 300.0

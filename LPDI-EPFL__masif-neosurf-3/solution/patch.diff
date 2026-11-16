@@ -1,0 +1,29 @@
+diff --git a/.gitignore b/.gitignore
+new file mode 100644
+index 0000000..b1bbef0
+--- /dev/null
++++ b/.gitignore
+@@ -0,0 +1,2 @@
++# examples
++example/output/*
+diff --git a/preprocess_pdb.sh b/preprocess_pdb.sh
+index 1c80e20..297c334 100755
+--- a/preprocess_pdb.sh
++++ b/preprocess_pdb.sh
+@@ -66,14 +66,14 @@ MASIF_SEED_SOURCE=$BASEDIR/masif_seed_search/source/
+ MASIF_DATA=$BASEDIR/masif/data/
+ MASIF_TARGETS_DIR=$BASEDIR/masif_seed_search/data/masif_targets
+ 
+-export PYTHONPATH=$MASIF_SOURCE
++export PYTHONPATH=$PYTHONPATH:$MASIF_SOURCE
+ export PYTHONPATH=$PYTHONPATH:$OUTDIR
++OUTDIR="$(realpath $OUTDIR)"
+ export TMPDIR=$OUTDIR/tmp/
+ 
+ 
+ # Move to output directory
+ mkdir -p $OUTDIR
+-OUTDIR="$(realpath $OUTDIR)"
+ cd $OUTDIR
+ 
+ # create directories

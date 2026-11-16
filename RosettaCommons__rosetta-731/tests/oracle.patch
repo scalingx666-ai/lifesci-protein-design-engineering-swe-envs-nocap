@@ -1,0 +1,156 @@
+diff --git a/source/src/protocols/canonical_sampling/mc_convergence_checks/HierarchicalLevel.cc b/source/src/protocols/canonical_sampling/mc_convergence_checks/HierarchicalLevel.cc
+index ce7da4ccb58..08427391561 100644
+--- a/source/src/protocols/canonical_sampling/mc_convergence_checks/HierarchicalLevel.cc
++++ b/source/src/protocols/canonical_sampling/mc_convergence_checks/HierarchicalLevel.cc
+@@ -307,7 +307,7 @@ HierarchicalLevel::num_matching_levels( utility::vector1< core::Size > & address
+ 	utility::vector1< core::Size > & address2 ){
+ 	runtime_assert( address1.size() == address2.size() );
+ 	core::Size num_matching_levels = 0;
+-	for ( core::Size ii = 1; ii < address1.size(); ii++ ) {
++	for ( core::Size ii = 1; ii <= address1.size(); ii++ ) {
+ 		if ( address1[ ii ] == address2[ ii ] ) {
+ 			num_matching_levels++;
+ 		}
+diff --git a/source/src/protocols/frag_picker/GrabAllCollector.hh b/source/src/protocols/frag_picker/GrabAllCollector.hh
+index 67209136fa0..7a75c17ad1c 100644
+--- a/source/src/protocols/frag_picker/GrabAllCollector.hh
++++ b/source/src/protocols/frag_picker/GrabAllCollector.hh
+@@ -66,7 +66,7 @@ public:
+ 
+ 	inline void clear() override
+ 	{
+-		for ( core::Size i=1; i<storage_.size(); ++i ) {
++		for ( core::Size i=1; i<=storage_.size(); ++i ) {
+ 			storage_[i].clear();
+ 		}
+ 	}
+diff --git a/source/src/protocols/frag_picker/VallProvider.cc b/source/src/protocols/frag_picker/VallProvider.cc
+index 876df8bc7c2..950e429eb82 100644
+--- a/source/src/protocols/frag_picker/VallProvider.cc
++++ b/source/src/protocols/frag_picker/VallProvider.cc
+@@ -66,7 +66,7 @@ VallChunkOP VallProvider::find_chunk(std::string pdb_id, char chain_id, core::Si
+ 		if ( c->get_chain_id() != chain_id ) {
+ 			continue;
+ 		}
+-		for ( core::Size j = 1; j < c->size(); ++j ) {
++		for ( core::Size j = 1; j <= c->size(); ++j ) {
+ 			if ( c->at(j)->resi() == residue_id ) {
+ 				return c;
+ 			}
+diff --git a/source/src/protocols/frag_picker/quota/QuotaCollector.cc b/source/src/protocols/frag_picker/quota/QuotaCollector.cc
+index bf0ecc8cc19..c2fdcfc3947 100644
+--- a/source/src/protocols/frag_picker/quota/QuotaCollector.cc
++++ b/source/src/protocols/frag_picker/quota/QuotaCollector.cc
+@@ -51,9 +51,9 @@ bool QuotaCollector::add(std::pair<FragmentCandidateOP, scores::FragmentScoreMap
+ 
+ void QuotaCollector::list_pools(std::ostream & where) const {
+ 
+-	for ( core::Size i=1; i<storage_.size(); ++i ) {
++	for ( core::Size i=1; i<=storage_.size(); ++i ) {
+ 		where << std::setw(3) << i;
+-		for ( core::Size j=1; j<storage_[i].size(); ++j ) {
++		for ( core::Size j=1; j<=storage_[i].size(); ++j ) {
+ 			where << std::setw(10) << storage_[i][j]->get_pool_name() << "(" << std::setw(3) << storage_[i][j]->total_size() << ") ";
+ 		}
+ 		where << std::endl;
+@@ -64,7 +64,7 @@ void QuotaCollector::list_pools(std::ostream & where) const {
+ void QuotaCollector::clear() {
+ 
+ 	for ( core::Size i=1; i<=storage_.size(); ++i ) {
+-		for ( core::Size j=1; j<storage_[i].size(); ++j ) {
++		for ( core::Size j=1; j<=storage_[i].size(); ++j ) {
+ 			storage_[i][j]->clear();
+ 		}
+ 	}
+@@ -73,7 +73,7 @@ void QuotaCollector::clear() {
+ core::Size QuotaCollector::count_candidates(core::Size pos) const {
+ 
+ 	core::Size cnt = 0;
+-	for ( core::Size j=1; j<storage_[pos].size(); ++j ) {
++	for ( core::Size j=1; j<=storage_[pos].size(); ++j ) {
+ 		cnt += storage_[pos][j]->count_candidates();
+ 	}
+ 
+@@ -83,7 +83,7 @@ core::Size QuotaCollector::count_candidates(core::Size pos) const {
+ core::Size QuotaCollector::count_candidates() const {
+ 	core::Size cnt = 0;
+ 	for ( core::Size i=1; i<=storage_.size(); ++i ) {
+-		for ( core::Size j=1; j<storage_[i].size(); ++j ) {
++		for ( core::Size j=1; j<=storage_[i].size(); ++j ) {
+ 			cnt += storage_[i][j]->count_candidates();
+ 		}
+ 	}
+diff --git a/source/src/protocols/frag_picker/scores/AtomBasedConstraintsScore.cc b/source/src/protocols/frag_picker/scores/AtomBasedConstraintsScore.cc
+index 80b7d3f0a7d..71417799240 100644
+--- a/source/src/protocols/frag_picker/scores/AtomBasedConstraintsScore.cc
++++ b/source/src/protocols/frag_picker/scores/AtomBasedConstraintsScore.cc
+@@ -46,7 +46,7 @@ AtomBasedConstraintsScore::AtomBasedConstraintsScore(core::Size priority,
+ 	CachingScoringMethod(priority, lowest_acceptable_value, use_lowest, score_name) {
+ 
+ 	query_size_ = query_size;
+-	for ( core::Size i = 1; i < constrainable_atoms.size(); ++i ) {
++	for ( core::Size i = 1; i <= constrainable_atoms.size(); ++i ) {
+ 		constrainable_atoms_.insert(std::pair<std::string, core::Size>(
+ 			constrainable_atoms[i], i));
+ 	}
+@@ -97,7 +97,7 @@ void AtomBasedConstraintsScore::do_caching(VallChunkOP chunk) {
+ 		utility::vector1<bool> flag_row(constrainable_atoms_.size());
+ 		utility::vector1<numeric::xyzVector<core::Real> > row(
+ 			constrainable_atoms_.size());
+-		for ( core::Size j = 1; j < constrainable_atoms_.size(); ++j ) {
++		for ( core::Size j = 1; j <= constrainable_atoms_.size(); ++j ) {
+ 			flag_row[j] = false;
+ 			row[j] = empty_one;
+ 		}
+diff --git a/source/src/protocols/jd3/JobGenealogist.cc b/source/src/protocols/jd3/JobGenealogist.cc
+index 1cfef3d7066..1f8fe97ed4a 100644
+--- a/source/src/protocols/jd3/JobGenealogist.cc
++++ b/source/src/protocols/jd3/JobGenealogist.cc
+@@ -437,7 +437,7 @@ JobGenealogist::newick_tree() const {
+ 	utility::vector1< std::list< JGResultNodeCAP > > parentless_results_for_input_source;
+ 	parentless_results_for_input_source.resize( num_input_sources_ );
+ 
+-	for ( unsigned int i = 1; i < job_nodes_for_dag_node_.size(); ++i ) {
++	for ( unsigned int i = 1; i <= job_nodes_for_dag_node_.size(); ++i ) {
+ 		for ( auto const & job_node_cop : job_nodes_for_dag_node_[ i ] ) {
+ 			debug_assert( job_node_cop != nullptr );
+ 			if ( job_node_cop->parents().empty() ) {
+diff --git a/source/src/protocols/pose_metric_calculators/DecomposeAndReweightEnergiesCalculator.cc b/source/src/protocols/pose_metric_calculators/DecomposeAndReweightEnergiesCalculator.cc
+index 75a576c40a9..df8518cb5b1 100644
+--- a/source/src/protocols/pose_metric_calculators/DecomposeAndReweightEnergiesCalculator.cc
++++ b/source/src/protocols/pose_metric_calculators/DecomposeAndReweightEnergiesCalculator.cc
+@@ -418,7 +418,7 @@ DecomposeAndReweightEnergiesCalculator::nonzero_weight_score_types() const
+ 	utility::vector1<core::scoring::ScoreType> score_types;
+ 
+ 	for ( int i = 1; i < core::scoring::n_score_types; ++i ) {
+-		for ( core::Size j = 1; j < weight_map_vector.size(); ++j ) {
++		for ( core::Size j = 1; j <= weight_map_vector.size(); ++j ) {
+ 			if ( weight_map_vector[j][core::scoring::ScoreType(i)] ) {
+ 				score_types.push_back(core::scoring::ScoreType(i));
+ 				break;
+diff --git a/source/src/protocols/pose_metric_calculators/SurfaceCalculator.cc b/source/src/protocols/pose_metric_calculators/SurfaceCalculator.cc
+index f10a87297b7..405f6384afd 100644
+--- a/source/src/protocols/pose_metric_calculators/SurfaceCalculator.cc
++++ b/source/src/protocols/pose_metric_calculators/SurfaceCalculator.cc
+@@ -82,7 +82,7 @@ SurfaceCalculator::print( std::string const & key ) const {
+ 	} else if ( key == "residue_surface" ) {
+ 		std::ostringstream ss;
+ 		ss << "[";
+-		for ( core::Size ii=1; ii < residue_surface_energy_.size(); ++ii ) {
++		for ( core::Size ii=1; ii <= residue_surface_energy_.size(); ++ii ) {
+ 			ss << ii << ":";
+ 			if ( residue_surface_energy_[ ii ] != 0.00 ) {
+ 				ss << ObjexxFCL::format::F(8,4, residue_surface_energy_[ ii ]);
+diff --git a/source/src/protocols/unfolded_state_energy_calculator/UnfoldedStateEnergyCalculatorMover.cc b/source/src/protocols/unfolded_state_energy_calculator/UnfoldedStateEnergyCalculatorMover.cc
+index 377af5629f8..a8781df8b8f 100644
+--- a/source/src/protocols/unfolded_state_energy_calculator/UnfoldedStateEnergyCalculatorMover.cc
++++ b/source/src/protocols/unfolded_state_energy_calculator/UnfoldedStateEnergyCalculatorMover.cc
+@@ -116,7 +116,7 @@ UnfoldedStateEnergyCalculatorMover::create_random_fragments( Pose & pose, vector
+ {
+ 	// get number of protein residues
+ 	core::Size num_protein_res( 0 );
+-	for ( core::Size i = 1; i < pose.size(); ++i ) {
++	for ( core::Size i = 1; i <= pose.size(); ++i ) {
+ 		if ( pose.residue( i ).type().is_protein() ) {
+ 			num_protein_res++;
+ 		}

@@ -1,0 +1,62 @@
+version = "1.0"
+
+[task]
+name = "default/RosettaCommons__rosetta-671"
+description = "Modernize copy prevention in KeyLookup to use = delete"
+
+[metadata]
+difficulty = "small"
+category = "bugfix"
+keywords = [
+    "rosetta",
+    "pr_diff",
+]
+
+[metadata.repo2env]
+pipeline = "pr_diff"
+pipeline_version = "0.3.0"
+repo = "RosettaCommons/rosetta"
+ref = "5c9f6db69d1a20db6353738e3724092516415bd3"
+reference = "https://github.com/RosettaCommons/rosetta/pull/671"
+source_access = "auto"
+built_at = "2026-11-15T22:35:16.176888+00:00"
+reward_kinds = [
+    "diff_similarity",
+]
+spec_version = "0.2.0"
+content_hash = "sha256:afddb903156e9fbf5cc8e81502f41fb90fdb75f2bbec9b5fbfdfe2c132209784"
+
+[metadata.repo2env.pr_diff]
+pr_merged_at = "2026-05-08T17:13:03Z"
+diff_format = "unified"
+context_files = [
+    "source/src/utility/keys/KeyLookup.hh",
+]
+
+[metadata.repo2env.reward_calibration]
+baseline_reward = 0.0
+loc_changed = 15
+difficulty = "small"
+
+[metadata.repo2env.evaluation]
+schema_version = "1"
+status = "unverified"
+stage = "generation"
+reason_codes = [
+    "validation_not_run",
+]
+detail = "Generated task; validation has not been established."
+provenance = "unknown"
+evidence = []
+
+[metadata.repo2env.reproducibility]
+mode = "local_only"
+image_ref = "python:3.12-slim"
+image_tag = "python:3.12-slim"
+image_visibility = "private"
+
+[agent]
+timeout_sec = 1800.0
+
+[verifier]
+timeout_sec = 300.0

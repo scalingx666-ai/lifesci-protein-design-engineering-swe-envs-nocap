@@ -1,0 +1,38 @@
+diff --git a/source/src/protocols/analysis/InterfaceAnalyzerMover.cc b/source/src/protocols/analysis/InterfaceAnalyzerMover.cc
+index 2982557f57d..ed8b6198b45 100644
+--- a/source/src/protocols/analysis/InterfaceAnalyzerMover.cc
++++ b/source/src/protocols/analysis/InterfaceAnalyzerMover.cc
+@@ -1943,10 +1943,11 @@ void InterfaceAnalyzerMover::set_interface_jump( core::Size const interface_jump
+ 	explicit_constructor_ = false;
+ }
+ 
+-//void InterfaceAnalyzerMover::set_interface( std::string const & interface ){
+-// dock_chains_ = core::pose::DockingPartners::docking_partners_from_string( interface );
+-// explicit_constructor_ = true;
+-//}
++#ifdef PYROSETTA
++void InterfaceAnalyzerMover::set_interface( std::string const & interface ){
++	set_interface( core::pose::DockingPartners::docking_partners_from_string( interface ) );
++}
++#endif
+ 
+ void InterfaceAnalyzerMover::set_interface( core::pose::DockingPartners const & interface ){
+ 	dock_chains_ = interface;
+diff --git a/source/src/protocols/analysis/InterfaceAnalyzerMover.hh b/source/src/protocols/analysis/InterfaceAnalyzerMover.hh
+index ee743422605..37500242dec 100644
+--- a/source/src/protocols/analysis/InterfaceAnalyzerMover.hh
++++ b/source/src/protocols/analysis/InterfaceAnalyzerMover.hh
+@@ -351,8 +351,11 @@ public:
+ 	void
+ 	set_interface_jump(core::Size const interface_jump);
+ 
+-	// void
+-	// set_interface( std::string const & interface );
++#ifdef PYROSETTA
++	/// @brief PyRosetta convienience function, to support usage in Bindcraft, etc.
++	void
++	set_interface( std::string const & interface );
++#endif
+ 
+ 	void
+ 	set_interface( core::pose::DockingPartners const & interface );

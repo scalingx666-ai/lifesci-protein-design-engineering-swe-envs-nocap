@@ -1,0 +1,65 @@
+version = "1.0"
+
+[task]
+name = "default/RosettaCommons__rosetta-115"
+description = "Fix issue related to PackerTask usage in homodimer_design."
+
+[metadata]
+difficulty = "medium"
+category = "bugfix"
+keywords = [
+    "rosetta",
+    "pr_diff",
+]
+
+[metadata.repo2env]
+pipeline = "pr_diff"
+pipeline_version = "0.3.0"
+repo = "RosettaCommons/rosetta"
+ref = "f5ae1de8e146ed3da2662da903342c9c1ad0b046"
+reference = "https://github.com/RosettaCommons/rosetta/pull/115"
+source_access = "auto"
+built_at = "2026-11-15T22:38:05.474018+00:00"
+reward_kinds = [
+    "diff_similarity",
+]
+spec_version = "0.2.0"
+content_hash = "sha256:0da5bdce86948d110431bddf316855a24274cdc474a4c86a90fb6b7802beecf6"
+
+[metadata.repo2env.pr_diff]
+pr_merged_at = "2024-12-17T00:26:02Z"
+diff_format = "unified"
+context_files = [
+    "source/src/apps/public/scenarios/beta_strand_homodimer_design/homodimer_design.cc",
+    "source/src/protocols/minimization_packing/PackRotamersMover.cc",
+    "source/src/protocols/minimization_packing/PackRotamersMover.hh",
+    "tests/integration/tests/beta_strand_homodimer/design_options",
+]
+
+[metadata.repo2env.reward_calibration]
+baseline_reward = 0.0
+loc_changed = 48
+difficulty = "medium"
+
+[metadata.repo2env.evaluation]
+schema_version = "1"
+status = "unverified"
+stage = "generation"
+reason_codes = [
+    "validation_not_run",
+]
+detail = "Generated task; validation has not been established."
+provenance = "unknown"
+evidence = []
+
+[metadata.repo2env.reproducibility]
+mode = "local_only"
+image_ref = "python:3.12-slim"
+image_tag = "python:3.12-slim"
+image_visibility = "private"
+
+[agent]
+timeout_sec = 1800.0
+
+[verifier]
+timeout_sec = 300.0

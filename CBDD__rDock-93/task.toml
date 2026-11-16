@@ -1,0 +1,62 @@
+version = "1.0"
+
+[task]
+name = "default/CBDD__rDock-93"
+description = "bugfix for atom name in RbtMdlFileSource.cxx"
+
+[metadata]
+difficulty = "easy"
+category = "bugfix"
+keywords = [
+    "rDock",
+    "pr_diff",
+]
+
+[metadata.repo2env]
+pipeline = "pr_diff"
+pipeline_version = "0.3.0"
+repo = "CBDD/rDock"
+ref = "15899fbdfcd236d5fd28d4b0ba6d28fc99e3fb23"
+reference = "https://github.com/CBDD/rDock/pull/93"
+source_access = "auto"
+built_at = "2026-11-16T05:53:51.747235+00:00"
+reward_kinds = [
+    "diff_similarity",
+]
+spec_version = "0.2.0"
+content_hash = "sha256:1dcd6843dc99df49f313321da1c80d4db350df15f4f48ab27f04db2a1efdebca"
+
+[metadata.repo2env.pr_diff]
+pr_merged_at = "2024-03-01T19:31:13Z"
+diff_format = "unified"
+context_files = [
+    "src/lib/RbtMdlFileSource.cxx",
+]
+
+[metadata.repo2env.reward_calibration]
+baseline_reward = 0.0
+loc_changed = 4
+difficulty = "trivial"
+
+[metadata.repo2env.evaluation]
+schema_version = "1"
+status = "unverified"
+stage = "generation"
+reason_codes = [
+    "validation_not_run",
+]
+detail = "Generated task; validation has not been established."
+provenance = "unknown"
+evidence = []
+
+[metadata.repo2env.reproducibility]
+mode = "local_only"
+image_ref = "python:3.12-slim"
+image_tag = "python:3.12-slim"
+image_visibility = "private"
+
+[agent]
+timeout_sec = 1800.0
+
+[verifier]
+timeout_sec = 300.0

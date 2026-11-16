@@ -1,0 +1,13 @@
+diff --git a/source/src/protocols/ligand_evolution/WorkManager.cc b/source/src/protocols/ligand_evolution/WorkManager.cc
+index 6f4c068d6b8..352c87af0a9 100644
+--- a/source/src/protocols/ligand_evolution/WorkManager.cc
++++ b/source/src/protocols/ligand_evolution/WorkManager.cc
+@@ -62,7 +62,7 @@ namespace ligand_evolution {
+ 		for( Individual const& individual : pop.individuals() ) {
+ 			LigandIdentifier const& identifier = individual.identifier();
+ 
+-			bool ligand_is_duplicate = !encountered_ligands.count( identifier ) == 0;
++			bool ligand_is_duplicate = encountered_ligands.count( identifier ) != 0;
+ 			bool ligand_is_scored = scorer_->is_scored( identifier );
+ 			bool score_in_memory = scorer_->check_memory( identifier );
+ 

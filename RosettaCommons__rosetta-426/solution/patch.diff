@@ -1,0 +1,243 @@
+diff --git a/documentation b/documentation
+index 69ad06e9f96..668dd1afdf2 160000
+--- a/documentation
++++ b/documentation
+@@ -1 +1 @@
+-Subproject commit 69ad06e9f9660ad7acc43a20c9cd43ceb56b381c
++Subproject commit 668dd1afdf282a6dfa9f374952f77cc7702a3273
+diff --git a/source/external/rdkit/rdkit.upstream b/source/external/rdkit/rdkit.upstream
+index 39689b713c7..dff58ab7bd0 160000
+--- a/source/external/rdkit/rdkit.upstream
++++ b/source/external/rdkit/rdkit.upstream
+@@ -1 +1 @@
+-Subproject commit 39689b713c79f1c62dfa8ffb169635e621e34a0f
++Subproject commit dff58ab7bd06f613989590633819e52bdc053982
+diff --git a/source/src/basic/database/schema_generator/Column.cc b/source/src/basic/database/schema_generator/Column.cc
+index 4c5461e5260..2ee307f0b26 100644
+--- a/source/src/basic/database/schema_generator/Column.cc
++++ b/source/src/basic/database/schema_generator/Column.cc
+@@ -69,7 +69,7 @@ std::string Column::print(utility::sql_database::sessionOP db_session) const{
+ 		switch(db_session->get_db_mode()) {
+ 		case utility::sql_database::DatabaseMode::sqlite3 :
+ 			column_string += this->type_->print(db_session) + " PRIMARY KEY AUTOINCREMENT"; //only way to autoincrement in SQLite is with a primary key
+-			name_ + " " + type_->print(db_session);
++			//name_ + " " + type_->print(db_session);
+ 			break;
+ 		case utility::sql_database::DatabaseMode::mysql :
+ 			column_string += this->type_->print(db_session) + " AUTO_INCREMENT";
+diff --git a/source/src/protocols/antibody/design/AntibodyDesignMover.cc b/source/src/protocols/antibody/design/AntibodyDesignMover.cc
+index 491099cf725..a10c51375bd 100644
+--- a/source/src/protocols/antibody/design/AntibodyDesignMover.cc
++++ b/source/src/protocols/antibody/design/AntibodyDesignMover.cc
+@@ -912,7 +912,7 @@ AntibodyDesignMover::apply_to_cdr(Pose & pose, CDRNameEnum cdr, core::Size index
+ 
+ 			TR << "Grafting CDR from cluster " << ab_info_->get_cluster_name(cdr_pose.cluster) << " fragment "<< cdr_pose.pdb << std::endl;
+ 
+-			utility::to_string(index)+"_"+ab_info_->get_cluster_name(cdr_pose.cluster)+"_"+cdr_pose.pdb;
++			//utility::to_string(index)+"_"+ab_info_->get_cluster_name(cdr_pose.cluster)+"_"+cdr_pose.pdb;
+ 			core::Size start = ab_info_->get_CDR_start(cdr, pose)-1;
+ 			core::Size end = ab_info_->get_CDR_end(cdr, pose)+1;
+ 			graft_mover_->set_insert_region(start, end);
+diff --git a/source/src/protocols/drug_design/ChemicalReaction.hh b/source/src/protocols/drug_design/ChemicalReaction.hh
+index df9c1e0c952..914a92b91f2 100644
+--- a/source/src/protocols/drug_design/ChemicalReaction.hh
++++ b/source/src/protocols/drug_design/ChemicalReaction.hh
+@@ -45,7 +45,7 @@ public:
+ 		std::string const & reaction_smirks
+ 	);
+ 
+-	~ChemicalReaction();
++	~ChemicalReaction() override;
+ 
+ 	/// @brief Is the reaction valid, or was there an error loading the reaction?
+ 	/// (Doesn't look at reactants.)
+diff --git a/source/src/protocols/drug_design/DrugPolishMoverCreator.hh b/source/src/protocols/drug_design/DrugPolishMoverCreator.hh
+index 089014e131a..12fb77339d6 100644
+--- a/source/src/protocols/drug_design/DrugPolishMoverCreator.hh
++++ b/source/src/protocols/drug_design/DrugPolishMoverCreator.hh
+@@ -21,8 +21,8 @@ namespace drug_design {
+ 
+ class DrugPolishMoverCreator : public protocols::moves::MoverCreator {
+ public:
+-	moves::MoverOP create_mover() const;
+-	std::string keyname() const;
++	moves::MoverOP create_mover() const override;
++	std::string keyname() const override;
+ 	static std::string mover_name();
+ };
+ 
+diff --git a/source/src/protocols/drug_design/LigandLocationFilter.hh b/source/src/protocols/drug_design/LigandLocationFilter.hh
+index 528e31f9070..83560c23727 100644
+--- a/source/src/protocols/drug_design/LigandLocationFilter.hh
++++ b/source/src/protocols/drug_design/LigandLocationFilter.hh
+@@ -40,21 +40,21 @@ public:
+ 		center_(0.0)
+ 	{}
+ 
+-	virtual ~LigandLocationFilter() {}
++	~LigandLocationFilter() override {}
+ 
+-	bool apply( core::pose::Pose const & pose ) const;
++	bool apply( core::pose::Pose const & pose ) const override;
+ 
+-	filters::FilterOP clone() const {
++	filters::FilterOP clone() const override {
+ 		return filters::FilterOP( new LigandLocationFilter( *this ) );
+ 	}
+-	filters::FilterOP fresh_instance() const{
++	filters::FilterOP fresh_instance() const override {
+ 		return filters::FilterOP( new LigandLocationFilter() );
+ 	}
+ 
+-	void report( std::ostream & out, core::pose::Pose const & pose ) const;
+-	core::Real report_sm( core::pose::Pose const & pose ) const;
++	void report( std::ostream & out, core::pose::Pose const & pose ) const override;
++	core::Real report_sm( core::pose::Pose const & pose ) const override;
+ 	core::Real compute_distance( core::pose::Pose const &pose ) const;
+-	void parse_my_tag( utility::tag::TagCOP tag, basic::datacache::DataMap & );
++	void parse_my_tag( utility::tag::TagCOP tag, basic::datacache::DataMap & ) override;
+ 
+ 	static std::string class_name();
+ 	static void provide_xml_schema( utility::tag::XMLSchemaDefinition & xsd );
+diff --git a/source/src/protocols/drug_design/LigandLocationFilterCreator.hh b/source/src/protocols/drug_design/LigandLocationFilterCreator.hh
+index d14bec5978b..aed25967b10 100644
+--- a/source/src/protocols/drug_design/LigandLocationFilterCreator.hh
++++ b/source/src/protocols/drug_design/LigandLocationFilterCreator.hh
+@@ -29,8 +29,8 @@ namespace drug_design {
+ class LigandLocationFilterCreator : public protocols::filters::FilterCreator
+ {
+ public:
+-	virtual protocols::filters::FilterOP create_filter() const override;
+-	virtual std::string keyname() const override;
++	protocols::filters::FilterOP create_filter() const override;
++	std::string keyname() const override;
+ 	void provide_xml_schema( utility::tag::XMLSchemaDefinition & xsd ) const override;
+ };
+ 
+diff --git a/source/src/protocols/drug_design/ReactionBasedAnalogSampler.hh b/source/src/protocols/drug_design/ReactionBasedAnalogSampler.hh
+index f54286bd190..8e9573f8d48 100644
+--- a/source/src/protocols/drug_design/ReactionBasedAnalogSampler.hh
++++ b/source/src/protocols/drug_design/ReactionBasedAnalogSampler.hh
+@@ -73,7 +73,7 @@ public:
+ 
+ public:
+ 	ReactionBasedAnalogSampler();
+-	virtual ~ReactionBasedAnalogSampler();
++	~ReactionBasedAnalogSampler() override;
+ 
+ 	void apply( core::chemical::MutableResidueType & ) override;
+ 
+diff --git a/source/src/protocols/drug_design/ReactionBasedAnalogSamplerCreator.hh b/source/src/protocols/drug_design/ReactionBasedAnalogSamplerCreator.hh
+index a11c654052a..f8660ddc6ae 100644
+--- a/source/src/protocols/drug_design/ReactionBasedAnalogSamplerCreator.hh
++++ b/source/src/protocols/drug_design/ReactionBasedAnalogSamplerCreator.hh
+@@ -29,9 +29,9 @@ namespace drug_design {
+ 
+ class ReactionBasedAnalogSamplerCreator : public protocols::chemistries::ChemistryCreator {
+ public:
+-	virtual protocols::chemistries::ChemistryOP create_chemistry() const;
+-	virtual std::string keyname() const;
+-	virtual void provide_xml_schema( utility::tag::XMLSchemaDefinition & ) const;
++	protocols::chemistries::ChemistryOP create_chemistry() const override;
++	std::string keyname() const override;
++	void provide_xml_schema( utility::tag::XMLSchemaDefinition & ) const override;
+ };
+ 
+ 
+diff --git a/source/src/protocols/drug_design/ReactionMultiTransform.cc b/source/src/protocols/drug_design/ReactionMultiTransform.cc
+index 4a72d2104c7..f620d4d1a68 100644
+--- a/source/src/protocols/drug_design/ReactionMultiTransform.cc
++++ b/source/src/protocols/drug_design/ReactionMultiTransform.cc
+@@ -174,7 +174,7 @@ ReactionMultiTransform::get_additional_output() {
+ 		if ( get_last_status() == core::chemical::modifications::SUCCESS ) {
+ 			set_last_status( core::chemical::modifications::FAIL_RETRY );
+ 		}
+-		return core::chemical::MutableResidueTypeOP( 0 );
++		return nullptr;
+ 	}
+ 	last_product_ += 1;
+ 	debug_assert( last_product_ <= products_.size() );
+diff --git a/tests/benchmark/tests/code_quality.py b/tests/benchmark/tests/code_quality.py
+index bb67c352264..64bdca73718 100644
+--- a/tests/benchmark/tests/code_quality.py
++++ b/tests/benchmark/tests/code_quality.py
+@@ -261,6 +261,7 @@ def run_clang_tidy_test(rosetta_dir, working_dir, platform, config, hpc_driver=N
+                         "-clang-analyzer-cplusplus.NewDeleteLeaks", # Ibid.
+                             # (These are likely also covered by the ClangSA tests, but with better system header exclusion.)
+                         "-clang-diagnostic-c++17-extensions", # Skip - do not warn for using C++17 features without -std=c++17 being enabled.
++                        "-clang-analyzer-optin.cplusplus.VirtualCall", # Issue with RDKit -- if we get better system header exclusion we should reactivate this.
+                         ]
+     CLANG_TIDY_TESTS = ','.join( CLANG_TIDY_TESTS )
+ 
+diff --git a/tests/scientific/tests/peptide_pnear_vs_ic50/3.plot.py b/tests/scientific/tests/peptide_pnear_vs_ic50/3.plot.py
+index c2d5c79d272..5b753309e74 100755
+--- a/tests/scientific/tests/peptide_pnear_vs_ic50/3.plot.py
++++ b/tests/scientific/tests/peptide_pnear_vs_ic50/3.plot.py
+@@ -107,6 +107,37 @@ def plot_graph( evals, rmsdvals, hbonds, pnear, delta_g_folding, fig, axs, i, j
+     textstring  = r"$P_{Near}$" + pnearstring.format(pnear=pnear) + r"$\Delta$" + r"$G_{folding}$" + dgfoldingstring.format(delta_g_folding=delta_g_folding)
+     plt.text( .05, .05, textstring, transform=ax.transAxes, fontdict=fontsmall )
+ 
++def grab_table_from_log(logfile):
++    table_lines = []
++    in_table = False
++    with open(logfile) as f:
++        for line in f:
++            if line.startswith("MPI_worker"):
++                in_table = True
++                continue
++            elif line.startswith("End summary"):
++                in_table = False
++                break
++            elif in_table:
++                line = line.split()
++                if len(line) == 13:
++                    table_lines.append( line )
++
++    return table_lines
++
++def grab_key_values(logfile):
++    values = {}
++    with open(logfile) as f:
++        for line in f:
++            line = line.split()
++            if len(line) != 2:
++                continue
++            if line[0][-1] != ':':
++                continue
++            values[ line[0] ] = line[1]
++
++    return values
++
+ def plot_one_dataset( fig, axs, suffix='1A', row=1 ) :
+ 
+     # inputs are header labels from the scorefile to plot, for instance "total_score" and "rmsd"
+@@ -122,14 +153,21 @@ def plot_one_dataset( fig, axs, suffix='1A', row=1 ) :
+     logfile = logfile_names[suffix]
+ 
+     print ( "Reading data from " + logfile + "." )
+-    rmsd_vals = [ float(i) for i in str( subprocess.getoutput( "grep MPI_worker " + logfile + " -A 1000000 | tail -n+2 | awk '{if( NF == 13 ) {print $3} }'" ) ).split() ]
+-    rmsd_vals_to_lowest = [ float(i) for i in str( subprocess.getoutput( "grep MPI_worker " + logfile + " -A 1000000 | tail -n+2 | awk '{if( NF == 13 ) {print $4} }'" ) ).split() ]
+-    hbonds = [ float(i) for i in str( subprocess.getoutput( "grep MPI_worker " + logfile + " -A 1000000 | tail -n+2 | awk '{if( NF == 13 ) {print $6} }'" ) ).split() ]
+-    energy_vals = [ float(i) for i in str( subprocess.getoutput( "grep MPI_worker " + logfile + " -A 1000000 | tail -n+2 | awk '{if( NF == 13 ) {print $5} }'" ) ).split() ]
+-    pnear_val = float( subprocess.getoutput( "grep 'PNear:' " + logfile + " | awk '{print $2}'" ) )
+-    pnear_val_to_lowest = float( subprocess.getoutput( "grep 'PNearLowest:' " + logfile + " | awk '{print $2}'" ) )
+-    delta_g_folding_val = float( str(subprocess.getoutput( "grep 'kB\*T\*ln(Keq):' " + logfile + " | awk '{print $2}'" ) ) )
+-    delta_g_folding_val_to_lowest = float( str(subprocess.getoutput( "grep 'kB\*T\*ln(KeqLowest):' " + logfile + " | awk '{print $2}'" ) ) )
++    table = grab_table_from_log(logfile)
++    if len(table) == 0:
++        print( "ERROR reading data from table in " + logfile + "!" )
++        return
++    key_values = grab_key_values(logfile)
++
++    rmsd_vals = [ float(l[2]) for l in table ]
++    rmsd_vals_to_lowest = [ float(l[3]) for l in table ]
++    hbonds = [ float(l[5]) for l in table ]
++    energy_vals = [ float(l[4]) for l in table ]
++
++    pnear_val = float( key_values[ 'PNear:' ] )
++    pnear_val_to_lowest = float( key_values[ 'PNearLowest:' ] )
++    delta_g_folding_val = float( key_values[ '-kB*T*ln(Keq):' ] )
++    delta_g_folding_val_to_lowest = float( key_values[ '-kB*T*ln(KeqLowest):' ] )
+     minenergy = min(energy_vals)
+     maxrms = max( rmsd_vals )
+     maxrms_to_lowest = max( rmsd_vals_to_lowest )

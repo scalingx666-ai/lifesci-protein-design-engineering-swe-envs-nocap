@@ -1,0 +1,71 @@
+diff --git a/source/src/core/import_pose/atom_tree_diffs/atom_tree_diff.hh b/source/src/core/import_pose/atom_tree_diffs/atom_tree_diff.hh
+index fac021d47a1..b5300aa955d 100644
+--- a/source/src/core/import_pose/atom_tree_diffs/atom_tree_diff.hh
++++ b/source/src/core/import_pose/atom_tree_diffs/atom_tree_diff.hh
+@@ -112,7 +112,8 @@ public:
+ 	}
+ 
+ private:
+-	AtomTreeDiff(AtomTreeDiff const &);
++	AtomTreeDiff( AtomTreeDiff const & ) = delete;
++	AtomTreeDiff & operator=( AtomTreeDiff const & ) = delete;
+ 
+ 	/// The list of (tag,scores) pairs for the diffed structures, for efficient selection of subsets.
+ 	/// (E.g. the top 5% by total score.) Memory cost is probably ~1 kb / structure.
+diff --git a/source/src/core/io/silent/SilentStructFactory.hh b/source/src/core/io/silent/SilentStructFactory.hh
+index 545483fe6dd..4462b998a69 100644
+--- a/source/src/core/io/silent/SilentStructFactory.hh
++++ b/source/src/core/io/silent/SilentStructFactory.hh
+@@ -38,9 +38,6 @@ public:
+ private:
+ 	SilentStructFactory();
+ 
+-	SilentStructFactory(SilentStructFactory const &); // unimplemented
+-	SilentStructFactory const & operator=( SilentStructFactory const & ); // unimplemented
+-
+ public:
+ 
+ 	void factory_register( SilentStructCreatorCOP creator );
+diff --git a/source/src/core/scoring/constraints/ConstraintFactory.hh b/source/src/core/scoring/constraints/ConstraintFactory.hh
+index a9c38971028..bd51088c7ef 100644
+--- a/source/src/core/scoring/constraints/ConstraintFactory.hh
++++ b/source/src/core/scoring/constraints/ConstraintFactory.hh
+@@ -41,9 +41,6 @@ public:
+ private:
+ 	ConstraintFactory();
+ 
+-	ConstraintFactory(ConstraintFactory const &); // unimplemented
+-	ConstraintFactory const & operator=( ConstraintFactory const & ); // unimplemented
+-
+ public:
+ 
+ 	void factory_register( ConstraintCreatorCOP creator );
+diff --git a/source/src/core/scoring/orbitals/OrbitalsStatistics.hh b/source/src/core/scoring/orbitals/OrbitalsStatistics.hh
+index 0e4eec1e4ae..78132f3b1ea 100644
+--- a/source/src/core/scoring/orbitals/OrbitalsStatistics.hh
++++ b/source/src/core/scoring/orbitals/OrbitalsStatistics.hh
+@@ -93,8 +93,8 @@ public:
+ 
+ 
+ private:
+-	OrbitalsStatistics(OrbitalsStatistics const & );  /// Non-copyable due to std::ofstream member, we need so PyRosetta builder
+-	/// can figure out not to try to create copy constructor.
++	OrbitalsStatistics( OrbitalsStatistics const & ) = delete;
++	OrbitalsStatistics & operator=( OrbitalsStatistics const & ) = delete;
+ 
+ 	utility::vector1< numeric::histograms::TwoDHistogram<core::Size, core::SSize> > histogram_vector_;
+ 	numeric::histograms::TwoDHistogram<core::Size, core::SSize> twoD_histogram_;
+diff --git a/source/src/core/sequence/SequenceFactory.hh b/source/src/core/sequence/SequenceFactory.hh
+index e58ae6a9344..7963d6dcb00 100644
+--- a/source/src/core/sequence/SequenceFactory.hh
++++ b/source/src/core/sequence/SequenceFactory.hh
+@@ -36,9 +36,6 @@ public:
+ private:
+ 	SequenceFactory();
+ 
+-	SequenceFactory(SequenceFactory const &); // unimplemented
+-	SequenceFactory const & operator=( SequenceFactory const & ); // unimplemented
+-
+ public:
+ 	void factory_register( SequenceCreatorCOP creator );
+ 	SequenceOP get_sequence( std::string const & type_name );

@@ -1,0 +1,243 @@
+diff --git a/include/RbtBaseIdxSF.h b/include/RbtBaseIdxSF.h
+index 33bd0a3..65d2e2b 100644
+--- a/include/RbtBaseIdxSF.h
++++ b/include/RbtBaseIdxSF.h
+@@ -16,10 +16,15 @@
+ #ifndef _RBTBASEIDXSF_H_
+ #define _RBTBASEIDXSF_H_
+ 
++#include <type_traits>
++
++#include "RbtBaseGrid.h"
+ #include "RbtBaseSF.h"
++#include "RbtDockingSite.h"
+ #include "RbtInteractionGrid.h"
+ #include "RbtNonBondedGrid.h"
+ #include "RbtNonBondedHHSGrid.h"
++#include "RbtWorkSpace.h"
+ 
+ class RbtBaseIdxSF: public virtual RbtBaseSF {
+  public:
+@@ -47,9 +52,8 @@ class RbtBaseIdxSF: public virtual RbtBaseSF {
+     ///////////////////
+     RbtBaseIdxSF();
+ 
+-    RbtInteractionGridPtr CreateInteractionGrid() const;
+-    RbtNonBondedGridPtr CreateNonBondedGrid() const;
+-    RbtNonBondedHHSGridPtr CreateNonBondedHHSGrid() const;
++    template <class T>
++    SmartPtr<T> CreateGrid() const;
+     RbtDouble GetMaxError() const;
+     // DM 12 Apr 2002
+     // Returns the maximum range of the scoring function,
+@@ -81,4 +85,23 @@ class RbtBaseIdxSF: public virtual RbtBaseSF {
+     RbtDouble m_border;
+ };
+ 
++template <class T>
++SmartPtr<T> RbtBaseIdxSF::CreateGrid() const {
++    // Create a grid covering the docking site
++    static_assert(std::is_base_of<RbtBaseGrid, T>::value, "T must inherit from RbtBaseGrid");
++    RbtDockingSitePtr spDS = GetWorkSpace()->GetDockingSite();
++    if (spDS.Null()) return SmartPtr<T>();
++
++    // Extend grid by _BORDER, mainly to allow for the possibility of polar hydrogens
++    // falling outside of the docking site
++    RbtCoord minCoord = spDS->GetMinCoord() - m_border;
++    RbtCoord maxCoord = spDS->GetMaxCoord() + m_border;
++    RbtVector recepExtent = maxCoord - minCoord;
++    RbtVector gridStep(m_gridStep, m_gridStep, m_gridStep);
++    RbtUInt nX = int(recepExtent.x / gridStep.x) + 1;
++    RbtUInt nY = int(recepExtent.y / gridStep.y) + 1;
++    RbtUInt nZ = int(recepExtent.z / gridStep.z) + 1;
++    return SmartPtr<T>(new T(minCoord, gridStep, nX, nY, nZ));
++}
++
+ #endif  //_RBTBASEIDXSF_H_
+diff --git a/src/lib/RbtAromIdxSF.cxx b/src/lib/RbtAromIdxSF.cxx
+index fb220a2..bc48f08 100644
+--- a/src/lib/RbtAromIdxSF.cxx
++++ b/src/lib/RbtAromIdxSF.cxx
+@@ -94,8 +94,8 @@ void RbtAromIdxSF::SetupReceptor() {
+     ClearReceptor();
+     if (GetReceptor().Null()) return;
+ 
+-    m_spAromGrid = CreateInteractionGrid();
+-    m_spGuanGrid = CreateInteractionGrid();
++    m_spAromGrid = CreateGrid<RbtInteractionGrid>();
++    m_spGuanGrid = CreateGrid<RbtInteractionGrid>();
+ 
+     RbtDouble idxIncr = GetParameter(_INCR);  // vdw Radius increment for indexing
+     RbtDouble maxError = GetMaxError();
+diff --git a/src/lib/RbtBaseIdxSF.cxx b/src/lib/RbtBaseIdxSF.cxx
+index 1c49396..13794a4 100644
+--- a/src/lib/RbtBaseIdxSF.cxx
++++ b/src/lib/RbtBaseIdxSF.cxx
+@@ -39,59 +39,6 @@ RbtDouble RbtBaseIdxSF::GetBorder() const { return m_border; }
+ 
+ void RbtBaseIdxSF::SetBorder(RbtDouble border) { SetParameter(_BORDER, border); }
+ 
+-// DM 10 Apr 2002
+-// I know, I know, grids should be templated to avoid the need for two different CreateGrid methods...
+-RbtInteractionGridPtr RbtBaseIdxSF::CreateInteractionGrid() const {
+-    // Create a grid covering the docking site
+-    RbtDockingSitePtr spDS = GetWorkSpace()->GetDockingSite();
+-    if (spDS.Null()) return RbtInteractionGridPtr();
+-
+-    // Extend grid by _BORDER, mainly to allow for the possibility of polar hydrogens
+-    // falling outside of the docking site
+-    RbtCoord minCoord = spDS->GetMinCoord() - m_border;
+-    RbtCoord maxCoord = spDS->GetMaxCoord() + m_border;
+-    RbtVector recepExtent = maxCoord - minCoord;
+-    RbtVector gridStep(m_gridStep, m_gridStep, m_gridStep);
+-    RbtUInt nX = int(recepExtent.x / gridStep.x) + 1;
+-    RbtUInt nY = int(recepExtent.y / gridStep.y) + 1;
+-    RbtUInt nZ = int(recepExtent.z / gridStep.z) + 1;
+-    return RbtInteractionGridPtr(new RbtInteractionGrid(minCoord, gridStep, nX, nY, nZ));
+-}
+-
+-RbtNonBondedGridPtr RbtBaseIdxSF::CreateNonBondedGrid() const {
+-    // Create a grid covering the docking site
+-    RbtDockingSitePtr spDS = GetWorkSpace()->GetDockingSite();
+-    if (spDS.Null()) return RbtInteractionGridPtr();
+-
+-    // Extend grid by _BORDER, mainly to allow for the possibility of polar hydrogens
+-    // falling outside of the docking site
+-    RbtCoord minCoord = spDS->GetMinCoord() - m_border;
+-    RbtCoord maxCoord = spDS->GetMaxCoord() + m_border;
+-    RbtVector recepExtent = maxCoord - minCoord;
+-    RbtVector gridStep(m_gridStep, m_gridStep, m_gridStep);
+-    RbtUInt nX = int(recepExtent.x / gridStep.x) + 1;
+-    RbtUInt nY = int(recepExtent.y / gridStep.y) + 1;
+-    RbtUInt nZ = int(recepExtent.z / gridStep.z) + 1;
+-    return RbtNonBondedGridPtr(new RbtNonBondedGrid(minCoord, gridStep, nX, nY, nZ));
+-}
+-
+-RbtNonBondedHHSGridPtr RbtBaseIdxSF::CreateNonBondedHHSGrid() const {
+-    // Create a grid covering the docking site
+-    RbtDockingSitePtr spDS = GetWorkSpace()->GetDockingSite();
+-    if (spDS.Null()) return RbtNonBondedHHSGridPtr();
+-
+-    // Extend grid by _BORDER, mainly to allow for the possibility of polar hydrogens
+-    // falling outside of the docking site
+-    RbtCoord minCoord = spDS->GetMinCoord() - m_border;
+-    RbtCoord maxCoord = spDS->GetMaxCoord() + m_border;
+-    RbtVector recepExtent = maxCoord - minCoord;
+-    RbtVector gridStep(m_gridStep, m_gridStep, m_gridStep);
+-    RbtUInt nX = int(recepExtent.x / gridStep.x) + 1;
+-    RbtUInt nY = int(recepExtent.y / gridStep.y) + 1;
+-    RbtUInt nZ = int(recepExtent.z / gridStep.z) + 1;
+-    return RbtNonBondedHHSGridPtr(new RbtNonBondedHHSGrid(minCoord, gridStep, nX, nY, nZ));
+-}
+-
+ RbtDouble RbtBaseIdxSF::GetMaxError() const {
+     // maxError is half a grid diagonal. This is the tolerance we have to allow when indexing the receptor atoms on the
+     // grid When retrieving the nearest neighbours to a ligand atom, we do the lookup on the nearest grid point to the
+diff --git a/src/lib/RbtNmrSF.cxx b/src/lib/RbtNmrSF.cxx
+index f07afbe..f4f0e35 100644
+--- a/src/lib/RbtNmrSF.cxx
++++ b/src/lib/RbtNmrSF.cxx
+@@ -48,7 +48,7 @@ void RbtNmrSF::SetupReceptor() {
+     RbtInt iTrace = GetTrace();
+ 
+     // Create indexed grid for STD restraints penalty function
+-    m_spGrid = CreateNonBondedGrid();
++    m_spGrid = CreateGrid<RbtNonBondedGrid>();
+     // Fixed distance range used for indexing the relevant receptor atoms
+     RbtDouble range = GetRange() + GetMaxError();
+     RbtDockingSitePtr spDS = GetWorkSpace()->GetDockingSite();
+diff --git a/src/lib/RbtPMFIdxSF.cxx b/src/lib/RbtPMFIdxSF.cxx
+index f57dd77..743b5cc 100644
+--- a/src/lib/RbtPMFIdxSF.cxx
++++ b/src/lib/RbtPMFIdxSF.cxx
+@@ -172,7 +172,7 @@ void RbtPMFIdxSF::SetupReceptor() {
+         cout << _CT << "WARNING: no receptor defined. " << endl;
+         return;
+     } else {  // load PMFs from table files
+-        theSurround = CreateNonBondedGrid();
++        theSurround = CreateGrid<RbtNonBondedGrid>();
+         RbtDockingSitePtr spDS = GetWorkSpace()->GetDockingSite();
+         RbtDouble range = GetRange() + GetMaxError();
+         RbtAtomList atomList = spDS->GetAtomList(GetReceptor()->GetAtomList(), 0.0, GetCorrectedRange());
+diff --git a/src/lib/RbtPolarIdxSF.cxx b/src/lib/RbtPolarIdxSF.cxx
+index 95c864b..53d1290 100644
+--- a/src/lib/RbtPolarIdxSF.cxx
++++ b/src/lib/RbtPolarIdxSF.cxx
+@@ -109,9 +109,9 @@ void RbtPolarIdxSF::SetupReceptor() {
+     RbtInt nCoords = GetReceptor()->GetNumSavedCoords() - 1;
+     if (nCoords > 0) {
+         RbtAtomList atomList = GetReceptor()->GetAtomList();
+-        m_spPosGrid = CreateInteractionGrid();
++        m_spPosGrid = CreateGrid<RbtInteractionGrid>();
+         m_recepPosList = CreateDonorInteractionCenters(atomList);
+-        m_spNegGrid = CreateInteractionGrid();
++        m_spNegGrid = CreateGrid<RbtInteractionGrid>();
+         m_recepNegList = CreateAcceptorInteractionCenters(atomList);
+         for (RbtInt i = 1; i <= nCoords; i++) {
+             if (iTrace > 0) {
+@@ -133,8 +133,8 @@ void RbtPolarIdxSF::SetupReceptor() {
+         }
+     } else {
+         RbtAtomList atomList = spDS->GetAtomList(GetReceptor()->GetAtomList(), 0.0, GetCorrectedRange());
+-        m_spPosGrid = CreateInteractionGrid();
+-        m_spNegGrid = CreateInteractionGrid();
++        m_spPosGrid = CreateGrid<RbtInteractionGrid>();
++        m_spNegGrid = CreateGrid<RbtInteractionGrid>();
+         m_recepPosList = CreateDonorInteractionCenters(atomList);
+         m_recepNegList = CreateAcceptorInteractionCenters(atomList);
+ 
+diff --git a/src/lib/RbtPsfFileSink.cxx b/src/lib/RbtPsfFileSink.cxx
+index aa3d937..8aaf6b2 100644
+--- a/src/lib/RbtPsfFileSink.cxx
++++ b/src/lib/RbtPsfFileSink.cxx
+@@ -117,7 +117,6 @@ void RbtPsfFileSink::Render() {
+             bIter++;
+             ostr << setw(8) << (*bIter)->GetAtom1Ptr()->GetAtomId() << setw(8) << (*bIter)->GetAtom2Ptr()->GetAtomId();
+             bIter++;
+-            ostr;
+             AddLine(ostr.str());
+         }
+         // Remaining bonds on final incomplete line
+@@ -127,7 +126,6 @@ void RbtPsfFileSink::Render() {
+                 ostr << setw(8) << (*bIter)->GetAtom1Ptr()->GetAtomId() << setw(8)
+                      << (*bIter)->GetAtom2Ptr()->GetAtomId();
+             }
+-            ostr;
+             AddLine(ostr.str());
+         }
+ 
+diff --git a/src/lib/RbtSAIdxSF.cxx b/src/lib/RbtSAIdxSF.cxx
+index 5b36cff..1bee377 100644
+--- a/src/lib/RbtSAIdxSF.cxx
++++ b/src/lib/RbtSAIdxSF.cxx
+@@ -66,7 +66,7 @@ void RbtSAIdxSF::SetupReceptor() {
+     // and that they don't move very far (up to 2A)
+     m_bFlexRec = GetReceptor()->isFlexible();
+     RbtDouble flexDist = 2.0;
+-    theIdxGrid = CreateNonBondedHHSGrid();
++    theIdxGrid = CreateGrid<RbtNonBondedHHSGrid>();
+     RbtDouble idxIncr = GetParameter(_INCR).Double() + GetMaxError();
+     RbtDouble flexIncr = idxIncr + flexDist;
+ 
+diff --git a/src/lib/RbtVdwIdxSF.cxx b/src/lib/RbtVdwIdxSF.cxx
+index 2cb973b..fb74bd2 100644
+--- a/src/lib/RbtVdwIdxSF.cxx
++++ b/src/lib/RbtVdwIdxSF.cxx
+@@ -109,7 +109,7 @@ void RbtVdwIdxSF::SetupReceptor() {
+     m_bFlexRec = GetReceptor()->isFlexible();
+ 
+     m_recAtomList = GetReceptor()->GetAtomList();
+-    m_spGrid = CreateNonBondedGrid();
++    m_spGrid = CreateGrid<RbtNonBondedGrid>();
+     RbtDouble maxError = GetMaxError();
+     RbtDouble flexDist = 2.0;
+     RbtDockingSitePtr spDS = GetWorkSpace()->GetDockingSite();
+@@ -242,7 +242,7 @@ void RbtVdwIdxSF::SetupSolvent() {
+     // The interaction map can be partitioned in advance, based on the maximum displacement
+     // of any of the tethered atoms
+     if (!m_solventFixTethAtomList.empty()) {
+-        m_spSolventGrid = CreateNonBondedGrid();
++        m_spSolventGrid = CreateGrid<RbtNonBondedGrid>();
+         RbtDouble maxError = GetMaxError();
+         RbtDouble maxFlexDist = 0.0;
+         for (RbtAtomRListConstIter iter = m_solventFixTethAtomList.begin(); iter != m_solventFixTethAtomList.end();

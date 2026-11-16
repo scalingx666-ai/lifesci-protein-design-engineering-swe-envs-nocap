@@ -1,0 +1,110 @@
+diff --git a/source/src/core/chemical/ResidueType.cc b/source/src/core/chemical/ResidueType.cc
+index 78a9b1aa2db..d5cc2265c78 100644
+--- a/source/src/core/chemical/ResidueType.cc
++++ b/source/src/core/chemical/ResidueType.cc
+@@ -62,6 +62,7 @@
+ 
+ // C++ headers
+ #include <algorithm>
++#include <sstream>      // std::stringstream
+ 
+ #ifdef    SERIALIZATION
+ #include <core/chemical/rotamers/RotamerLibrarySpecification.hh>
+@@ -1150,6 +1151,16 @@ ResidueType::setup_atom_ordering( MutableResidueType const & mrt )
+ 		first_sidechain_hydrogen_ = attached_H_begin_[n_backbone_heavyatoms_+1];
+ 	}
+ 
++	if ( atom_order.size() != natoms_  ) {
++		std::stringstream ss;
++		ss << "atom_order.size() = " << atom_order.size() << '\n';
++		ss << "natoms_ = " << natoms_ << '\n';
++		ss << "This mismatch is expected to give a segfault down the line. The mismatch can be caused by:\n";
++		ss << " - Using an invalid patch that has heavy/virtual atoms downstream of hydrogens.\n";
++		ss << " - Maybe other reasons? Add them here if you find more please!";
++		utility_exit_with_message( ss.str() );
++	}
++
+ 	return atom_order;
+ }
+ 
+diff --git a/source/test/core.test.settings b/source/test/core.test.settings
+index 1ecc2b42672..8689239ca91 100644
+--- a/source/test/core.test.settings
++++ b/source/test/core.test.settings
+@@ -760,6 +760,7 @@ testinputfiles = [
+ 	"chemical/atom_properties.txt",
+ 	"chemical/ASX.params", # remove if the database version gets permanently enabled
+ 	"chemical/LYX.params", # remove if the database version gets permanently enabled
++	"chemical/bad_atom_ordering.patch",
+ 	"chemical/conflict_patch.txt",
+ 	"chemical/conn.pdb",
+ 	"chemical/carbohydrates/amylopectin_fragment.pdb",
+diff --git a/source/test/core/chemical/ResidueTypeTests.cxxtest.hh b/source/test/core/chemical/ResidueTypeTests.cxxtest.hh
+index d17823dba6c..15c8c1494ed 100644
+--- a/source/test/core/chemical/ResidueTypeTests.cxxtest.hh
++++ b/source/test/core/chemical/ResidueTypeTests.cxxtest.hh
+@@ -33,10 +33,15 @@
+ #include <core/chemical/residue_io.hh>
+ #include <core/chemical/util.hh>
+ #include <core/chemical/residue_support.hh>
++#include <core/chemical/Patch.hh>
+ 
+ #include <core/chemical/sdf/mol_writer.hh>
+ 
++#include <core/conformation/Residue.hh>
++#include <core/conformation/ResidueFactory.hh>
++
+ #include <core/pose/Pose.hh>
++#include <core/pose/annotated_sequence.hh>
+ 
+ #include <core/kinematics/Stub.hh>
+ 
+@@ -657,4 +662,17 @@ public:
+ 
+ 	}
+ 
++	void test_bad_atom_ordering(){
++		core::pose::Pose pose;
++		core::pose::make_pose_from_sequence( pose, "TESTMYIDEAPLEASE", "fa_standard" );
++		core::Size const resid = 4;
++		core::conformation::Residue const & r = pose.residue(resid);
++		core::chemical::Patch patch;
++		patch.read_file( "core/chemical/bad_atom_ordering.patch" );
++		utility::vector1< core::chemical::VariantType > types;
++		patch.types( types );
++		auto mutable_type = patch.apply( r.type() );
++		TS_ASSERT_THROWS_ANYTHING( auto res_type = core::chemical::ResidueType::make( *mutable_type ); )
++	}
++
+ };
+diff --git a/source/test/core/chemical/bad_atom_ordering.patch b/source/test/core/chemical/bad_atom_ordering.patch
+new file mode 100644
+index 00000000000..5dbf6f40d15
+--- /dev/null
++++ b/source/test/core/chemical/bad_atom_ordering.patch
+@@ -0,0 +1,25 @@
++NAME AddVirtualAtoms
++TYPES ADD_VIRTUAL_ATOMS
++BEGIN_SELECTOR
++# This patch can be applied to any residue type
++END_SELECTOR
++BEGIN_CASE
++BEGIN_SELECTOR
++# This case applies to all residues
++END_SELECTOR
++ADD_ATOM  V0  VIRT VIRT 0.00
++ADD_BOND  OG1  V0
++SET_ICOOR  V0   1.00000000  1.00000000  1.00000000   OG1   CB    CA
++ADD_ATOM  V1  VIRT VIRT 0.00
++ADD_BOND  N    V1
++SET_ICOOR  V1   1.00000000  1.00000000  1.00000000   N     CA    C 
++ADD_ATOM  V2  VIRT VIRT 0.00
++ADD_BOND  O    V2
++SET_ICOOR  V2   1.00000000  1.00000000  1.00000000   O     C     CA
++ADD_ATOM  V3  VIRT VIRT 0.00
++ADD_BOND  C    V3
++SET_ICOOR  V3   1.00000000  1.00000000  1.00000000   C     CA    N 
++ADD_ATOM  V4  VIRT VIRT 0.00
++ADD_BOND 1HG2  V4
++SET_ICOOR  V4   1.00000000  1.00000000  1.00000000  1HG2   CG2   CB
++END_CASE

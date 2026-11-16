@@ -1,0 +1,196 @@
+diff --git a/bindsweeper/pyproject.toml b/bindsweeper/pyproject.toml
+index e08d678..96711ce 100644
+--- a/bindsweeper/pyproject.toml
++++ b/bindsweeper/pyproject.toml
+@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
+ 
+ [project]
+ name = "bindsweeper"
+-version = "2.1.0" 
++version = "2.1.1" 
+ authors = [
+     { name = "Dylan Silke", email = "silke.dy@wehi.edu.au"},
+     { name = "Josh Hardy", email = "hardy.j@wehi.edu.au"}
+diff --git a/bindsweeper/uv.lock b/bindsweeper/uv.lock
+index 6a01885..90b306e 100644
+--- a/bindsweeper/uv.lock
++++ b/bindsweeper/uv.lock
+@@ -10,7 +10,7 @@ resolution-markers = [
+ 
+ [[package]]
+ name = "bindsweeper"
+-version = "2.1.0"
++version = "2.1.1"
+ source = { editable = "." }
+ dependencies = [
+     { name = "click", version = "8.1.8", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+diff --git a/nextflow.config b/nextflow.config
+index 5ff99a4..fbf7842 100644
+--- a/nextflow.config
++++ b/nextflow.config
+@@ -658,3 +658,36 @@ process {
+             containerOptions = "--bind ${projectDir} --bind ${projectDir}/scripts:/scripts"
+         }
+ }
++
++manifest {
++    name            = 'ProteinDJ'
++    contributors    = [
++        [
++            name: 'Dylan Silke',
++            affiliation: 'Walter and Eliza Hall Institute of Medical Research',
++            github: 'https://github.com/s-i-l-k-e',
++            orcid: 'https://orcid.org/0009-0009-3011-1370',
++            contribution: ['author']
++        ],
++        [
++            name: 'Joshua Hardy',
++            affiliation: 'Walter and Eliza Hall Institute of Medical Research',
++            github: 'https://github.com/JoshuaMHardy',
++            orcid: 'https://orcid.org/0000-0002-8014-8552',
++            contribution: ['author']
++        ],
++        [
++            name: 'Julie Iskander',
++            affiliation: 'Walter and Eliza Hall Institute of Medical Research',
++            github: 'https://github.com/jIskCoder',
++            orcid: 'https://orcid.org/0000-0002-3426-4376',
++            contribution: ['author']
++        ]
++    ]
++    homePage        = 'https://github.com/PapenfussLab/proteindj'
++    description     = 'Nextflow pipeline for protein design using RFdiffusion, BindCraft, ProteinMPNN, FullAtom MPNN, AlphaFold2 Initial-Guess, and Boltz-2.'
++    mainScript      = 'main.nf'
++    nextflowVersion = '!>=24.04.0'
++    version         = '2.1.1'
++    doi             = '10.1101/2025.09.24.678028'
++}
+diff --git a/nextflow_schema.json b/nextflow_schema.json
+index 641ac87..62af3ba 100644
+--- a/nextflow_schema.json
++++ b/nextflow_schema.json
+@@ -90,13 +90,7 @@
+                     "type": "integer",
+                     "description": "Number of timesteps for partial diffusion. e.g. 20"
+                 }
+-            },
+-            "required": [
+-                "input_pdb",
+-                "design_length",
+-                "rfd_scaffold_dir",
+-                "rfd_partial_diffusion_timesteps"
+-            ]
++            }
+         },
+         "workflow_advanced_parameters": {
+             "title": "Mode-Specific Parameters",
+diff --git a/schemas/nextflow_schema_binder_motifscaff.json b/schemas/nextflow_schema_binder_motifscaff.json
+index 69752f8..9baaeb0 100644
+--- a/schemas/nextflow_schema_binder_motifscaff.json
++++ b/schemas/nextflow_schema_binder_motifscaff.json
+@@ -75,7 +75,8 @@
+         }
+       },
+       "required": [
+-        "input_pdb"
++        "input_pdb",
++        "rfd_contigs"
+       ]
+     },
+     "workflow_advanced_parameters": {
+diff --git a/schemas/nextflow_schema_custom.json b/schemas/nextflow_schema_custom.json
+index 5aa50aa..122d0d4 100644
+--- a/schemas/nextflow_schema_custom.json
++++ b/schemas/nextflow_schema_custom.json
+@@ -109,13 +109,7 @@
+           "description": "Number of timesteps for partial diffusion. e.g. 20",
+           "default": "null"
+         }
+-      },
+-      "required": [
+-        "input_pdb",
+-        "design_length",
+-        "rfd_scaffold_dir",
+-        "rfd_partial_diffusion_timesteps"
+-      ]
++      }
+     },
+     "workflow_advanced_parameters": {
+       "title": "Mode-Specific Parameters",
+diff --git a/schemas/nextflow_schema_monomer_motifscaff.json b/schemas/nextflow_schema_monomer_motifscaff.json
+index 4a2c6c2..eb950f2 100644
+--- a/schemas/nextflow_schema_monomer_motifscaff.json
++++ b/schemas/nextflow_schema_monomer_motifscaff.json
+@@ -75,7 +75,8 @@
+         }
+       },
+       "required": [
+-        "input_pdb"
++        "input_pdb",
++        "rfd_contigs"
+       ]
+     },
+     "workflow_advanced_parameters": {
+diff --git a/scripts/generate_mode_schemas.py b/scripts/generate_mode_schemas.py
+index c8337ab..b20f4fe 100644
+--- a/scripts/generate_mode_schemas.py
++++ b/scripts/generate_mode_schemas.py
+@@ -4,6 +4,20 @@
+ import copy
+ from pathlib import Path
+ 
++# Define required parameters for each mode based on the table in parameters.md
++MODE_REQUIRED_PARAMS = {
++    'monomer_denovo': ['design_length'],
++    'monomer_foldcond': ['rfd_scaffold_dir'],
++    'monomer_motifscaff': ['input_pdb', 'rfd_contigs'],
++    'monomer_partialdiff': ['input_pdb', 'rfd_partial_diffusion_timesteps'],
++    'binder_denovo': ['input_pdb', 'design_length'],
++    'binder_foldcond': ['input_pdb', 'rfd_scaffold_dir'],
++    'binder_motifscaff': ['input_pdb', 'rfd_contigs'],
++    'binder_partialdiff': ['input_pdb', 'rfd_partial_diffusion_timesteps'],
++    'bindcraft_denovo': ['input_pdb', 'design_length'],
++    'custom': []  # Custom mode has no required mode-specific parameters
++}
++
+ def parse_csv(csv_file):
+     """
+     Parse the CSV into a dict of {mode: {param: value or None}}
+@@ -65,7 +79,7 @@ def build_mode_schema(main_schema, mode, overrides):
+     schema['$id'] = main_schema['$id'].rsplit('/', 1)[0] + f"/nextflow_schema_{mode}.json"
+ 
+     # For each definition section, filter and override defaults as needed
+-    for defn in schema['definitions'].values():
++    for defn_name, defn in schema['definitions'].items():
+         if 'properties' not in defn:
+             continue
+         filtered = {}
+@@ -77,11 +91,25 @@ def build_mode_schema(main_schema, mode, overrides):
+                     prop['default'] = convert_value(override_val, prop)
+                 filtered[param] = prop
+         defn['properties'] = filtered
++        
+         # Update required list
+-        if 'required' in defn:
+-            defn['required'] = [p for p in defn['required'] if p in filtered]
+-            if not defn['required']:
++        if defn_name == 'mode_specific_parameters':
++            # Set required parameters based on mode
++            if mode in MODE_REQUIRED_PARAMS:
++                required = [p for p in MODE_REQUIRED_PARAMS[mode] if p in filtered]
++                if required:
++                    defn['required'] = required
++                elif 'required' in defn:
++                    del defn['required']
++            elif 'required' in defn:
++                # For modes not in mapping, remove required
+                 del defn['required']
++        else:
++            # For other definitions, keep existing required list filtering
++            if 'required' in defn:
++                defn['required'] = [p for p in defn['required'] if p in filtered]
++                if not defn['required']:
++                    del defn['required']
+ 
+     # Special handling for design_mode
+     for defn in schema['definitions'].values():

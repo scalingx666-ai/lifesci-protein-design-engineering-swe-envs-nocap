@@ -1,0 +1,119 @@
+diff --git a/.github/docker/Dockerfile.ubuntu-22.04-clang b/.github/docker/Dockerfile.ubuntu-22.04-clang
+new file mode 100644
+index 00000000..3a046284
+--- /dev/null
++++ b/.github/docker/Dockerfile.ubuntu-22.04-clang
+@@ -0,0 +1,4 @@
++FROM ubuntu:22.04 as base
++
++# Install dependencies
++RUN apt-get update && apt-get install -y --no-install-recommends make clang libpopt-dev libpopt0
+diff --git a/.github/workflows/build_generic.yml b/.github/workflows/build_generic.yml
+index 84b069cb..f44be2fd 100644
+--- a/.github/workflows/build_generic.yml
++++ b/.github/workflows/build_generic.yml
+@@ -4,6 +4,10 @@ on:
+       distribution:
+         required: true
+         type: string
++      compiler:
++        required: false
++        default: g++
++        type: string
+ 
+ jobs:
+   build:
+@@ -24,7 +28,7 @@ jobs:
+         load: true
+ 
+     - name: Build rDock
+-      run: docker run --rm -v $PWD:/rdock -w /rdock rdock-${{ inputs.distribution }}:base make -j 2
++      run: docker run --rm -v $PWD:/rdock -w /rdock rdock-${{ inputs.distribution }}:base make CXX=${{ inputs.compiler }} -j 2
+     
+     - name: Test rDock
+-      run: docker run --rm -v $PWD:/rdock -w /rdock rdock-${{ inputs.distribution }}:base make test
+\ No newline at end of file
++      run: docker run --rm -v $PWD:/rdock -w /rdock rdock-${{ inputs.distribution }}:base make CXX=${{ inputs.compiler }} test
+\ No newline at end of file
+diff --git a/.github/workflows/build_matrix.yml b/.github/workflows/build_matrix.yml
+index 57f9c0e2..aef3f1a0 100644
+--- a/.github/workflows/build_matrix.yml
++++ b/.github/workflows/build_matrix.yml
+@@ -30,6 +30,13 @@ jobs:
+           - debian-10
+           - centos-stream8
+           - centos-centos7
++        compiler:
++          - g++
++        include:
++          - distribution: ubuntu-22.04-clang
++            compiler: clang++
++
+     uses: ./.github/workflows/build_generic.yml
+     with:
+-      distribution: ${{ matrix.distribution }}
+\ No newline at end of file
++      distribution: ${{ matrix.distribution }}
++      compiler: ${{ matrix.compiler }}
+\ No newline at end of file
+diff --git a/Makefile b/Makefile
+index 14a9ccc7..55606f04 100644
+--- a/Makefile
++++ b/Makefile
+@@ -77,7 +77,7 @@ endif
+ 
+ CXX_FLAGS                   := $(CXX_BASE_FLAGS) $(CXX_CONFIG_FLAGS) $(CXX_WARNING_FLAGS) $(CXX_EXTRA_FLAGS) $(DEFINES)
+ LINK_FLAGS                  := -shared
+-LIB_DEPENDENCIES            := -lpopt -lm
++LIB_DEPENDENCIES            := -lpopt -lm -lstdc++
+ LIBS                        += $(LIB_DEPENDENCIES) -lRbt
+ INCLUDE                     := $(addprefix -I./, $(shell find include/ -type d )) $(addprefix -I./, $(shell find import/ -type d ))
+ LIBRARY                     := ./lib
+diff --git a/import/tnt/include/tnt_array1d.h b/import/tnt/include/tnt_array1d.h
+index 858df579..298a3c4a 100644
+--- a/import/tnt/include/tnt_array1d.h
++++ b/import/tnt/include/tnt_array1d.h
+@@ -61,7 +61,7 @@ class Array1D
+ 	         Array1D();
+ 	explicit Array1D(int n);
+ 	         Array1D(int n, const T &a);
+-	         Array1D(int n,  T *a);
++	         Array1D(int n, const T *a);
+     inline   Array1D(const Array1D &A);
+ 	inline   operator T*();
+ 	inline   operator const T*();
+@@ -120,7 +120,7 @@ Array1D<T>::Array1D(int n, const T &val) : v_(n), n_(n), data_(v_.begin())
+ }
+ 
+ template <class T>
+-Array1D<T>::Array1D(int n, T *a) : v_(a), n_(n) , data_(v_.begin())
++Array1D<T>::Array1D(int n, const T *a) : v_(a), n_(n) , data_(v_.begin())
+ {
+ #ifdef TNT_DEBUG
+ 	std::cout << "Created Array1D(int n, T* a) \n";
+diff --git a/src/lib/RbtToken.cxx b/src/lib/RbtToken.cxx
+index 9c315fc5..df95e562 100644
+--- a/src/lib/RbtToken.cxx
++++ b/src/lib/RbtToken.cxx
+@@ -15,6 +15,10 @@
+ #include "RbtCommands.h"
+ #include "RbtDebug.h"
+ 
++namespace RBT {
++const RbtVble defaultConstRbtVble;
++}  // namespace RBT
++
+ RbtString RbtToken::_CT("RbtToken");
+ 
+ ///////////////////
+@@ -22,7 +26,9 @@ RbtString RbtToken::_CT("RbtToken");
+ ///////////////////
+ RbtToken::RbtToken(const RbtVble& v): isvble(true), vble(v), comm(-1) { _RBTOBJECTCOUNTER_CONSTR_(_CT); }
+ 
+-RbtToken::RbtToken(RbtCommands c): isvble(false), comm(c), vble(RbtVble()) { _RBTOBJECTCOUNTER_CONSTR_(_CT); }
++RbtToken::RbtToken(RbtCommands c): isvble(false), comm(c), vble(RBT::defaultConstRbtVble) {
++    _RBTOBJECTCOUNTER_CONSTR_(_CT);
++}
+ 
+ RbtToken::RbtToken(const RbtToken& t): isvble(t.isvble), comm(t.comm), vble(t.vble) {
+     _RBTOBJECTCOUNTER_COPYCONSTR_(_CT);

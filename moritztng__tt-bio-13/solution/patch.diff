@@ -1,0 +1,165 @@
+diff --git a/tests/test_worker_liveness.py b/tests/test_worker_liveness.py
+index 63e71c8efb..06a20bfb13 100644
+--- a/tests/test_worker_liveness.py
++++ b/tests/test_worker_liveness.py
+@@ -119,6 +119,28 @@ def test_silence_subprocess_output_preserves_real_stderr():
+     assert b"boom" in got, f"fatal was swallowed, read {got!r}"
+ 
+ 
++def _native_abort_worker():
++    # Mimic a C-level abort (e.g. MPI_Init failure): after silencing, write to
++    # fd 2 and _exit nonzero WITHOUT raising, so the Python fatal path never
++    # runs and _report_fatal never fires. The bytes must survive on the capture
++    # file for the launcher to read.
++    _silence_subprocess_output()
++    os.write(2, b"NATIVE FATAL: MPI_Init failed\n")
++    os._exit(14)
++
++
++def test_silenced_worker_native_stderr_is_captured():
++    from tt_bio.worker import read_worker_capture, worker_capture_path
++
++    proc = mp.get_context("spawn").Process(target=_native_abort_worker)
++    proc.start()
++    proc.join(30)
++    assert proc.exitcode == 14
++    cap = read_worker_capture(proc.pid, consume=True)
++    assert "NATIVE FATAL: MPI_Init failed" in cap, f"native abort swallowed, read {cap!r}"
++    assert not worker_capture_path(proc.pid).exists(), "consume=True should unlink the file"
++
++
+ def _orphan_child():
+     # A pid that is not our parent, standing in for a dispatcher that already died.
+     _install_orphan_guard(dispatcher_pid=os.getpid())
+diff --git a/tt_bio/main.py b/tt_bio/main.py
+index f372a3ea4a..1e5ca10de0 100644
+--- a/tt_bio/main.py
++++ b/tt_bio/main.py
+@@ -147,7 +147,7 @@ def _install_nanobind_leak_stderr_filter() -> None:
+     detect_tenstorrent_devices,
+     discover_jobs,
+ )
+-from tt_bio.worker import SHARED_OUTPUT_PREFIX, run_worker_loop
++from tt_bio.worker import SHARED_OUTPUT_PREFIX, read_worker_capture, run_worker_loop
+ 
+ # Every weight and data artifact tt-bio downloads is one row in tt_bio.weights.
+ # ARTIFACTS: source, repo/URL, destination, licence and env override in one place,
+@@ -1335,9 +1335,22 @@ def _stream_run(client: ControllerClient, run_id: str, total: int, n_workers: in
+                         raise DeviceInUseError(
+                             f"every local worker exited at device open ({codes}); the card "
+                             "is leased by another process, so nothing ran")
++                    # Surface each dead worker's captured native stderr. A
++                    # C-level abort (e.g. an MPI_Init failure) exits without
++                    # unwinding Python, so it never reaches the worker's fatal
++                    # handler; without this its cause is invisible unless the run
++                    # is repeated with --debug.
++                    tails = []
++                    for proc in local_procs:
++                        cap = read_worker_capture(proc.pid, consume=True)
++                        if cap:
++                            tails.append(
++                                f"--- {proc.name} (exit {proc.exitcode}) stderr tail ---\n{cap}")
++                    detail = ("\n\n".join(tails) if tails else
++                              "no worker stderr was captured; re-run with --debug to see it")
+                     raise RuntimeError(
+                         f"every local worker exited before the run finished ({codes}); "
+-                        "no job can be served. The worker's own traceback above says why.")
++                        f"no job can be served.\n{detail}")
+                 all_dead_seen = True
+             else:
+                 all_dead_seen = False
+diff --git a/tt_bio/worker.py b/tt_bio/worker.py
+index 7d5154e0c2..f1e4833783 100644
+--- a/tt_bio/worker.py
++++ b/tt_bio/worker.py
+@@ -32,25 +32,71 @@
+ 
+ 
+ _REAL_STDERR_FD: int | None = None
++_CAPTURE_PATH: Path | None = None
+ 
+ 
+-def _silence_subprocess_output() -> None:
+-    """Send stdout/stderr to /dev/null so kernel/library noise stays hidden.
++def worker_capture_path(pid: int) -> Path:
++    """Path a silenced worker's native stderr (fd 2) is captured to.
++
++    Keyed by pid so the launcher, which knows each child's ``proc.pid``, can read
++    it back after the worker dies (see ``read_worker_capture``).
++    """
++    return Path(tempfile.gettempdir()) / f"tt-bio-worker-{pid}.stderr"
++
++
++def read_worker_capture(pid: int, max_bytes: int = 4000, *, consume: bool = False) -> str:
++    """Return the tail of a dead worker's captured native stderr, or "".
++
++    ``consume`` unlinks the file after reading, so the launcher does not leave
++    one behind for every crashed worker.
++    """
++    path = worker_capture_path(pid)
++    try:
++        data = path.read_bytes()
++    except OSError:
++        return ""
++    if consume:
++        try:
++            path.unlink()
++        except OSError:
++            pass
++    return data[-max_bytes:].decode("utf-8", "replace").strip()
++
+ 
+-    Keeps one dup of the real stderr. A worker that dies before it has a run to
+-    attach an event to has no other way to say why, and writing that fatal to
+-    /dev/null is what left a device-open failure invisible for hours: the CLI
+-    hung, the log was 0 bytes, and the traceback had already been discarded.
++def _silence_subprocess_output() -> None:
++    """Hide library noise while keeping a worker fatal recoverable.
++
++    stdout is genuine per-op noise and goes to /dev/null. Native stderr (fd 2)
++    goes to a per-worker capture *file*, not /dev/null, so a fatal that never
++    reaches Python -- a C-level abort such as an MPI_Init failure, which writes
++    to fd 2 and exits without unwinding -- survives for the launcher to read on
++    worker death. A plain /dev/null here is exactly what left an MPI_Init abort
++    invisible: no Python traceback reached ``_report_fatal`` and the C stderr
++    went to the void. A dup of the real stderr is still kept so ``_report_fatal``
++    can surface Python fatals to the terminal immediately.
+     """
+-    global _REAL_STDERR_FD
++    global _REAL_STDERR_FD, _CAPTURE_PATH
+     _REAL_STDERR_FD = os.dup(2)
+-    devnull = open(os.devnull, "w")
+-    sys.stdout = devnull
+-    sys.stderr = devnull
+     dn_fd = os.open(os.devnull, os.O_WRONLY)
+     os.dup2(dn_fd, 1)
+-    os.dup2(dn_fd, 2)
+     os.close(dn_fd)
++    _CAPTURE_PATH = worker_capture_path(os.getpid())
++    cap_fd = os.open(str(_CAPTURE_PATH), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
++    os.dup2(cap_fd, 2)
++    os.close(cap_fd)
++    sys.stdout = open(os.devnull, "w")
++    sys.stderr = os.fdopen(2, "w", buffering=1, closefd=False)
++
++
++def _cleanup_worker_capture() -> None:
++    """Remove this worker's capture file on a clean or Python-level exit. A
++    native abort skips this (it never unwinds), so its file is left for the
++    launcher, which consumes it in ``read_worker_capture``."""
++    if _CAPTURE_PATH is not None:
++        try:
++            os.remove(_CAPTURE_PATH)
++        except OSError:
++            pass
+ 
+ 
+ def _report_fatal(message: str) -> None:
+@@ -1982,6 +2028,7 @@ def emit(run_id: str, event: str, **kw):
+         raise
+     finally:
+         state.reset()
++        _cleanup_worker_capture()
+ 
+ 
+ def _execute_job(

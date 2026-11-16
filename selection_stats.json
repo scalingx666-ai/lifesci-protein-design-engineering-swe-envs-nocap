@@ -1,0 +1,62 @@
+{
+  "slug": "protein-design-engineering",
+  "title": "Protein Design & Engineering",
+  "candidates": 352,
+  "clean": 124,
+  "final": 124,
+  "cap": "unlimited",
+  "min_star": 50,
+  "active_since": "2023-01-01",
+  "active_all": true,
+  "non_archived_all": true,
+  "star_buckets": {
+    ">=1000": 33,
+    "500-999": 8,
+    "200-499": 13,
+    "100-199": 36,
+    "50-99": 34
+  },
+  "top10": [
+    {
+      "repo": "K-Dense-AI/scientific-agent-skills",
+      "stars": 57129
+    },
+    {
+      "repo": "hpcaitech/ColossalAI",
+      "stars": 41424
+    },
+    {
+      "repo": "google-deepmind/alphafold3",
+      "stars": 8775
+    },
+    {
+      "repo": "speedyapply/2027-AI-College-Jobs",
+      "stars": 6643
+    },
+    {
+      "repo": "lucidrains/x-transformers",
+      "stars": 5963
+    },
+    {
+      "repo": "synthetic-sciences/openscience",
+      "stars": 4383
+    },
+    {
+      "repo": "FreedomIntelligence/OpenClaw-Medical-Skills",
+      "stars": 3107
+    },
+    {
+      "repo": "graphistry/pygraphistry",
+      "stars": 2582
+    },
+    {
+      "repo": "geohot/corona",
+      "stars": 2506
+    },
+    {
+      "repo": "AGI-Edgerunners/LLM-Agents-Papers",
+      "stars": 2357
+    }
+  ],
+  "build": "expansion"
+}

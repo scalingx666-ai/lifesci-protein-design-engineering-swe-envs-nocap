@@ -1,0 +1,1001 @@
+diff --git a/flexs/baselines/explorers/adalead.py b/flexs/baselines/explorers/adalead.py
+index 7eed020..2f0a7c8 100644
+--- a/flexs/baselines/explorers/adalead.py
++++ b/flexs/baselines/explorers/adalead.py
+@@ -1,5 +1,6 @@
+ """Defines the Adalead explorer class."""
+ import random
++from typing import Optional
+ 
+ import numpy as np
+ 
+@@ -8,35 +9,39 @@
+ 
+ 
+ class Adalead(flexs.Explorer):
+-    """
+-    An Explorer.
+-
+-    A simple evolutionary greedy algorithm for sequence design.
+-    Args:
+-        threshold: At each round only sequences with fitness above (1-threshold)*f_max
+-            are retained as parents for generating next set of sequences.
+-        recomb_rate: the probability of a crossover at any position in a sequence
+-        mu: expected number of mutations to the full sequence (mu/L per position).
+-        rho: The expected number of recombination partners for each recombinant.
+-        eval_batch_size: batch model queries for faster optimization.
+-
+-    """
+-
+     def __init__(
+         self,
+-        model,
+-        rounds,
+-        sequences_batch_size,
+-        model_queries_per_batch,
+-        starting_sequence,
+-        alphabet,
+-        mu=1,
+-        recomb_rate=0,
+-        threshold=0.05,
+-        rho=0,
+-        eval_batch_size=20,
+-        log_file=None,
++        model: flexs.Model,
++        rounds: int,
++        sequences_batch_size: int,
++        model_queries_per_batch: int,
++        starting_sequence: str,
++        alphabet: str,
++        mu: int = 1,
++        recomb_rate: float = 0,
++        threshold: float = 0.05,
++        rho: int = 0,
++        eval_batch_size: int = 20,
++        log_file: Optional[str] = None,
+     ):
++        """AdaLead explorer.
++
++        Algorithm works as follows:
++            Initialize set of top sequences whose fitnesses are at least
++                (1 - threshold) of the maximum fitness so far
++            While we can still make model queries in this batch
++                Recombine top sequences and append to parents
++                Rollout from parents and append to mutants
++
++        Args:
++            mu: Expected number of mutations to the full sequence (mu/L per position).
++            recomb_rate: The probability of a crossover at any position in a sequence.
++            threshold: At each round only sequences with fitness above
++                (1-threshold)*f_max are retained as parents for generating next set of
++                sequences.
++            rho: The expected number of recombination partners for each recombinant.
++            eval_batch_size: (For code optimization; size of batches sent to model.)
++        """
+         name = f"Adalead_mu={mu}_threshold={threshold}"
+ 
+         super().__init__(
+@@ -83,7 +88,7 @@ def _recombine_population(self, gen):
+         return ret
+ 
+     def propose_sequences(self, measured_sequences):
+-        """Generate."""
++        """Propose top `sequences_batch_size` sequences for evaluation."""
+ 
+         measured_sequence_set = set(measured_sequences["sequence"])
+ 
+@@ -102,7 +107,6 @@ def propose_sequences(self, measured_sequences):
+         while self.model.cost - previous_model_cost < self.model_queries_per_batch:
+             # generate recombinant mutants
+             for i in range(self.rho):
+-                # @TODO if parents=[], the outer while loops infinitely
+                 parents = self._recombine_population(parents)
+ 
+             for i in range(0, len(parents), self.eval_batch_size):
+@@ -128,7 +132,8 @@ def propose_sequences(self, measured_sequences):
+                             self.alphabet,
+                         )
+ 
+-                        # Stop when we generate new child that has never been seen before
++                        # Stop when we generate new child that has never been seen
++                        # before
+                         if (
+                             child not in measured_sequence_set
+                             and child not in sequences
+diff --git a/flexs/baselines/explorers/bo.py b/flexs/baselines/explorers/bo.py
+index c334fa7..42f2136 100644
+--- a/flexs/baselines/explorers/bo.py
++++ b/flexs/baselines/explorers/bo.py
+@@ -1,6 +1,6 @@
+ """BO explorer."""
+-import copy
+ from bisect import bisect_left
++from typing import Optional
+ 
+ import numpy as np
+ 
+@@ -17,34 +17,34 @@
+ class BO(flexs.Explorer):
+     def __init__(
+         self,
+-        model,
+-        rounds,
+-        sequences_batch_size,
+-        model_queries_per_batch,
+-        starting_sequence,
+-        alphabet,
+-        log_file=None,
+-        method="EI",
+-        recomb_rate=0,
++        model: flexs.Model,
++        rounds: int,
++        sequences_batch_size: int,
++        model_queries_per_batch: int,
++        starting_sequence: str,
++        alphabet: str,
++        log_file: Optional[str] = None,
++        method: str = "EI",
++        recomb_rate: float = 0,
+     ):
+         """Evolutionary Bayesian Optimization (Evo_BO) explorer.
+ 
+-        Parameters:
+-            method (str, equal to EI or UCB): The improvement method used in BO,
+-                default EI.
+-            recomb_rate (float): The recombination rate on the previous batch before
+-                BO proposes samples, default 0.
+-
+         Algorithm works as follows:
+             for N experiment rounds
+                 recombine samples from previous batch if it exists and measure them,
+                     otherwise skip
+                 Thompson sample starting sequence for new batch
+                 while less than B samples in batch
+-                    Generate VS virtual screened samples
++                    Generate `model_queries_per_batch/sequences_batch_size` samples
+                     If variance of ensemble models is above twice that of the starting
+                         sequence
+                     Thompson sample another starting sequence
++
++        Args:
++            method (equal to EI or UCB): The improvement method used in BO,
++                default EI.
++            recomb_rate: The recombination rate on the previous batch before
++                BO proposes samples, default 0.
+         """
+         name = f"BO_method={method}"
+         super().__init__(
+@@ -172,7 +172,7 @@ def pick_action(self, all_measured_seqs):
+         self.state = string_to_one_hot(new_state_string, self.alphabet)
+         new_state = self.state
+         reward = np.mean(ensemble_preds[action_ind])
+-        if not new_state_string in all_measured_seqs:
++        if new_state_string not in all_measured_seqs:
+             self.best_fitness = max(self.best_fitness, reward)
+             self.memory.store(state.ravel(), action.ravel(), reward, new_state.ravel())
+         self.num_actions += 1
+@@ -189,7 +189,8 @@ def Thompson_sample(measured_batch):
+         return sequences[index]
+ 
+     def propose_sequences(self, measured_sequences):
+-        """Propose `batch_size` samples."""
++        """Propose top `sequences_batch_size` sequences for evaluation."""
++
+         if self.num_actions == 0:
+             # indicates model was reset
+             self.initialize_data_structures()
+@@ -227,7 +228,8 @@ def propose_sequences(self, measured_sequences):
+             if self.initial_uncertainty is None:
+                 self.initial_uncertainty = uncertainty
+             if uncertainty > 2 * self.initial_uncertainty:
+-                # reset sequence to starting sequence if we're in territory that's too uncharted
++                # reset sequence to starting sequence if we're in territory that's too
++                # uncharted
+                 sampled_seq = self.Thompson_sample(measured_batch)
+                 self.state = string_to_one_hot(sampled_seq, self.alphabet)
+                 self.initial_uncertainty = None
+@@ -250,8 +252,9 @@ class GPR_BO(flexs.Explorer):
+     """Explorer using GP-based Bayesian Optimization.
+ 
+     Uses Gaussian process with RBF kernel on black box function.
+-    IMPORTANT: This explorer is not limited by `virtual_screen`, and is used to find
+-    the unrestricted performance of Bayesian Optimization techniques in small landscapes.
++    IMPORTANT: This explorer is not limited by any virtual screening restriction,
++    and is used to find the unrestricted performance of Bayesian Optimization
++    techniques in small landscapes.
+ 
+     Reference: http://krasserm.github.io/2018/03/21/bayesian-optimization/
+     """
+@@ -265,7 +268,6 @@ def __init__(
+         starting_sequence,
+         alphabet,
+         log_file=None,
+-        virtual_screen=10,
+         method="EI",
+         seq_proposal_method="Thompson",
+     ):
+@@ -288,7 +290,6 @@ def __init__(
+         self.seq_proposal_method = seq_proposal_method
+         self.best_fitness = 0
+         self.top_sequence = []
+-        self.virtual_screen = virtual_screen
+ 
+         self.seq_len = None
+         self.maxima = None
+diff --git a/flexs/baselines/explorers/cbas_dbas.py b/flexs/baselines/explorers/cbas_dbas.py
+index 55662d8..63e7621 100644
+--- a/flexs/baselines/explorers/cbas_dbas.py
++++ b/flexs/baselines/explorers/cbas_dbas.py
+@@ -1,5 +1,6 @@
+ """CbAS and DbAS explorers."""
+ import random
++from typing import Optional
+ 
+ import numpy as np
+ 
+@@ -13,19 +14,18 @@ class CbAS(flexs.Explorer):
+ 
+     def __init__(
+         self,
+-        model,
+-        generator,
+-        rounds,
+-        starting_sequence,
+-        sequences_batch_size,
+-        model_queries_per_batch,
+-        alphabet,
+-        algo="cbas",
+-        Q=0.9,
+-        max_cycles_per_batch=30,
+-        backfill=True,
+-        mutation_rate=0.2,
+-        log_file=None,
++        model: flexs.Model,
++        generator: VAE,
++        rounds: int,
++        starting_sequence: str,
++        sequences_batch_size: int,
++        model_queries_per_batch: int,
++        alphabet: str,
++        algo: str = "cbas",
++        Q: float = 0.9,
++        max_cycles_per_batch: int = 30,
++        mutation_rate: float = 0.2,
++        log_file: Optional[str] = None,
+     ):
+         """
+         Explorer which implements Conditioning by Adaptive Sampling (CbAS)
+@@ -33,17 +33,13 @@ def __init__(
+ 
+         Paper: https://arxiv.org/pdf/1901.10060.pdf
+ 
+-        Attributes:
+-            generator:
+-            Q:
+-            n_new_proposals:
+-            backfill:
+-            mutation_rate:
+-            all_proposals_ranked:
+-            n_convergence: Assume convergence if max fitness doesn't change for
+-                n_convergence cycles.
+-            explorer_type:
+-
++        Args:
++            generator: VAE generator.
++            algo (either cbas or dbas): Selects either CbAS or DbAS as main algorithm.
++            Q: Percentile used as fitness threshold.
++            max_cycles_per_batch: Maximum number of cycles for which the generator
++                will propose and train on sequences.
++            mutation_rate: Probability of mutation per residue.
+         """
+         name = f"{algo}_Q={Q}_generator={generator.name}"
+         super().__init__(
+@@ -64,7 +60,6 @@ def __init__(
+         self.alphabet = alphabet
+         self.Q = Q  # percentile used as the fitness threshold
+         self.max_cycles_per_batch = max_cycles_per_batch
+-        self.backfill = backfill
+         self.mutation_rate = mutation_rate
+ 
+     def _extend_samples(self, samples, weights):
+@@ -86,13 +81,15 @@ def _extend_samples(self, samples, weights):
+         return np.array(samples), np.array(weights)
+ 
+     def propose_sequences(self, measured_sequences_data):
+-        """Propose `batch_size` samples."""
++        """Propose top `sequences_batch_size` sequences for evaluation."""
++
+         last_round_sequences = measured_sequences_data[
+             measured_sequences_data["round"] == measured_sequences_data["round"].max()
+         ]
+ 
+         # gamma is our threshold (the self.Q-th percentile of sequences from last round)
+-        # we will pick all of last round's sequences with fitness above the Qth percentile
++        # we will pick all of last round's sequences with fitness above the Qth
++        # percentile
+         gamma = np.percentile(last_round_sequences["true_score"], 100 * self.Q)
+         initial_batch = last_round_sequences["sequence"][
+             last_round_sequences["true_score"] >= gamma
+@@ -150,7 +147,8 @@ def propose_sequences(self, measured_sequences_data):
+             # higher than the current
+             gamma = max(np.percentile(scores, self.Q * 100), gamma)
+ 
+-            # cbas and dbas mostly the same except cbas also does an importance sampling step
++            # cbas and dbas mostly the same except cbas also does an importance
++            # sampling step
+             if self.algo == "cbas":
+                 # calculate the weights for the proposed batch
+                 log_probs_0 = self.generator.calculate_log_probability(
+diff --git a/flexs/baselines/explorers/cmaes.py b/flexs/baselines/explorers/cmaes.py
+index aace391..15298a1 100644
+--- a/flexs/baselines/explorers/cmaes.py
++++ b/flexs/baselines/explorers/cmaes.py
+@@ -1,4 +1,6 @@
+ """CMAES explorer."""
++from typing import Optional
++
+ import cma
+ import numpy as np
+ 
+@@ -18,17 +20,30 @@ class CMAES(flexs.Explorer):
+ 
+     def __init__(
+         self,
+-        model,
+-        rounds,
+-        sequences_batch_size,
+-        model_queries_per_batch,
+-        starting_sequence,
+-        alphabet,
+-        population_size=15,
+-        max_iter=400,
+-        initial_variance=0.7,
+-        log_file=None,
++        model: flexs.Model,
++        rounds: int,
++        sequences_batch_size: int,
++        model_queries_per_batch: int,
++        starting_sequence: str,
++        alphabet: str,
++        population_size: int = 15,
++        max_iter: int = 400,
++        initial_variance: float = 0.7,
++        log_file: Optional[str] = None,
+     ):
++        """Explorer which implements CMAES.
++
++        CMAES stands for covariance matrix adaptation evolution
++        strategy.
++
++        http://blog.otoro.net/2017/10/29/visual-evolution-strategies/ is a helpful
++        guide.
++
++        Args:
++            population_size: Number of proposed solutions per iteration.
++            max_iter: Maximum number of iterations.
++            initial_variance: Initial variance passed into cma.
++        """
+         name = f"CMAES_popsize{population_size}"
+ 
+         super().__init__(
+@@ -56,6 +71,7 @@ def soln_to_string(self, soln):
+         return s_utils.one_hot_to_string(one_hot, self.alphabet)
+ 
+     def propose_sequences(self, measured_sequences):
++        """Propose top `sequences_batch_size` sequences for evaluation."""
+ 
+         measured_sequence_dict = dict(
+             zip(measured_sequences["sequence"], measured_sequences["true_score"])
+@@ -80,7 +96,7 @@ def objective_function(soln):
+         # Starting solution gives equal weight to all residues at all positions
+         x0 = s_utils.string_to_one_hot(top_seq, self.alphabet).flatten()
+         opts = {"popsize": self.population_size, "verbose": -9, "verb_log": 0}
+-        es = cma.CMAEvolutionStrategy(x0, self.initial_variance, opts)
++        es = cma.CMAEvolutionStrategy(x0, np.sqrt(self.initial_variance), opts)
+ 
+         # Explore until we reach `self.max_iter` or run out of model queries
+         initial_cost = self.model.cost
+diff --git a/flexs/baselines/explorers/dqn.py b/flexs/baselines/explorers/dqn.py
+index db2ccd8..30698d5 100644
+--- a/flexs/baselines/explorers/dqn.py
++++ b/flexs/baselines/explorers/dqn.py
+@@ -1,6 +1,7 @@
+ """DQN explorer."""
+ import random
+ from collections import Counter
++from typing import Optional
+ 
+ import numpy as np
+ import torch
+@@ -49,22 +50,19 @@ def build_q_network(sequence_len, alphabet_len, device):
+ 
+ 
+ class DQN(flexs.Explorer):
+-    """Explorer for DQN."""
+-
+     def __init__(
+         self,
+-        model,
+-        rounds,
+-        sequences_batch_size,
+-        model_queries_per_batch,
+-        starting_sequence,
+-        alphabet,
+-        log_file=None,
+-        memory_size=100000,
+-        train_epochs=20,
+-        gamma=0.9,
+-        device="cpu",
+-        noise_alpha=1,  # pylint: disable=W0613
++        model: flexs.Model,
++        rounds: int,
++        sequences_batch_size: int,
++        model_queries_per_batch: int,
++        starting_sequence: str,
++        alphabet: str,
++        log_file: Optional[str] = None,
++        memory_size: int = 100000,
++        train_epochs: int = 20,
++        gamma: float = 0.9,
++        device: str = "cpu",
+     ):
+         """DQN explorer class.
+ 
+@@ -77,12 +75,9 @@ def __init__(
+             policy updates using Q network:
+                 Q(s, a) <- Q(s, a) + alpha * (R(s, a) + gamma * max Q(s, a) - Q(s, a))
+ 
+-        Attributes:
+-        memory_size: size of agent memory
+-        batch_size: batch size to train the PER buffer with
+-        experiment_batch_size: the batch size of the experiment.
+-            that is, if this were a lab, this would be the number of sequences
+-            evaluated in a lab trial
++        Args:
++            memory_size: Size of agent memory.
++            gamma: Discount factor.
+         """
+         name = "DQN_Explorer"
+         super().__init__(
+@@ -204,13 +199,13 @@ def get_action_and_mutant(self, epsilon):
+             if random.random() < epsilon:
+                 i, j = moves.shape
+                 non_zero_moves = np.nonzero(moves)
+-                k = len(non_zero_moves)
+-                l = len(non_zero_moves[0])
+-                if k != 0 and l != 0:
++                num_moves = len(non_zero_moves)
++                num_pos = len(non_zero_moves[0])
++                if num_moves != 0 and num_pos != 0:
+                     rand_arg = random.choice(
+                         [
+-                            [non_zero_moves[alph][pos] for alph in range(k)]
+-                            for pos in range(l)
++                            [non_zero_moves[alph][pos] for alph in range(num_moves)]
++                            for pos in range(num_pos)
+                         ]
+                     )
+                 else:
+@@ -249,6 +244,7 @@ def pick_action(self, all_measured_seqs):
+ 
+         Generates a new string representing the state, along with its associated reward.
+         """
++
+         eps = max(
+             self.epsilon_min,
+             (0.5 - self.model.cost / (self.sequences_batch_size * self.rounds)),
+@@ -257,7 +253,7 @@ def pick_action(self, all_measured_seqs):
+         action, new_state = self.get_action_and_mutant(eps)
+         new_state_string = one_hot_to_string(new_state, self.alphabet)
+         reward = self.model.get_fitness([new_state_string]).item()
+-        if not new_state_string in all_measured_seqs:
++        if new_state_string not in all_measured_seqs:
+             if reward >= self.best_fitness:
+                 state_tensor = torch.FloatTensor([self.state.ravel()])
+                 prediction = self.calculate_next_q_values(state_tensor).detach().numpy()
+@@ -275,7 +271,8 @@ def pick_action(self, all_measured_seqs):
+         return new_state_string, reward
+ 
+     def propose_sequences(self, measured_sequences_data):
+-        """Propose `batch_size` samples."""
++        """Propose top `sequences_batch_size` sequences for evaluation."""
++
+         if self.num_actions == 0:
+             # indicates model was reset
+             self.initialize_data_structures()
+diff --git a/flexs/baselines/explorers/dyna_ppo.py b/flexs/baselines/explorers/dyna_ppo.py
+index 319910e..07c855a 100644
+--- a/flexs/baselines/explorers/dyna_ppo.py
++++ b/flexs/baselines/explorers/dyna_ppo.py
+@@ -1,9 +1,8 @@
+ """DyNA-PPO explorer."""
+ from functools import partial
+-from typing import List, Set, Tuple, Type, Union
++from typing import List, Optional
+ 
+ import numpy as np
+-import pandas as pd
+ import scipy.stats
+ import sklearn
+ import sklearn.ensemble
+@@ -11,7 +10,6 @@
+ import sklearn.linear_model
+ import sklearn.tree
+ import tensorflow as tf
+-from sklearn.model_selection import train_test_split
+ from tf_agents.agents.ppo import ppo_agent
+ from tf_agents.drivers import dynamic_episode_driver
+ from tf_agents.environments import tf_py_environment
+@@ -30,8 +28,14 @@
+ from flexs.utils import sequence_utils as s_utils
+ 
+ 
+-class DynaPPOEnsemble(flexs.Model):
+-    def __init__(self, seq_len, alphabet, r_squared_threshold=0.5, models=None):
++class DynaPPOEnsemble(baselines.models.AdaptiveEnsemble):
++    def __init__(
++        self,
++        seq_len: int,
++        alphabet: str,
++        r_squared_threshold: float = 0.5,
++        models: Optional[List[flexs.Model]] = None,
++    ):
+         super().__init__(name="DynaPPOEnsemble")
+ 
+         if models is None:
+@@ -117,8 +121,6 @@ def _fitness_function(self, sequences):
+ 
+ 
+ class DynaPPO(flexs.Explorer):
+-    """Explorer for DyNA-PPO."""
+-
+     def __init__(
+         self,
+         landscape: flexs.Landscape,
+@@ -127,35 +129,20 @@ def __init__(
+         model_queries_per_batch: int,
+         starting_sequence: str,
+         alphabet: str,
+-        log_file: str = None,
+-        model: flexs.Model = None,
++        log_file: Optional[str] = None,
++        model: Optional[flexs.Model] = None,
+         num_experiment_rounds: int = 10,
+         num_model_rounds: int = 1,
+-        env_batch_size=4,
++        env_batch_size: int = 4,
+     ):
+         """Explorer which implements DynaPPO.
+ 
+         Paper: https://openreview.net/pdf?id=HklxbgBKvr
+ 
+-        Attributes:
+-            threshold: Threshold of R2 scores with which to filter out models in
+-                the ensemble (default: 0.5).
+-            num_experiment_rounds: Number of experiment-based policy training rounds.
+-            num_model_rounds: Number of model-based policy training rounds.
+-            internal_ensemble: All models currently included in the ensemble.
+-            internal_ensemble_archs: Corresponding architectures of `internal_ensemble`.
+-            internal_ensemble_uncertainty: Uncertainty of ensemble predictions.
+-            internal_ensemble_calls: Number of calls made to the ensemble.
+-            model_exit_early: Whether or not we should stop model-based training, in
+-                the event that the model uncertainty is too high.
+-            ens: All possible models to include in the ensemble.
+-            ens_archs: Corresponding architectures of `ens`.
+-            meas_seqs: All measured sequences.
+-            meas_seqs_it: Iterator through `meas_seqs`.
+-            top_seqs: Top measured sequences by fitness score.
+-            top_seqs_it: Iterator through `top_seqs`.
+-            agent: PPO TF Agent.
+-            tf_env: Environment in which `agent` operates.
++        Args:
++            num_experiment_rounds: Number of experiment-based rounds to run. This is by
++                default set to 10, the same number of sequence proposal of rounds run.
++            num_model_rounds: Number of model-based rounds to run.
+         """
+ 
+         tf.config.run_functions_eagerly(False)
+@@ -167,7 +154,8 @@ def __init__(
+                 len(starting_sequence),
+                 alphabet,
+             )
+-            # Some models in the ensemble need to be trained on dummy dataset before they can predict
++            # Some models in the ensemble need to be trained on dummy dataset before
++            # they can predict
+             model.train(
+                 s_utils.generate_random_sequences(len(starting_sequence), 10, alphabet),
+                 [0] * 10,
+@@ -230,7 +218,8 @@ def add_last_seq_in_trajectory(self, experience, new_seqs):
+                 new_seqs[seq] = self.tf_env.get_cached_fitness(seq)
+ 
+     def propose_sequences(self, measured_sequences_data):
+-        """Propose `self.sequences_batch_size` samples."""
++        """Propose top `sequences_batch_size` sequences for evaluation."""
++
+         replay_buffer_capacity = 10001
+         replay_buffer = tf_uniform_replay_buffer.TFUniformReplayBuffer(
+             self.agent.collect_data_spec,
+@@ -252,9 +241,9 @@ def propose_sequences(self, measured_sequences_data):
+         # Experiment-based training round. Each sequence we generate here must be
+         # evaluated by the ground truth landscape model. So each sequence we evaluate
+         # reduces our sequence proposal budget by one.
+-        # We amortize this experiment-based training cost to be 1/2 of the sequence budget
+-        # at round one and linearly interpolate to a cost of 0 by the last round.
+-        current_round = measured_sequences_data["round"].max()
++        # We amortize this experiment-based training cost to be 1/2 of the sequence
++        # budget at round one and linearly interpolate to a cost of 0 by the last round.
++
+         experiment_based_training_budget = self.sequences_batch_size
+         self.tf_env.set_fitness_model_to_gt(True)
+         previous_landscape_cost = self.tf_env.landscape.cost
+@@ -300,8 +289,6 @@ def propose_sequences(self, measured_sequences_data):
+ 
+ 
+ class DynaPPOMutative(flexs.Explorer):
+-    """Explorer for DyNA-PPO. Note that unlike the other DynaPPO explorer, this one is mutative rather than constructive."""
+-
+     def __init__(
+         self,
+         landscape: flexs.Landscape,
+@@ -310,34 +297,22 @@ def __init__(
+         model_queries_per_batch: int,
+         starting_sequence: str,
+         alphabet: str,
+-        log_file: str = None,
+-        model: flexs.Model = None,
++        log_file: Optional[str] = None,
++        model: Optional[flexs.Model] = None,
+         num_experiment_rounds: int = 10,
+         num_model_rounds: int = 1,
+     ):
+         """Explorer which implements DynaPPO.
+ 
++        Note that unlike the other DynaPPO explorer, this one is mutative rather than
++        constructive.
++
+         Paper: https://openreview.net/pdf?id=HklxbgBKvr
+ 
+-        Attributes:
+-            threshold: Threshold of R2 scores with which to filter out models in
+-                the ensemble (default: 0.5).
+-            num_experiment_rounds: Number of experiment-based policy training rounds.
+-            num_model_rounds: Number of model-based policy training rounds.
+-            internal_ensemble: All models currently included in the ensemble.
+-            internal_ensemble_archs: Corresponding architectures of `internal_ensemble`.
+-            internal_ensemble_uncertainty: Uncertainty of ensemble predictions.
+-            internal_ensemble_calls: Number of calls made to the ensemble.
+-            model_exit_early: Whether or not we should stop model-based training, in
+-                the event that the model uncertainty is too high.
+-            ens: All possible models to include in the ensemble.
+-            ens_archs: Corresponding architectures of `ens`.
+-            meas_seqs: All measured sequences.
+-            meas_seqs_it: Iterator through `meas_seqs`.
+-            top_seqs: Top measured sequences by fitness score.
+-            top_seqs_it: Iterator through `top_seqs`.
+-            agent: PPO TF Agent.
+-            tf_env: Environment in which `agent` operates.
++        Args:
++            num_experiment_rounds: Number of experiment-based rounds to run. This is by
++                default set to 10, the same number of sequence proposal of rounds run.
++            num_model_rounds: Number of model-based rounds to run.
+         """
+ 
+         tf.config.run_functions_eagerly(False)
+@@ -431,7 +406,7 @@ def add_last_seq_in_trajectory(self, experience, new_seqs):
+                 )
+ 
+     def propose_sequences(self, measured_sequences_data):
+-        """Propose `self.sequences_batch_size` samples."""
++        """Propose top `sequences_batch_size` sequences for evaluation."""
+ 
+         num_parallel_environments = 1
+         replay_buffer_capacity = 10001
+@@ -455,8 +430,8 @@ def propose_sequences(self, measured_sequences_data):
+         # Experiment-based training round. Each sequence we generate here must be
+         # evaluated by the ground truth landscape model. So each sequence we evaluate
+         # reduces our sequence proposal budget by one.
+-        # We amortize this experiment-based training cost to be 1/2 of the sequence budget
+-        # at round one and linearly interpolate to a cost of 0 by the last round.
++        # We amortize this experiment-based training cost to be 1/2 of the sequence
++        # budget at round one and linearly interpolate to a cost of 0 by the last round.
+         current_round = measured_sequences_data["round"].max()
+         experiment_based_training_budget = int(
+             (self.rounds - current_round + 1)
+diff --git a/flexs/baselines/explorers/environments/__init__.py b/flexs/baselines/explorers/environments/__init__.py
+index 015a4d8..e69de29 100644
+--- a/flexs/baselines/explorers/environments/__init__.py
++++ b/flexs/baselines/explorers/environments/__init__.py
+@@ -1,3 +0,0 @@
+-"""TF-Agents environments for RL explorers."""
+-import flexs.baselines.explorers.environments.ppo
+-from flexs.baselines.explorers.environments import dyna_ppo as dyna_ppo
+diff --git a/flexs/baselines/explorers/environments/dyna_ppo.py b/flexs/baselines/explorers/environments/dyna_ppo.py
+index 00cc553..f762bd9 100644
+--- a/flexs/baselines/explorers/environments/dyna_ppo.py
++++ b/flexs/baselines/explorers/environments/dyna_ppo.py
+@@ -1,7 +1,6 @@
+ """DyNA-PPO environment module."""
+ import editdistance
+ import numpy as np
+-import tensorflow as tf
+ from tf_agents.environments import py_environment
+ from tf_agents.specs import array_spec
+ from tf_agents.trajectories import time_step as ts
+@@ -165,7 +164,10 @@ def _step(self, actions):
+ 
+ 
+ class DynaPPOEnvironmentMutative(py_environment.PyEnvironment):  # pylint: disable=W0223
+-    """DyNA-PPO environment based on TF-Agents. Note that unlike the other DynaPPO environment, this one is mutative rather than constructive."""
++    """DyNA-PPO environment based on TF-Agents.
++
++    Note that unlike the other DynaPPO environment, this one is mutative rather than
++    constructive."""
+ 
+     def __init__(  # pylint: disable=W0231
+         self,
+diff --git a/flexs/baselines/explorers/environments/ppo.py b/flexs/baselines/explorers/environments/ppo.py
+index 229f483..6dbea75 100644
+--- a/flexs/baselines/explorers/environments/ppo.py
++++ b/flexs/baselines/explorers/environments/ppo.py
+@@ -1,7 +1,4 @@
+ """PPO environment module."""
+-import os
+-import sys
+-
+ import numpy as np
+ from tf_agents.environments import py_environment
+ from tf_agents.environments.utils import validate_py_environment
+@@ -9,11 +6,7 @@
+ from tf_agents.trajectories import time_step as ts
+ 
+ import flexs
+-from flexs.utils.sequence_utils import (
+-    construct_mutant_from_sample,
+-    one_hot_to_string,
+-    string_to_one_hot,
+-)
++from flexs.utils.sequence_utils import one_hot_to_string, string_to_one_hot
+ 
+ 
+ class PPOEnvironment(py_environment.PyEnvironment):  # pylint: disable=W0223
+diff --git a/flexs/baselines/explorers/genetic_algorithm.py b/flexs/baselines/explorers/genetic_algorithm.py
+index f5833ca..87a4acf 100644
+--- a/flexs/baselines/explorers/genetic_algorithm.py
++++ b/flexs/baselines/explorers/genetic_algorithm.py
+@@ -1,3 +1,5 @@
++from typing import Optional
++
+ import numpy as np
+ import torch
+ 
+@@ -24,24 +26,27 @@ class GeneticAlgorithm(flexs.Explorer):
+ 
+     def __init__(
+         self,
+-        model,
+-        rounds,
+-        starting_sequence,
+-        sequences_batch_size,
+-        model_queries_per_batch,
+-        alphabet,
++        model: flexs.Model,
++        rounds: int,
++        starting_sequence: str,
++        sequences_batch_size: int,
++        model_queries_per_batch: int,
++        alphabet: str,
+         population_size: int,
+         parent_selection_strategy: str,
+         children_proportion: float,
+-        log_file=None,
+-        parent_selection_proportion: float = None,
+-        beta: float = None,
+-        recombination_strategy: str = None,
+-        avg_crossovers: int = None,
+-        num_crossover_tiles: int = None,
+-        seed: int = None,
++        log_file: Optional[str] = None,
++        parent_selection_proportion: Optional[float] = None,
++        beta: Optional[float] = None,
++        recombination_strategy: Optional[str] = None,
++        avg_crossovers: Optional[int] = None,
++        num_crossover_tiles: Optional[int] = None,
++        seed: Optional[int] = None,
+     ):
+-        name = f"GeneticAlgorithm_pop_size={population_size}_parents={parent_selection_strategy}_recomb={recombination_strategy}"
++        name = (
++            f"GeneticAlgorithm_pop_size={population_size}_parents="
++            f"{parent_selection_strategy}_recomb={recombination_strategy}"
++        )
+ 
+         super().__init__(
+             model,
+@@ -59,7 +64,8 @@ def __init__(
+         valid_parent_selection_strategies = ["top-proportion", "wright-fisher"]
+         if parent_selection_strategy not in valid_parent_selection_strategies:
+             raise ValueError(
+-                f"parent_selection_strategy must be one of {valid_parent_selection_strategies}"
++                f"parent_selection_strategy must be one of "
++                f"{valid_parent_selection_strategies}"
+             )
+         if (
+             parent_selection_strategy == "top-proportion"
+@@ -80,13 +86,15 @@ def __init__(
+         valid_recombination_strategies = [None, "1-point-crossover", "n-tile-crossover"]
+         if recombination_strategy not in valid_recombination_strategies:
+             raise ValueError(
+-                f"recombination_strategy must be one of {valid_recombination_strategies}"
++                "recombination_strategy must be one of "
++                f"{valid_recombination_strategies}"
+             )
+         if recombination_strategy == "n-tile-crossover" and (
+             avg_crossovers is None or num_crossover_tiles is None
+         ):
+             raise ValueError(
+-                "if n-tile-crossover, avg_crossovers and num_crossover_tiles cannot be None"
++                "if n-tile-crossover, avg_crossovers and num_crossover_tiles cannot be "
++                "None"
+             )
+         self.recombination_strategy = recombination_strategy
+         self.avg_crossovers = avg_crossovers
+@@ -107,7 +115,8 @@ def _choose_parents(self, scores, num_parents):
+         return torch.multinomial(probs, num_parents, replacement=True).numpy()
+ 
+     def propose_sequences(self, measured_sequences):
+-        """Run genetic algorithm explorer."""
++        """Propose top `sequences_batch_size` sequences for evaluation."""
++
+         # Set the torch seed by generating a random integer from the pre-seeded self.rng
+         torch.manual_seed(self.rng.integers(-(2 ** 31), 2 ** 31))
+ 
+@@ -128,7 +137,8 @@ def propose_sequences(self, measured_sequences):
+             < self.model_queries_per_batch
+         ):
+             # Create "children" by recombining parents selected from population
+-            # according to self.parent_selection_strategy and self.recombination_strategy
++            # according to self.parent_selection_strategy and
++            # self.recombination_strategy
+             num_children = int(self.children_proportion * self.population_size)
+             parents = pop[self._choose_parents(scores, num_children)]
+ 
+diff --git a/flexs/baselines/explorers/ppo.py b/flexs/baselines/explorers/ppo.py
+index 7990e7d..cd68fe4 100644
+--- a/flexs/baselines/explorers/ppo.py
++++ b/flexs/baselines/explorers/ppo.py
+@@ -1,6 +1,7 @@
+ """PPO explorer."""
+ 
+ from functools import partial
++from typing import Optional
+ 
+ import numpy as np
+ import pandas as pd
+@@ -18,8 +19,6 @@
+ 
+ 
+ class PPO(flexs.Explorer):
+-    """Explorer for PPO."""
+-
+     def __init__(
+         self,
+         model: flexs.Model,
+@@ -28,7 +27,7 @@ def __init__(
+         model_queries_per_batch: int,
+         starting_sequence: str,
+         alphabet: str,
+-        log_file: str = None,
++        log_file: Optional[str] = None,
+     ):
+         """Explorer which uses PPO.
+ 
+@@ -36,14 +35,6 @@ def __init__(
+             for N experiment rounds
+                 collect samples with policy
+                 train policy on samples
+-
+-        Attributes:
+-            meas_seqs: All measured sequences.
+-            meas_seqs_it: Iterator through `meas_seqs`.
+-            original_horizon: Total number of rounds. Used to compute proposal
+-                budget and distribute this budget between rounds.
+-            tf_env: TF-Agents environment in which to run the explorer.
+-            agent: Decision-making agent.
+         """
+ 
+         super().__init__(
+@@ -121,7 +112,7 @@ def add_last_seq_in_trajectory(self, experience, new_seqs):
+                 )
+ 
+     def propose_sequences(self, measured_sequences_data: pd.DataFrame):
+-        """Propose `batch_size` samples."""
++        """Propose top `sequences_batch_size` sequences for evaluation."""
+ 
+         num_parallel_environments = 1
+         replay_buffer_capacity = 10001
+diff --git a/flexs/baselines/explorers/random.py b/flexs/baselines/explorers/random.py
+index 742aec9..7b86204 100644
+--- a/flexs/baselines/explorers/random.py
++++ b/flexs/baselines/explorers/random.py
+@@ -1,5 +1,5 @@
+ """Defines the Random explorer class."""
+-from typing import Tuple
++from typing import Optional, Tuple
+ 
+ import numpy as np
+ import pandas as pd
+@@ -9,8 +9,9 @@
+ 
+ 
+ class Random(flexs.Explorer):
+-    """
+-    A simple random explorer. Chooses a random previously measured sequence and mutates it.
++    """A simple random explorer.
++
++    Chooses a random previously measured sequence and mutates it.
+ 
+     A good baseline to compare other search strategies against.
+ 
+@@ -28,26 +29,19 @@ def __init__(
+         alphabet: str,
+         mu: float = 1,
+         elitist: bool = False,
+-        seed: int = None,
+-        log_file: str = None,
++        seed: Optional[int] = None,
++        log_file: Optional[str] = None,
+     ):
+         """
+         Create a random search explorer.
+ 
+         Args:
+-            model: Model of ground truth that the explorer will use to help guide sequence proposal.
+-            rounds: Number of rounds to run for (a round consists of sequence proposal,
+-                ground truth fitness measurement of proposed sequences, and retraining the model).
+-            sequences_batch_size: Number of sequences to propose for measurement per round.
+-            model_queries_per_batch: Number of allowed model evaluations per round.
+-            starting_sequence: Sequence from which to start exploration.
+-
+             mu: Average number of residue mutations from parent for generated sequences.
+-            elitist: If true, will propose the top `sequences_batch_size` sequences generated
+-                according to `model`. If false, randomly proposes `sequences_batch_size`
+-                sequences without taking model score into account (true random search).
++            elitist: If true, will propose the top `sequences_batch_size` sequences
++                generated according to `model`. If false, randomly proposes
++                `sequences_batch_size` sequences without taking model score into
++                account (true random search).
+             seed: Integer seed for random number generator.
+-            log_file: .csv filepath to write output.
+         """
+         name = f"Random_mu={mu}"
+ 
+@@ -68,6 +62,8 @@ def __init__(
+     def propose_sequences(
+         self, measured_sequences: pd.DataFrame
+     ) -> Tuple[np.ndarray, np.ndarray]:
++        """Propose top `sequences_batch_size` sequences for evaluation."""
++
+         old_sequences = measured_sequences["sequence"]
+         old_sequence_set = set(old_sequences)
+         new_seqs = set()
+diff --git a/flexs/explorer.py b/flexs/explorer.py
+index e597008..db4bdfb 100644
+--- a/flexs/explorer.py
++++ b/flexs/explorer.py
+@@ -5,7 +5,7 @@
+ import time
+ import warnings
+ from datetime import datetime
+-from typing import Dict, Tuple
++from typing import Dict, Optional, Tuple
+ 
+ import numpy as np
+ import pandas as pd
+@@ -30,7 +30,7 @@ def __init__(
+         sequences_batch_size: int,
+         model_queries_per_batch: int,
+         starting_sequence: str,
+-        log_file: str = None,
++        log_file: Optional[str] = None,
+     ):
+         """
+         Create an Explorer.

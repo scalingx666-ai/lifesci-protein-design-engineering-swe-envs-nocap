@@ -1,0 +1,512 @@
+diff --git a/source/src/protocols/ligand_docking/InterfaceScoreCalculator.cc b/source/src/protocols/ligand_docking/InterfaceScoreCalculator.cc
+index 0b81196a952..429de09b3c1 100644
+--- a/source/src/protocols/ligand_docking/InterfaceScoreCalculator.cc
++++ b/source/src/protocols/ligand_docking/InterfaceScoreCalculator.cc
+@@ -25,6 +25,7 @@
+ 
+ #include <core/pose/chains_util.hh>
+ #include <protocols/ligand_docking/ligand_scores.hh>
++#include <protocols/ligand_docking/util.hh>
+ #include <protocols/qsar/scoring_grid/schema_util.hh>
+ 
+ //Auto Headers
+@@ -173,7 +174,7 @@ void InterfaceScoreCalculator::apply(core::pose::Pose & pose) {
+ 	// For now, keep current behavior of appending things into the Job.
+ 	// Ideally, these would be attached to the Pose extra scores, rather than the Job.
+ 	for ( auto const & entry: allscores ) {
+-		protocols::jd2::add_string_real_pair_to_current_job( entry.first, entry.second );
++		add_string_real_pair( pose, entry.first, entry.second );
+ 	}
+ 
+ }
+diff --git a/source/src/protocols/ligand_docking/LigandDockingLoaders.cc b/source/src/protocols/ligand_docking/LigandDockingLoaders.cc
+index 58651256fa8..f3f7a77214d 100644
+--- a/source/src/protocols/ligand_docking/LigandDockingLoaders.cc
++++ b/source/src/protocols/ligand_docking/LigandDockingLoaders.cc
+@@ -238,5 +238,5 @@ void LigandAreaLoaderCreator::provide_xml_schema( utility::tag::XMLSchemaDefinit
+ }
+ 
+ 
+-} //namespace jd2
++} //namespace ligand_docking
+ } //namespace protocols
+diff --git a/source/src/protocols/ligand_docking/Transform.cc b/source/src/protocols/ligand_docking/Transform.cc
+index f5cbc8e078f..f6de788057c 100644
+--- a/source/src/protocols/ligand_docking/Transform.cc
++++ b/source/src/protocols/ligand_docking/Transform.cc
+@@ -16,7 +16,7 @@
+ #include <protocols/ligand_docking/Transform.hh>
+ 
+ #include <protocols/ligand_docking/grid_functions.hh>
+-#include <protocols/jd2/util.hh>
++#include <protocols/ligand_docking/util.hh>
+ #include <protocols/qsar/scoring_grid/GridManager.hh>
+ #include <protocols/qsar/scoring_grid/GridSet.hh>
+ #include <protocols/qsar/scoring_grid/schema_util.hh>
+@@ -432,12 +432,12 @@ void Transform::apply(core::pose::Pose & pose)
+ 		}
+ 	}
+ 
+-	protocols::jd2::add_string_real_pair_to_current_job("Transform_accept_ratio", accept_ratio);
+-
+ 	//Set pose to best scored model - report score of a single grid (the best one) if using multiple poses
+ 	best_score = convert_to_full_pose(pose, best_ligand, chain_id);
++
++	add_string_real_pair( pose, "Transform_accept_ratio", accept_ratio);
+ 	TR << "Accepted pose with grid score: " << best_score << std::endl;
+-	protocols::jd2::add_string_real_pair_to_current_job("Grid_score", best_score);
++	add_string_real_pair( pose, "Grid_score", best_score);
+ }
+ 
+ 
+diff --git a/source/src/protocols/ligand_docking/util.cc b/source/src/protocols/ligand_docking/util.cc
+index c415cbef03c..54f96fc5839 100644
+--- a/source/src/protocols/ligand_docking/util.cc
++++ b/source/src/protocols/ligand_docking/util.cc
+@@ -17,7 +17,10 @@
+ #include <protocols/rigid/RB_geometry.hh>
+ #include <protocols/rigid/RigidBodyMover.hh>
+ 
++#include <protocols/jd2/util.hh>
++
+ #include <core/pose/Pose.fwd.hh>
++#include <core/pose/extra_pose_info_util.hh>
+ #include <core/conformation/Residue.hh>
+ 
+ #include <core/types.hh>
+@@ -166,6 +169,16 @@ void move_ligand_neighbor_to_desired_position(
+ 
+ }
+ 
++void
++add_string_real_pair( core::pose::Pose & pose, std::string const & string, core::Real real ) {
++	// Some older protocols rely on having the data present in the dummy Job when not running under JD2 -- maintain that
++	protocols::jd2::add_string_real_pair_to_current_job(string, real);
++
++	// if statement to avoid double-reporting of the scores in the output PDB if we're under JD2
++	if ( ! protocols::jd2::jd2_used() ) {
++		core::pose::setPoseExtraScore(pose, string, real);
++	}
++}
+ 
+ } //namespace ligand_docking
+ } //namespace protocols
+diff --git a/source/src/protocols/ligand_docking/util.hh b/source/src/protocols/ligand_docking/util.hh
+index 7f0022e437c..1c5ca31fb4b 100644
+--- a/source/src/protocols/ligand_docking/util.hh
++++ b/source/src/protocols/ligand_docking/util.hh
+@@ -60,6 +60,11 @@ void move_ligand_neighbor_to_desired_position(
+ 	core::pose::Pose & pose
+ );
+ 
++/// @brief Annotate a string/real pair.
++/// Will place it in the JD2 job, and if JD2 is not active, will also place it in the pose extra scores.
++void
++add_string_real_pair( core::pose::Pose & pose, std::string const & string, core::Real real );
++
+ } //namespace ligand_docking
+ } //namespace protocols
+ 
+diff --git a/tests/integration/tests/ligand_dock_script_jd3/command b/tests/integration/tests/ligand_dock_script_jd3/command
+new file mode 100644
+index 00000000000..62e938e2bbe
+--- /dev/null
++++ b/tests/integration/tests/ligand_dock_script_jd3/command
+@@ -0,0 +1,7 @@
++cd %(workdir)s
++[ -x %(bin)s/rosetta_scripts_jd3.%(binext)s ] || exit 1
++%(bin)s/rosetta_scripts_jd3.%(binext)s %(additional_flags)s @flags -database %(database)s -testing:INTEGRATION_TEST  2>&1 \
++    | egrep -vf ../../ignore_list \
++    > log
++
++test "${PIPESTATUS[0]}" != '0' && exit 1 || true  # Check if the first executable in pipe line return error and exit with error code if so (i.e. Tell testing system if Rosetta died.)
+diff --git a/tests/integration/tests/ligand_dock_script_jd3/flags b/tests/integration/tests/ligand_dock_script_jd3/flags
+new file mode 100644
+index 00000000000..be267c8b543
+--- /dev/null
++++ b/tests/integration/tests/ligand_dock_script_jd3/flags
+@@ -0,0 +1,17 @@
++-in
++ -file
++  -s inputs/7cpa_input.pdb.gz
++  -extra_res_fa inputs/7cpa.params inputs/ZNx.params
++  -treat_residues_in_these_chains_as_separate_chemical_entities WZ
++-out
++ -file
++ -overwrite	
++-packing
++ -no_optH
++ -ex1
++ -ex1aro
++ -ex2
++-parser
++ -protocol ligand_dock.xml
++-mute core.util.prof ## dont show timing info
++-mute core.io.database
+diff --git a/tests/integration/tests/ligand_dock_script_jd3/inputs/7cpa.params b/tests/integration/tests/ligand_dock_script_jd3/inputs/7cpa.params
+new file mode 100644
+index 00000000000..6add6ed182e
+--- /dev/null
++++ b/tests/integration/tests/ligand_dock_script_jd3/inputs/7cpa.params
+@@ -0,0 +1,246 @@
++NAME CP1
++IO_STRING CP1 1
++TYPE LIGAND
++AA UNK
++ATOM  N1  Ntrp  X   -0.48
++ATOM  C19 CNH2  X   0.63
++ATOM  C27 CH1   X   0.00
++ATOM  C24 CH2   X   -0.05
++ATOM  C16 aroC  X   -0.06
++ATOM  C10 aroC  X   -0.12
++ATOM  C4  aroC  X   -0.15
++ATOM  C1  aroC  X   -0.15
++ATOM  C5  aroC  X   -0.14
++ATOM  C11 aroC  X   -0.11
++ATOM  H11 Haro  X   0.17
++ATOM  H5  Haro  X   0.12
++ATOM  H1  Haro  X   0.11
++ATOM  H4  Haro  X   0.11
++ATOM  H10 Haro  X   0.13
++ATOM  H22 Hapo  X   0.12
++ATOM  H23 Hapo  X   0.06
++ATOM  N2  Ntrp  X   -0.47
++ATOM  C21 CNH2  X   0.73
++ATOM  O5  ONH2  X   -0.62
++ATOM  O7  OH    X   -0.43
++ATOM  C26 CH2   X   0.20
++ATOM  C18 aroC  X   -0.09
++ATOM  C14 aroC  X   -0.10
++ATOM  C8  aroC  X   -0.14
++ATOM  C3  aroC  X   -0.13
++ATOM  C9  aroC  X   -0.13
++ATOM  C15 aroC  X   -0.10
++ATOM  H15 Haro  X   0.14
++ATOM  H9  Haro  X   0.13
++ATOM  H3  Haro  X   0.12
++ATOM  H8  Haro  X   0.12
++ATOM  H14 Haro  X   0.14
++ATOM  H26 Hapo  X   0.04
++ATOM  H27 Hapo  X   0.06
++ATOM  H33 Hpol  X   0.32
++ATOM  H28 Hapo  X   0.10
++ATOM  O3  ONH2  X   -0.68
++ATOM  C30 CH1   X   -0.10
++ATOM  C29 CH1   X   -0.07
++ATOM  C22 CH3   X   -0.07
++ATOM  H16 Hapo  X   -0.01
++ATOM  H17 Hapo  X   0.04
++ATOM  H18 Hapo  X   0.05
++ATOM  C23 CH3   X   -0.08
++ATOM  H19 Hapo  X   0.03
++ATOM  H20 Hapo  X   0.02
++ATOM  H21 Hapo  X   -0.01
++ATOM  H30 Hapo  X   0.10
++ATOM  P1  Phos  X   1.37
++ATOM  O2  OH    X   -0.84
++ATOM  O6  OOC   X   -0.91
++ATOM  O8  OH    X   -0.60
++ATOM  C28 CH1   X   0.11
++ATOM  C20 COO   X   0.90
++ATOM  O1  OH    X   -0.87
++ATOM  O4  OOC   X   -0.85
++ATOM  C25 CH2   X   -0.07
++ATOM  C17 aroC  X   -0.03
++ATOM  C12 aroC  X   -0.14
++ATOM  C6  aroC  X   -0.16
++ATOM  C2  aroC  X   -0.17
++ATOM  C7  aroC  X   -0.14
++ATOM  C13 aroC  X   -0.09
++ATOM  H13 Haro  X   0.18
++ATOM  H7  Haro  X   0.11
++ATOM  H2  Haro  X   0.09
++ATOM  H6  Haro  X   0.10
++ATOM  H12 Haro  X   0.12
++ATOM  H24 Hapo  X   0.06
++ATOM  H25 Hapo  X   0.05
++ATOM  H29 Hapo  X   0.04
++ATOM  H31 Hapo  X   0.09
++ATOM  H32 Hpol  X   0.36
++BOND  C1   C4 
++BOND  C1   C5 
++BOND  C2   C6 
++BOND  C2   C7 
++BOND  C3   C8 
++BOND  C3   C9 
++BOND  C4   C10
++BOND  C5   C11
++BOND  C6   C12
++BOND  C7   C13
++BOND  C8   C14
++BOND  C9   C15
++BOND  C10  C16
++BOND  C11  C16
++BOND  C12  C17
++BOND  C13  C17
++BOND  C14  C18
++BOND  C15  C18
++BOND  C16  C24
++BOND  C17  C25
++BOND  C18  C26
++BOND  C19  C27
++BOND  C19  N1 
++BOND  C19  O3 
++BOND  C20  C28
++BOND  C20  O1 
++BOND  C20  O4 
++BOND  C21  N2 
++BOND  C21  O5 
++BOND  C21  O7 
++BOND  C22  C29
++BOND  C23  C29
++BOND  C24  C27
++BOND  C25  C28
++BOND  C26  O7 
++BOND  C27  N2 
++BOND  C28  O8 
++BOND  C29  C30
++BOND  C30  N1 
++BOND  C30  P1 
++BOND  O2   P1 
++BOND  O6   P1 
++BOND  O8   P1 
++BOND  C1   H1 
++BOND  C2   H2 
++BOND  C3   H3 
++BOND  C4   H4 
++BOND  C5   H5 
++BOND  C6   H6 
++BOND  C7   H7 
++BOND  C8   H8 
++BOND  C9   H9 
++BOND  C10  H10
++BOND  C11  H11
++BOND  C12  H12
++BOND  C13  H13
++BOND  C14  H14
++BOND  C15  H15
++BOND  C22  H16
++BOND  C22  H17
++BOND  C22  H18
++BOND  C23  H19
++BOND  C23  H20
++BOND  C23  H21
++BOND  C24  H22
++BOND  C24  H23
++BOND  C25  H24
++BOND  C25  H25
++BOND  C26  H26
++BOND  C26  H27
++BOND  C27  H28
++BOND  C28  H29
++BOND  C29  H30
++BOND  C30  H31
++BOND  N1   H32
++BOND  N2   H33
++CHI 1  C27  C24  C16  C10
++CHI 2  C28  C25  C17  C12
++CHI 3  O7   C26  C18  C14
++CHI 4  N1   C19  C27  C24
++CHI 5  O8   C28  C20  O1 
++CHI 6  N2   C21  O7   C26
++CHI 7  C19  C27  C24  C16
++CHI 8  O8   C28  C25  C17
++CHI 9  C21  O7   C26  C18
++CHI 10  C19  C27  N2   C21
++CHI 11  P1   O8   C28  C20
++CHI 12  N1   C30  C29  C22
++CHI 13  C19  N1   C30  C29
++CHI 14  N1   C30  P1   O2 
++CHI 15  C30  P1   O8   C28
++NBR_ATOM  N1 
++NBR_RADIUS 13.591677
++ICOOR_INTERNAL    N1     0.000000    0.000000    0.000000   N1    C19   C27
++ICOOR_INTERNAL    C19    0.000000    0.000000    1.365878   N1    C19   C27
++ICOOR_INTERNAL    C27    0.000000   64.928671    1.471220   C19   N1    C27
++ICOOR_INTERNAL    C24 -101.423515   60.779716    1.562782   C27   C19   N1 
++ICOOR_INTERNAL    C16  167.824446   65.456482    1.447546   C24   C27   C19
++ICOOR_INTERNAL    C10  101.393223   59.142233    1.354219   C16   C24   C27
++ICOOR_INTERNAL    C4  -178.990246   59.739527    1.352097   C10   C16   C24
++ICOOR_INTERNAL    C1     0.605105   59.842192    1.350336   C4    C10   C16
++ICOOR_INTERNAL    C5     0.108188   60.256371    1.351744   C1    C4    C10
++ICOOR_INTERNAL    C11   -0.929178   59.980135    1.352580   C5    C1    C4 
++ICOOR_INTERNAL    H11 -178.952681   60.210216    1.080017   C11   C5    C1 
++ICOOR_INTERNAL    H5  -179.998590   60.009041    1.080032   C5    C1    C11
++ICOOR_INTERNAL    H1  -179.998448   59.873133    1.079982   C1    C4    C5 
++ICOOR_INTERNAL    H4   179.998600   60.081336    1.080002   C4    C10   C1 
++ICOOR_INTERNAL    H10 -179.998698   60.128780    1.079994   C10   C16   C4 
++ICOOR_INTERNAL    H22 -119.998407   72.184671    1.100009   C24   C27   C16
++ICOOR_INTERNAL    H23 -122.262785   73.343513    1.099973   C24   C27   H22
++ICOOR_INTERNAL    N2  -118.984056   63.557399    1.428438   C27   C19   C24
++ICOOR_INTERNAL    C21  -68.522054   54.177191    1.366282   N2    C27   C19
++ICOOR_INTERNAL    O5   171.758936   57.097656    1.215811   C21   N2    C27
++ICOOR_INTERNAL    O7   176.561633   63.496045    1.314833   C21   N2    O5 
++ICOOR_INTERNAL    C26 -136.978840   58.191046    1.408756   O7    C21   N2 
++ICOOR_INTERNAL    C18  159.092200   59.762647    1.442355   C26   O7    C21
++ICOOR_INTERNAL    C14 -107.305841   59.722563    1.351585   C18   C26   O7 
++ICOOR_INTERNAL    C8  -179.325802   58.997227    1.350266   C14   C18   C26
++ICOOR_INTERNAL    C3     1.941090   60.312512    1.347104   C8    C14   C18
++ICOOR_INTERNAL    C9    -1.339814   60.169037    1.350827   C3    C8    C14
++ICOOR_INTERNAL    C15   -0.767492   59.832278    1.354386   C9    C3    C8 
++ICOOR_INTERNAL    H15 -177.680177   60.128871    1.079989   C15   C9    C3 
++ICOOR_INTERNAL    H9  -179.998234   60.085003    1.080000   C9    C3    C15
++ICOOR_INTERNAL    H3   179.998043   59.914064    1.080000   C3    C8    C9 
++ICOOR_INTERNAL    H8  -179.996379   59.841899    1.079973   C8    C14   C3 
++ICOOR_INTERNAL    H14 -179.999300   60.502854    1.079954   C14   C18   C8 
++ICOOR_INTERNAL    H26 -119.997049   73.968692    1.099983   C26   O7    C18
++ICOOR_INTERNAL    H27 -125.271392   76.481331    1.099942   C26   O7    H26
++ICOOR_INTERNAL    H33 -179.999662   62.908864    1.000017   N2    C27   C21
++ICOOR_INTERNAL    H28 -121.754512   85.761839    1.099970   C27   C19   N2 
++ICOOR_INTERNAL    O3   176.476539   60.510375    1.187785   C19   N1    C27
++ICOOR_INTERNAL    C30 -168.234140   60.868505    1.431404   N1    C19   C27
++ICOOR_INTERNAL    C29  112.361821   73.365565    1.630434   C30   N1    C19
++ICOOR_INTERNAL    C22   54.484874   69.936601    1.517427   C29   C30   N1 
++ICOOR_INTERNAL    H16 -130.877109   70.497259    1.099994   C22   C29   C30
++ICOOR_INTERNAL    H17  119.999274   70.540734    1.099978   C22   C29   H16
++ICOOR_INTERNAL    H18  120.010439   70.542877    1.100012   C22   C29   H17
++ICOOR_INTERNAL    C23 -118.222828   75.008282    1.549136   C29   C30   C22
++ICOOR_INTERNAL    H19  -49.630832   70.500473    1.100005   C23   C29   C30
++ICOOR_INTERNAL    H20  120.001827   70.538340    1.099979   C23   C29   H19
++ICOOR_INTERNAL    H21  120.008758   70.543200    1.099968   C23   C29   H20
++ICOOR_INTERNAL    H30 -122.228778   67.850449    1.100034   C29   C30   C23
++ICOOR_INTERNAL    P1   127.074192   75.786846    1.739206   C30   N1    C29
++ICOOR_INTERNAL    O2    62.591764   74.018289    1.602514   P1    C30   N1 
++ICOOR_INTERNAL    O6   125.304189   73.978412    1.531416   P1    C30   O2 
++ICOOR_INTERNAL    O8   113.397671   71.417592    1.675601   P1    C30   O6 
++ICOOR_INTERNAL    C28  162.563414   65.567184    1.442655   O8    P1    C30
++ICOOR_INTERNAL    C20  -76.874415   67.250159    1.466013   C28   O8    P1 
++ICOOR_INTERNAL    O1   -39.767913   70.189560    1.190471   C20   C28   O8 
++ICOOR_INTERNAL    O4   176.510693   50.936269    1.309139   C20   C28   O1 
++ICOOR_INTERNAL    C25 -121.746390   65.162284    1.526278   C28   O8    C20
++ICOOR_INTERNAL    C17 -174.104735   60.129117    1.429805   C25   C28   O8 
++ICOOR_INTERNAL    C12   82.346267   59.598000    1.350165   C17   C25   C28
++ICOOR_INTERNAL    C6  -179.815461   60.155719    1.351179   C12   C17   C25
++ICOOR_INTERNAL    C2     1.450530   59.867188    1.349638   C6    C12   C17
++ICOOR_INTERNAL    C7    -0.989193   60.068856    1.349687   C2    C6    C12
++ICOOR_INTERNAL    C13    0.104574   60.014021    1.349055   C7    C2    C6 
++ICOOR_INTERNAL    H13 -179.683123   60.050762    1.079978   C13   C7    C2 
++ICOOR_INTERNAL    H7   179.999622   59.994636    1.080009   C7    C2    C13
++ICOOR_INTERNAL    H2   179.998165   59.965841    1.079994   C2    C6    C7 
++ICOOR_INTERNAL    H6  -179.998467   60.068090    1.080010   C6    C12   C2 
++ICOOR_INTERNAL    H12 -179.997895   59.921300    1.080033   C12   C17   C6 
++ICOOR_INTERNAL    H24 -119.999624   73.860611    1.100039   C25   C28   C17
++ICOOR_INTERNAL    H25 -125.059557   76.283432    1.099950   C25   C28   H24
++ICOOR_INTERNAL    H29 -118.299819   77.760076    1.100015   C28   O8    C25
++ICOOR_INTERNAL    H31  117.131050   61.407568    1.100011   C30   N1    P1 
++ICOOR_INTERNAL    H32 -179.999452   59.566931    1.000056   N1    C19   C30
++PDB_ROTAMERS 7cpa_confs.pdb.gz
+diff --git a/tests/integration/tests/ligand_dock_script_jd3/inputs/7cpa_confs.pdb b/tests/integration/tests/ligand_dock_script_jd3/inputs/7cpa_confs.pdb
+new file mode 120000
+index 00000000000..25b6447b5aa
+--- /dev/null
++++ b/tests/integration/tests/ligand_dock_script_jd3/inputs/7cpa_confs.pdb
+@@ -0,0 +1 @@
++7cpa_confs.pdb.gz
+\ No newline at end of file
+diff --git a/tests/integration/tests/ligand_dock_script_jd3/inputs/7cpa_confs.pdb.gz b/tests/integration/tests/ligand_dock_script_jd3/inputs/7cpa_confs.pdb.gz
+new file mode 100644
+index 00000000000..db81e0cc405
+Binary files /dev/null and b/tests/integration/tests/ligand_dock_script_jd3/inputs/7cpa_confs.pdb.gz differ
+diff --git a/tests/integration/tests/ligand_dock_script_jd3/inputs/7cpa_input.pdb.gz b/tests/integration/tests/ligand_dock_script_jd3/inputs/7cpa_input.pdb.gz
+new file mode 100644
+index 00000000000..c6afe99bfd8
+Binary files /dev/null and b/tests/integration/tests/ligand_dock_script_jd3/inputs/7cpa_input.pdb.gz differ
+diff --git a/tests/integration/tests/ligand_dock_script_jd3/inputs/7cpa_native.pdb.gz b/tests/integration/tests/ligand_dock_script_jd3/inputs/7cpa_native.pdb.gz
+new file mode 100644
+index 00000000000..eccb8826ffb
+Binary files /dev/null and b/tests/integration/tests/ligand_dock_script_jd3/inputs/7cpa_native.pdb.gz differ
+diff --git a/tests/integration/tests/ligand_dock_script_jd3/inputs/ZNx.params b/tests/integration/tests/ligand_dock_script_jd3/inputs/ZNx.params
+new file mode 100644
+index 00000000000..c32f5662892
+--- /dev/null
++++ b/tests/integration/tests/ligand_dock_script_jd3/inputs/ZNx.params
+@@ -0,0 +1,17 @@
++# I think right now that Mini has to have at least three atoms per residue,
++# hence the virtual atoms.
++NAME ZNx
++IO_STRING ZNx Z
++TYPE LIGAND
++AA UNK
++ATOM ZN1  Zn2p  X    2.00
++ATOM  V1  VIRT  X    0.00
++ATOM  V2  VIRT  X    0.00
++BOND ZN1   V1 
++BOND ZN1   V2 
++BOND  V1   V2 
++NBR_ATOM ZN1 
++NBR_RADIUS 0.01
++ICOOR_INTERNAL   ZN1     0.000000    0.000000    0.000000  ZN1    V1    V2 
++ICOOR_INTERNAL    V1     0.000000  180.000000    1.493765  ZN1    V1    V2 
++ICOOR_INTERNAL    V2     0.000000   62.060678    1.415324   V1   ZN1    V2 
+diff --git a/tests/integration/tests/ligand_dock_script_jd3/ligand_dock.xml b/tests/integration/tests/ligand_dock_script_jd3/ligand_dock.xml
+new file mode 100644
+index 00000000000..6f1e723e9dc
+--- /dev/null
++++ b/tests/integration/tests/ligand_dock_script_jd3/ligand_dock.xml
+@@ -0,0 +1,66 @@
++<ROSETTASCRIPTS>This protocol will simply do low-resolution followed by high-resolution docking.
++It will also report the binding energy (ddg) and buried-surface area (sasa) in the score file.
++	<SCOREFXNS>
++		<ScoreFunction name="ligand_soft_rep" weights="ligand_soft_rep">
++			<Reweight scoretype="fa_elec" weight="0.42"/>
++			<Reweight scoretype="hbond_bb_sc" weight="1.3"/>
++			<Reweight scoretype="hbond_sc" weight="1.3"/>
++			<Reweight scoretype="rama" weight="0.2"/>
++		</ScoreFunction>
++		<ScoreFunction name="hard_rep" weights="ligand">
++			<Reweight scoretype="fa_intra_rep" weight="0.004"/>
++			<Reweight scoretype="fa_elec" weight="0.42"/>
++			<Reweight scoretype="hbond_bb_sc" weight="1.3"/>
++			<Reweight scoretype="hbond_sc" weight="1.3"/>
++			<Reweight scoretype="rama" weight="0.2"/>
++		</ScoreFunction>
++	</SCOREFXNS>
++	<LIGAND_AREAS>
++		<LigandArea name="docking_sidechain" chain="X" cutoff="6.0" add_nbr_radius="true" all_atom_mode="true" minimize_ligand="10"/>
++		<LigandArea name="final_sidechain" chain="X" cutoff="6.0" add_nbr_radius="true" all_atom_mode="true"/>
++		<LigandArea name="final_backbone" chain="X" cutoff="7.0" add_nbr_radius="false" all_atom_mode="true" Calpha_restraints="0.3"/>
++	</LIGAND_AREAS>
++	<INTERFACE_BUILDERS>
++		<InterfaceBuilder name="side_chain_for_docking" ligand_areas="docking_sidechain"/>
++		<InterfaceBuilder name="side_chain_for_final" ligand_areas="final_sidechain"/>
++		<InterfaceBuilder name="backbone" ligand_areas="final_backbone" extension_window="3"/>
++	</INTERFACE_BUILDERS>
++	<MOVEMAP_BUILDERS>
++		<MoveMapBuilder name="docking" sc_interface="side_chain_for_docking" minimize_water="true"/>
++		<MoveMapBuilder name="final" sc_interface="side_chain_for_final" bb_interface="backbone" minimize_water="true"/>
++	</MOVEMAP_BUILDERS>
++	<MOVERS>
++	single movers		
++		<StartFrom name="start_from" chain="X">
++			<Coordinates x="-1.731" y="32.589" z="-5.039"/>
++		</StartFrom>
++		<CompoundTranslate name="compound_translate" randomize_order="false" allow_overlap="false">
++			<Translate chain="X" distribution="uniform" angstroms="5.0" cycles="50"/>
++			<Translate chain="Z" distribution="gaussian" angstroms="1.3" cycles="20"/>
++			<Translates chain="W" distribution="gaussian" angstroms="1.3" cycles="20"/>
++		</CompoundTranslate>
++		<Rotate name="rotate" chain="X" distribution="uniform" degrees="360" cycles="500"/>
++		<Rotates name="rotates" chain="W" distribution="uniform" degrees="360" cycles="15"/> rotate each water molecule
++		<SlideTogether name="slide_together" chains="X"/>
++		<HighResDocker name="high_res_docker" cycles="6" repack_every_Nth="3" scorefxn="ligand_soft_rep" movemap_builder="docking"/>
++		<FinalMinimizer name="final" scorefxn="hard_rep" movemap_builder="final"/>
++		<InterfaceScoreCalculator name="add_scores" chains="X" scorefxn="hard_rep" native="inputs/7cpa_native.pdb.gz"/>
++	compound movers
++		<ParsedProtocol name="low_res_dock">
++			<Add mover_name="start_from"/>
++			<Add mover_name="compound_translate"/>
++			<Add mover_name="rotate"/>
++			<Add mover_name="slide_together"/>
++		</ParsedProtocol>
++		<ParsedProtocol name="high_res_dock">
++			<Add mover_name="high_res_docker"/>
++			<Add mover_name="final"/>
++		</ParsedProtocol>
++	</MOVERS>
++	<PROTOCOLS>
++		<Add mover_name="low_res_dock"/>
++	  <Add mover_name="high_res_dock"/>
++		<Add mover_name="add_scores"/>
++	</PROTOCOLS>
++
++</ROSETTASCRIPTS>

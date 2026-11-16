@@ -1,0 +1,66 @@
+version = "1.0"
+
+[task]
+name = "default/CBDD__rDock-18"
+description = "[WIP] Extended Python version of rbhtfinder"
+
+[metadata]
+difficulty = "large"
+category = "bugfix"
+keywords = [
+    "rDock",
+    "pr_diff",
+]
+
+[metadata.repo2env]
+pipeline = "pr_diff"
+pipeline_version = "0.3.0"
+repo = "CBDD/rDock"
+ref = "f7ebefbac85f4a44dc6ab78531f3e0d3458a5867"
+reference = "https://github.com/CBDD/rDock/pull/18"
+source_access = "auto"
+built_at = "2026-11-16T05:55:05.198274+00:00"
+reward_kinds = [
+    "diff_similarity",
+]
+spec_version = "0.2.0"
+content_hash = "sha256:f8ec9e55ba605c834520d374efff0c250b4d32820a18e9a3fdfd8fb0e9483865"
+
+[metadata.repo2env.pr_diff]
+pr_merged_at = "2024-04-25T19:57:05Z"
+diff_format = "unified"
+context_files = [
+    "bin/rbhtfinder",
+    "rdock-utils/rdock_utils/rbhtfinder",
+    "rdock-utils/tests/fixtures/rbhtfinder/rbhtfinder_input.txt",
+    "rdock-utils/tests/fixtures/rbhtfinder/rbhtfinder_output.txt",
+    "rdock-utils/tests/fixtures/rbhtfinder/rbhtfinder_threshold.txt",
+]
+
+[metadata.repo2env.reward_calibration]
+baseline_reward = 0.0
+loc_changed = 604
+difficulty = "large"
+
+[metadata.repo2env.evaluation]
+schema_version = "1"
+status = "unverified"
+stage = "generation"
+reason_codes = [
+    "validation_not_run",
+]
+detail = "Generated task; validation has not been established."
+provenance = "unknown"
+evidence = []
+
+[metadata.repo2env.reproducibility]
+mode = "local_only"
+image_ref = "python:3.12-slim"
+image_tag = "python:3.12-slim"
+image_visibility = "private"
+
+[agent]
+timeout_sec = 1800.0
+
+[verifier]
+timeout_sec = 300.0

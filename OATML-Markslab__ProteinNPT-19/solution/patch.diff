@@ -1,0 +1,190 @@
+diff --git a/proteinnpt/baselines/model.py b/proteinnpt/baselines/model.py
+index 0ba2344..3aef117 100755
+--- a/proteinnpt/baselines/model.py
++++ b/proteinnpt/baselines/model.py
+@@ -6,7 +6,7 @@
+ import torch.nn as nn
+ from torch.optim import AdamW
+ from torch.nn import CrossEntropyLoss, MSELoss
+-from transformers import ConvBertConfig, ConvBertLayer
++# from transformers import ConvBertConfig, ConvBertLayer
+ 
+ from ..utils.esm.modules import ESM1bLayerNorm
+ from ..utils.esm.axial_attention import RowSelfAttention, ColumnSelfAttention
+@@ -66,7 +66,7 @@ def __init__(self, args, alphabet):
+         if self.args.target_prediction_head == "AA_embeddings_mean_pooled":
+             target_pred_input_dim = self.args.embed_dim
+         elif self.args.target_prediction_head == "One_hot_encoding":
+-            target_pred_input_dim = (self.args.seq_len + 1) * self.alphabet_size if args.target_prediction_model!="CNN" else self.alphabet_size    #Add one for the BOS token
++            target_pred_input_dim = (self.args.seq_len + 2) * self.alphabet_size if args.target_prediction_model!="CNN" else self.alphabet_size    #Add one for the BOS token
+         else:
+             print(self.args.target_prediction_head)
+             print("Error: Specified embedding aggregation invalid")
+@@ -78,16 +78,16 @@ def __init__(self, args, alphabet):
+                         nn.Dropout(self.args.dropout),
+                         nn.ReLU()
+             )
+-        elif args.target_prediction_model=="ConvBERT":
+-            configuration = ConvBertConfig(
+-                hidden_size = self.args.embed_dim,
+-                num_attention_heads = self.args.attention_heads if self.args.attention_heads is not None else 4,
+-                conv_kernel_size = self.args.conv_kernel_size,
+-                hidden_act = "gelu",
+-                hidden_dropout_prob = self.args.dropout,
+-                attention_probs_dropout_prob = self.args.dropout
+-            )
+-            self.layer_pre_head = ConvBertLayer(configuration)
++        # elif args.target_prediction_model=="ConvBERT":
++        #     configuration = ConvBertConfig(
++        #         hidden_size = self.args.embed_dim,
++        #         num_attention_heads = self.args.attention_heads if self.args.attention_heads is not None else 4,
++        #         conv_kernel_size = self.args.conv_kernel_size,
++        #         hidden_act = "gelu",
++        #         hidden_dropout_prob = self.args.dropout,
++        #         attention_probs_dropout_prob = self.args.dropout
++        #     )
++        #     self.layer_pre_head = ConvBertLayer(configuration)
+         elif args.target_prediction_model=="CNN":
+             self.layer_pre_head = nn.Sequential(
+                 nn.Conv1d(in_channels=target_pred_input_dim, out_channels=target_pred_input_dim, kernel_size = self.args.conv_kernel_size, padding='same'),
+diff --git a/proteinnpt/baselines/model_configs/OHE_DeepSequence_final.json b/proteinnpt/baselines/model_configs/OHE_DeepSequence_final.json
+index 9f2ee29..8089219 100755
+--- a/proteinnpt/baselines/model_configs/OHE_DeepSequence_final.json
++++ b/proteinnpt/baselines/model_configs/OHE_DeepSequence_final.json
+@@ -2,7 +2,7 @@
+     "model_type": "DeepSequence_pred",
+     "model_name_suffix": "OHE_DeepSequence_final",
+     "aa_embeddings": "One_hot_encoding",
+-    "augmentation": "unsupervised_fitness_predictions",
++    "augmentation": "zero_shot_fitness_predictions_covariate",
+     "target_prediction_head": "One_hot_encoding",
+     "target_prediction_model": "linear",
+     "weight_decay": 5e-3,
+diff --git a/proteinnpt/proteinnpt/model.py b/proteinnpt/proteinnpt/model.py
+index 8b813b0..6f89655 100755
+--- a/proteinnpt/proteinnpt/model.py
++++ b/proteinnpt/proteinnpt/model.py
+@@ -5,7 +5,7 @@
+ import torch.nn as nn
+ from torch.optim import AdamW
+ from torch.nn import CrossEntropyLoss, MSELoss
+-from transformers import ConvBertConfig, ConvBertLayer
++# from transformers import ConvBertConfig, ConvBertLayer
+ 
+ from ..utils.esm.modules import (
+     AxialTransformerLayer,
+diff --git a/proteinnpt/utils/data_utils.py b/proteinnpt/utils/data_utils.py
+index 223c48d..aeeb99c 100755
+--- a/proteinnpt/utils/data_utils.py
++++ b/proteinnpt/utils/data_utils.py
+@@ -66,16 +66,27 @@ def get_train_val_test_data(args, assay_file_names):
+     assay_data[main_target_name].columns = ['mutant','mutated_sequence', main_target_name, args.fold_variable_name]
+     merge = assay_data[main_target_name]
+     
++    # Get target sequence from mutated 
++    wt_sequence = list(merge.loc[0, 'mutated_sequence'])
++    mut_0 = merge.loc[0, 'mutant']
++    for mutation in mut_0.split(':'):
++        wt, pos, mut = mutation[0], int(mutation[1:-1]), mutation[-1]
++        assert wt_sequence[pos-1] == mut
++        wt_sequence[pos-1] = wt
++    target_seq = ''.join(wt_sequence)
++    
+     for target_name in target_names:
+         if target_name!=main_target_name:
+             assay_data[target_name] = pd.read_csv(args.target_config[target_name]["location"] + os.sep + assay_file_names[target_name]) 
+-            assay_data[target_name] = cleanup_ids_assay_data(assay_data[target_name])[['mutant',args.target_config[target_name]["var_name"]]]
++            assay_data[target_name] = cleanup_ids_assay_data(assay_data[target_name], target_seq=target_seq)[['mutant',args.target_config[target_name]["var_name"]]]
+             assay_data[target_name].columns = ['mutant',target_name]
+             merge = pd.merge(merge, assay_data[target_name], how='outer', on='mutant')
+             
+     if args.augmentation=="zero_shot_fitness_predictions_covariate":
+         zero_shot_fitness_predictions = pd.read_csv(args.zero_shot_fitness_predictions_location + os.sep + assay_file_names[main_target_name])
+-        zero_shot_fitness_predictions = cleanup_ids_assay_data(zero_shot_fitness_predictions)[['mutant',args.zero_shot_fitness_predictions_var_name]]
++        # Remove wt row if present
++        zero_shot_fitness_predictions = zero_shot_fitness_predictions[zero_shot_fitness_predictions["mutant"] != "wt"].reset_index(drop=True)
++        zero_shot_fitness_predictions = cleanup_ids_assay_data(zero_shot_fitness_predictions, target_seq=target_seq)[['mutant',args.zero_shot_fitness_predictions_var_name]]
+         zero_shot_fitness_predictions.columns = ['mutant','zero_shot_fitness_predictions']
+         zero_shot_fitness_predictions['zero_shot_fitness_predictions'] = standardize(zero_shot_fitness_predictions['zero_shot_fitness_predictions'])
+         merge = pd.merge(merge,zero_shot_fitness_predictions,how='left',on='mutant')
+@@ -320,4 +331,4 @@ def pnpt_spearmanr(prediction,target):
+     
+ def pnpt_count_non_nan(x):
+     missing_mask = np.isnan(x) | np.equal(x,-100)
+-    return np.count_nonzero(~missing_mask)
+\ No newline at end of file
++    return np.count_nonzero(~missing_mask)
+diff --git a/proteinnpt/utils/model_utils.py b/proteinnpt/utils/model_utils.py
+index cfd8f92..70c81f6 100755
+--- a/proteinnpt/utils/model_utils.py
++++ b/proteinnpt/utils/model_utils.py
+@@ -505,6 +505,8 @@ def eval(self, test_data, output_all_predictions=False, need_head_weights=False,
+             output_scores = pd.DataFrame.from_dict(output_scores)
+             output_scores_numeric_cols = [col_name for col_name in output_scores.columns if col_name not in ['mutated_sequence']]
+             output_scores = output_scores[output_scores_numeric_cols]
++            output_scores = output_scores.drop_duplicates()
++            output_scores = output_scores.groupby("mutant", as_index=False).mean(numeric_only=True).reset_index(drop=True)
+             assert len(output_scores)==output_scores['mutant'].nunique()
+             mutated_seqs_dict = {}
+             mutant_mutated_seqs = list(zip(*test_data['mutant_mutated_seq_pairs']))
+diff --git a/scripts/train.py b/scripts/train.py
+index 9eadeb7..24967d7 100644
+--- a/scripts/train.py
++++ b/scripts/train.py
+@@ -31,12 +31,12 @@ def setup_config_and_paths(args):
+     for local_path in ['embedding_model_location','MSA_data_folder','MSA_weight_data_folder','path_to_hhfilter']:
+         if getattr(args, local_path) and local_path in args_setup_from_config:
+             setattr(args, local_path, args.data_location + os.sep + getattr(args, local_path))
+-    if not os.path.exists(args.data_location + os.sep + 'model_predictions'): os.mkdir(args.data_location + os.sep + 'model_predictions')
+-    if not os.path.exists(args.data_location + os.sep + 'checkpoint'): os.mkdir(args.data_location + os.sep + 'checkpoint')
++    if not os.path.exists(args.data_location + os.sep + 'model_predictions'): os.makedirs(args.data_location + os.sep + 'model_predictions', exist_ok=True)
++    if not os.path.exists(args.data_location + os.sep + 'checkpoint'): os.makedirs(args.data_location + os.sep + 'checkpoint', exist_ok=True)
+     args.output_scores_location = args.data_location + os.sep + 'model_predictions' + os.sep + args.model_name_suffix
+-    if not os.path.exists(args.output_scores_location): os.mkdir(args.output_scores_location)
++    if not os.path.exists(args.output_scores_location): os.makedirs(args.output_scores_location, exist_ok=True)
+     args.model_location = args.data_location + os.sep + 'checkpoint' + os.sep + args.model_name_suffix
+-    if not os.path.exists(args.model_location): os.mkdir(args.model_location)
++    if not os.path.exists(args.model_location): os.makedirs(args.model_location, exist_ok=True)
+     if args.assay_data_location and not args.assay_data_folder: args.assay_data_folder = [ os.sep.join(args.assay_data_location.split(os.sep)[:-1]) ] # args.assay_data_folder is a list
+ 
+     # Target config
+@@ -281,17 +281,21 @@ def main(args):
+     )
+     # Load model from checkpoint or train from scratch
+     if args.load_model_checkpoint:
+-        checkpoint_location = args.model_location +os.sep + model_name + os.sep + 'final' + os.sep + 'checkpoint.t7'
+-        checkpoint = torch.load(checkpoint_location)
+-        # load the state dictionary into your model
+-        model.load_state_dict(checkpoint['state_dict'], strict=False)
+-        trainer_final_status = {
+-            'total_training_steps': -1,
+-            'total_training_epochs': -1,
+-            'total_train_time': -1
+-        }
+-        model.cuda()
+-        model.set_device()
++        try:
++            checkpoint_location = args.model_location +os.sep + model_name + os.sep + 'final' + os.sep + 'checkpoint.t7'
++            checkpoint = torch.load(checkpoint_location)
++            # load the state dictionary into your model
++            model.load_state_dict(checkpoint['state_dict'], strict=False)
++            trainer_final_status = {
++                'total_training_steps': -1,
++                'total_training_epochs': -1,
++                'total_train_time': -1
++            }
++            model.cuda()
++            model.set_device()
++        except FileNotFoundError:
++            print("No checkpoint found at location: {}".format(checkpoint_location))
++            trainer_final_status = trainer.train()
+     else:
+         trainer_final_status = trainer.train()
+     print('Final training step: {} | Num training epochs: {} | Total train time: {} hrs'.format(trainer_final_status['total_training_steps'], trainer_final_status['total_training_epochs'], str(trainer_final_status['total_train_time'] / 3600)))
+@@ -453,4 +457,4 @@ def main(args):
+                 spearmans_across_folds[target_name].append(spearmans[target_name])
+         log_performance_all_folds(args,target_names,all_test_predictions_across_folds,spearmans_across_folds,perf_list)
+     else:
+-        main(args)
+\ No newline at end of file
++        main(args)

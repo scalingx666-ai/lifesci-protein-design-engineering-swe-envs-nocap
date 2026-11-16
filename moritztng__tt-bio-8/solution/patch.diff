@@ -1,0 +1,843 @@
+diff --git a/.perf-runs/20260629/REPORT.md b/.perf-runs/20260629/REPORT.md
+new file mode 100644
+index 0000000000..0dcedab578
+--- /dev/null
++++ b/.perf-runs/20260629/REPORT.md
+@@ -0,0 +1,76 @@
++# tt-bio perf — 2026-06-29 — SwiGLU gate/up fusion in the shared `Transition`
++
++**Branch:** `exp/perf-20260629-swiglu-fusion` (reset to main `c892edb`; **no code shipped**)
++**Card:** tt-quietbox `/dev/tenstorrent/0` (others left free)
++**Verdict:** DEAD END — neutral on Boltz-2 (no measurable speedup) **and** breaks Protenix. Reverted.
++
++## Idea
++The shared `Transition` primitive (`tenstorrent.py`) computes a SwiGLU as **two**
++separate matmuls reading the same `x_norm`:
++```
++x_1 = linear(x_norm, fc1, activation="silu")
++x_2 = linear(x_norm, fc2)
++x   = x_1 * x_2 ; out = linear(x, fc3)
++```
++`ttnn` exposes a native fused `ttnn.swiglu(t)` = `first * silu(second)`. So concatenating
++the weights as `[fc2 | fc1]` lets a **single** matmul emit `[fc2(x) | fc1(x)]`, and
++`ttnn.swiglu` then yields `fc2(x) * silu(fc1(x)) == silu(fc1(x)) * fc2(x)` — reading
++`x_norm` once instead of twice, saving one matmul launch, with **no host split**
++(structurally different from the ruled-out AdaLN concat-split fusion, which needed an
++explicit copy of two output slices).
++
++`Transition` is shared: Boltz-2 trunk (pairformer `transition_z`/`transition_s`), the MSA
++module, diffusion conditioning, Protenix, and ESMFold2 all use it. A real win here would be
++broad and elegant.
++
++## What I did
++- Concatenated `fc2`/`fc1` weights into `fc12_weight` in `Transition.__init__`; replaced the
++  two matmuls + `multiply` with one matmul + `ttnn.swiglu` in `swiglu()`.
++- `ttnn.swiglu` indexes rank-4 internally → added a reshape wrapper for the 3D (single-track)
++  transitions.
++
++## Results — parity (Boltz-2)
++`test_tenstorrent.py::test_pairformer test_msa test_diffusion` → **9/9 passed** (repo's
++rel-median-err < 0.1 gate). Fusion is numerically correct for Boltz-2 trunk / MSA / diffusion.
++
++## Results — warm A/B (TT_STAGE_PROFILE, same session, card 0, seed 0)
++| input | metric | main (baseline) | fused | Δ |
++|---|---|---|---|---|
++| 256 fast | total | 14.03s | 14.19s | +0.16s (noise) |
++|          | trunk | 6.28s  | 6.29s  | +0.01s |
++| 512 fast | total | 30.14s | 30.11s | −0.03s (noise) |
++|          | trunk | 18.79s | 18.60s | −0.19s |
++| 686 fast | total | 51.21s* | 51.56s | +0.35s (noise) |
++|          | trunk | 33.50s* | 33.39s | −0.11s |
++| 512 default | total | 40.70s* | 40.38s | −0.32s (noise) |
++|             | trunk | 28.58s* | 28.15s | −0.43s |
++
++\* 686 / default baselines from the 2026-06-26 journal (256/512 are same-session A/B). No OOM
++at the ceiling; default path runs fine.
++
++**Neutral at every size & both modes** — all deltas are within the documented run-to-run
++variance (±1–3s from host contention + device nondeterminism). The transition is **FLOP-bound**:
++fusing 2 matmuls into 1 does not reduce MACs; the only savings (one `x_norm` re-read + one
++kernel launch) are negligible on the warm program-cache path, and `transition_*` is a minority
++of the trunk (trimul + triattn dominate, per prior nights).
++
++## Results — robustness (the kill shot)
++`Transition` is shared, so I ran Protenix parity:
++`test_protenix_trunk_pairformer.py`, `test_protenix_diffusion_cond.py` (3 tests).
++- **main:** 3/3 passed.
++- **fused:** 3/3 **FAILED** — `TT_FATAL: Invalid arguments to reshape`.
++
++The rank-reshape wrapper around `ttnn.swiglu` does not generalize to Protenix-v2's transition
++shapes (wider `c=256` channels / different dims). The change **regresses a shared primitive**.
++
++## Decision
++Neutral on the target model **and** breaks another model that shares the primitive → revert.
++Branch reset to main; tree left clean (two pre-existing untracked WIP test files preserved).
++**Recommendation: do not merge.** Even a Protenix-correct version would be a no-op on Boltz-2.
++
++## Takeaway
++Confirms the standing verdict (7+ nights): the Boltz-2 `--fast` trunk is **at ceiling** and its
++ops are FLOP-bound, not launch/bandwidth-bound. Op-fusion that doesn't cut MACs buys nothing
++warm. `ttnn.swiglu` is rank-4-only and not a drop-in for the variable-rank shared `Transition`.
++The only remaining ≥5% lever is algorithmic / multi-device (trunk-only TP) — a multi-day
++attended port, not an overnight knob.
+diff --git a/.perf-runs/20260708-protenix-batch/REPORT.md b/.perf-runs/20260708-protenix-batch/REPORT.md
+new file mode 100644
+index 0000000000..1d823ea6a0
+--- /dev/null
++++ b/.perf-runs/20260708-protenix-batch/REPORT.md
+@@ -0,0 +1,46 @@
++# 2026-07-08 — Protenix-v2 --fast: diffusion dispatch-bound; LANDED lossless denoise-trace win
++
++Branch `exp/bioperf-largeseq`. NOT pushed, main untouched.
++
++## Profiling (new): Protenix diffusion is per-step DISPATCH-bound
++Warm per-sample `edm_sample` (200 steps) is ~L-independent:
++NT=38 35.2ms/step, L=256 37.5ms, L=512 40.6ms. ~400 device op launches/step x ~85us
++~= 34ms, size-independent => dispatch-bound, NOT device-compute-bound (unlike
++Boltz-2/ESMFold2). Diffusion dominates e2e at n_sample>1 (trunk once; diffusion+confidence
++per sample). L=256 trunk 5.88s, warm diffusion 7.49s/sample.
++
++## Attempt 1: single-device sample-dim batching (mission lever #2) -> DEAD END, reverted
++denoise batched over B>1 (fold sample dim into windowed atom-attn block dim; batched DiT).
++atxE/atxD bit-exact at B=1. MEASURED SLOWER: L256 n=3 serial 23.9s -> batched 31.8s (1.4x);
++L512 26.4 -> 42.7s (1.6x, worse at large L). B=3 is tile-misaligned; wide windowed-attn +
++head_dim=48 DiT do 3x device work less efficiently than 3 B=1-optimal passes. Reverted.
++
++## Attempt 2: ttnn TRACE of the denoise device stream -> LANDED (lossless)
++Two commits (b0c6450 profiling+dead-end doc; 1147a82 the win):
++1. AtomTransformer._adaln now CACHES the AdaLN module per prefix (was reconstructing it +
++   re-uploading 4 weights via ttnn.from_torch every call = ~9600 redundant device writes/fold
++   in the diffusion enc/decoder). Bit-identical; always on; prerequisite for trace capture.
++2. TT_PROTENIX_TRACE=1: capture the ~400-op denoise device stream once/fold, replay it,
++   collapsing per-step dispatch. Per-step host inputs (fourier(t_hat), scaled coords) staged
++   into fixed device buffers; fold-fixed cond stays resident. get_device auto-reserves 1 GiB
++   trace region when enabled (off => layout unchanged).
++
++### Warm diffusion (edm_sample, 200 steps, --fast) — CLEAN no-contention, card 0 alone
++| L    | untraced (AdaLN cache) | trace  | trace speedup |
++|------|------------------------|--------|---------------|
++| 256  | 6.134s                 | 4.776s | **-22.1%**    |
++| 512  | 7.746s                 | 7.728s | -0.2% (neutral) |
++e2e @L256 n_sample=1 ~ trunk 5.88 + diff + conf 0.4: 12.4s -> 11.06s (~-11% e2e), and the
++win grows with n_sample (diffusion share grows: n=5 e2e ~ -19%).
++
++### Accuracy — LOSSLESS (proven)
++trace vs untraced, SAME seed, golden (N=275, 200 steps): coord maxdiff=0.000e+00,
++Kabsch RMSD=0.0000 A; untraced-vs-ref 7.1034 A == trace-vs-ref 7.1034 A. The trace replays
++the identical kernel stream and Protenix denoise is deterministic (serial x2 maxdiff 0).
++Tests: test_protenix_{atomtx,diffusion,ife,fold,diffusion_cond,atomfeat} 8/8 pass.
++
++### Scope / ceiling
++Trace win is largest where dispatch > compute (small-mid L, e.g. L256 diffusion compute floor
++~26.7ms/step) and shrinks as L grows (L512 compute ~38ms/step ~= dispatch => neutral). So it
++helps small-mid proteins and the default n_sample=1 path; large-L (512/1024) diffusion is
++compute-bound (same ceiling as Boltz-2). AdaLN caching is a small bit-identical win at all L.
+diff --git a/.perf-runs/protenix-batch/BASELINE.md b/.perf-runs/protenix-batch/BASELINE.md
+new file mode 100644
+index 0000000000..c097620297
+--- /dev/null
++++ b/.perf-runs/protenix-batch/BASELINE.md
+@@ -0,0 +1,33 @@
++# Protenix-v2 --fast baseline (warm per-sample), tt-quietbox BH, n_step=200
++Measured 2026-07-08, single protein (trunk COLD), diffusion samples 1=cold 2,3=WARM.
++
++| L    | trunk(cold) | edm_sample warm/sample | e2e(nsample=3) |
++|------|-------------|------------------------|----------------|
++| 256  | 5.88s       | 7.49s (8.69 cold)      | 34.1s          |
++| 512  | 48.0s(cold) | 8.13s (24.2 cold)      | 141.4s         |
++
++KEY: warm diffusion per-sample ~FLAT in L (7.5s@256, 8.1s@512) despite 2x atoms
++=> Protenix diffusion warm is per-step FIXED-OVERHEAD / host-dispatch bound (denoise does
++host torch fourier/r_noisy/EDM-precond + a device->host transfer EVERY step), NOT
++device-compute-bound like Boltz-2/ESMFold2. Batching B samples into ONE 200-step loop
++should amortize that overhead -> near-Bx diffusion throughput. Diffusion dominates e2e at
++n_sample>1 (n_sample=3: ~79% @256). LEVER = batch the serial edm_sample loop (denoise B>1).
++
++## HOST-BOUND CONFIRMED (2026-07-08)
++warm ms/step nearly L-INDEPENDENT: NT=38 35.2ms, L=256 37.5ms, L=512 40.6ms.
++=> per-step fixed-overhead bound (host loop + per-step device->host to_torch), NOT compute.
++=> batching B samples into one loop should give ~Bx diffusion throughput. GO.
++compute_random_augmentation(multiplicity) already batches. AdaLN/AttentionPairBias broadcast batch (Boltz-2 multiplicity uses them).
++
++## RESULT: single-device sample-batching is a DEAD END (measured 2026-07-08)
++L=256 n=3: serial 23.9s (8.69+7.56+7.69) vs BATCHED 31.8s  -> 1.4x SLOWER
++L=512 n=3: serial 26.4s (9.63+8.41+8.38) vs BATCHED 42.7s  -> 1.6x SLOWER (worse at large L)
++Batch dim B=3 is tile-misaligned; the windowed atom-attn (folds B into B*nb blocks) and the
++head_dim=48 DiT do 3x the device work LESS efficiently than 3 sequential B=1-optimal passes.
++atxE/atxD batch bit-exactly (B=1 == serial maxdiff 0); DiT has a B>1 buffer-aliasing bug
++(block0 clean, block1+ diverge from identical inputs; apb itself proven correct at B=3).
++CONCLUSION: reverted. The real Protenix lever is per-step DISPATCH reduction (diffusion warm is
++L-independent ~35-41ms/step = dispatch-bound), which helps EVERY fold incl. default n_sample=1:
++ttnn TRACE of the denoise device stream, or a device-resident coordinate loop.
++Multi-card sample-parallel would give ~linear n_sample>1 throughput but the per-step device<->host
++round-trip (r_update to_torch each step) is the same tax that made mesh-diffusion a dead-end (06-24).
+diff --git a/.perf-runs/protenix-batch/accuracy_trace.py b/.perf-runs/protenix-batch/accuracy_trace.py
+new file mode 100644
+index 0000000000..d2329770c1
+--- /dev/null
++++ b/.perf-runs/protenix-batch/accuracy_trace.py
+@@ -0,0 +1,47 @@
++import os, sys, pickle
++os.environ.setdefault('TT_LOGGER_LEVEL', 'FATAL')
++os.environ['TT_PROTENIX_DBG_COND'] = '1'
++os.environ['TT_PROTENIX_TRACE_REGION'] = str(1024 * 1024 * 1024)   # open device with trace region
++sys.path.insert(0, '/home/ttuser/tt-bio-dev')
++import torch, ttnn
++from tt_bio.tenstorrent import get_device
++from tt_bio.protenix import Protenix, edm_sample
++ife = pickle.load(open('/home/ttuser/protenix_ife_gold.pkl', 'rb'))
++tg = pickle.load(open('/home/ttuser/protenix_trunkin_gold.pkl', 'rb'))
++d = pickle.load(open('/home/ttuser/protenix_ref_out.pkl', 'rb')); tfeat = d['intermediates']['template_embedder']['in'][0]
++traj = pickle.load(open('/home/ttuser/protenix_traj.pkl', 'rb'))
++F = ife['feat']
++feats = {'ref_pos': F['ref_pos'], 'ref_charge': F['ref_charge'], 'ref_mask': F['ref_mask'], 'ref_element': F['ref_element'],
++    'ref_atom_name_chars': F['ref_atom_name_chars'], 'd_lm': F['d_lm'], 'v_lm': F['v_lm'], 'atom_to_token_idx': F['atom_to_token_idx'],
++    'restype': F['restype'], 'profile': F['profile'], 'deletion_mean': F['deletion_mean'], 'mask_trunked': ife['mask_trunked'],
++    'relp': tg['relp'], 'token_bonds': tg['token_bonds'], 'template_aatype': tfeat['template_aatype'],
++    'template_distogram': tfeat['template_distogram'], 'template_pseudo_beta_mask': tfeat['template_pseudo_beta_mask'],
++    'template_unit_vector': tfeat['template_unit_vector'], 'template_backbone_frame_mask': tfeat['template_backbone_frame_mask'],
++    'msa': tfeat['msa'], 'has_deletion': tfeat['has_deletion'], 'deletion_value': tfeat['deletion_value'], 'asym_id': tfeat['asym_id']}
++dev = get_device()
++ckc = ttnn.init_device_compute_kernel_config(dev.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, packer_l1_acc=True)
++model = Protenix.load_from_checkpoint('/home/ttuser/protenix_ckpt/protenix-v2.pt', compute_kernel_config=ckc, device=dev)
++model._fast = True
++os.environ['TT_PROTENIX_TRACE'] = ''
++_ = model.fold(feats, n_step=3, n_sample=1, seed=0)   # populate cond
++cond = model._dbg_cond
++N = cond['c_l'].shape[0]
++NS = 200
++# untraced
++os.environ.pop('TT_PROTENIX_TRACE', None)
++xu = edm_sample(model.diffusion, cond, N, n_step=NS, seed=0)[0].float()
++# traced (fresh trace)
++model.diffusion._trace = None
++os.environ['TT_PROTENIX_TRACE'] = '1'
++xt = edm_sample(model.diffusion, cond, N, n_step=NS, seed=0)[0].float()
++def kabsch(P, Q):
++    Pc = P - P.mean(0); Qc = Q - Q.mean(0); H = Pc.t() @ Qc
++    U, _, Vt = torch.linalg.svd(H); Dm = torch.diag(torch.tensor([1., 1., torch.sign(torch.det(Vt.t() @ U.t()))]))
++    R = Vt.t() @ Dm @ U.t(); return float(((Pc @ R.t()) - Qc).pow(2).sum(-1).mean().sqrt())
++print(f"N={N} n_step={NS}")
++print(f"trace-vs-untraced (same seed) coord maxdiff={float((xu-xt).abs().max()):.3e}  Kabsch RMSD={kabsch(xu,xt):.4f} A")
++ref = traj.get('final_coords')
++if ref is not None:
++    rf = ref.float().reshape(-1, 3)[:N]
++    print(f"untraced vs ref RMSD={kabsch(xu,rf):.4f} A ; trace vs ref RMSD={kabsch(xt,rf):.4f} A")
++print("ACC_DONE")
+diff --git a/.perf-runs/protenix-batch/harness.py b/.perf-runs/protenix-batch/harness.py
+new file mode 100644
+index 0000000000..9ad96508df
+--- /dev/null
++++ b/.perf-runs/protenix-batch/harness.py
+@@ -0,0 +1,62 @@
++import os, sys, time, pickle, argparse
++os.environ.setdefault('TT_LOGGER_LEVEL', 'FATAL')
++# use THIS repo's tt_bio (not the legacy /home/ttuser/tt-boltz2)
++sys.path.insert(0, '/home/ttuser/tt-bio-dev')
++import torch, ttnn
++from tt_bio.tenstorrent import get_device
++from tt_bio.protenix import Protenix
++
++ap = argparse.ArgumentParser()
++ap.add_argument('--n_step', type=int, default=60)
++ap.add_argument('--n_sample', type=int, default=2)
++ap.add_argument('--fast', action='store_true')
++args = ap.parse_args()
++
++CKPT = '/home/ttuser/protenix_ckpt/protenix-v2.pt'
++ife = pickle.load(open('/home/ttuser/protenix_ife_gold.pkl', 'rb'))
++tg = pickle.load(open('/home/ttuser/protenix_trunkin_gold.pkl', 'rb'))
++d = pickle.load(open('/home/ttuser/protenix_ref_out.pkl', 'rb'))
++tfeat = d['intermediates']['template_embedder']['in'][0]
++traj = pickle.load(open('/home/ttuser/protenix_traj.pkl', 'rb'))
++F = ife['feat']
++feats = {
++    'ref_pos': F['ref_pos'], 'ref_charge': F['ref_charge'], 'ref_mask': F['ref_mask'],
++    'ref_element': F['ref_element'], 'ref_atom_name_chars': F['ref_atom_name_chars'],
++    'd_lm': F['d_lm'], 'v_lm': F['v_lm'], 'atom_to_token_idx': F['atom_to_token_idx'],
++    'restype': F['restype'], 'profile': F['profile'], 'deletion_mean': F['deletion_mean'],
++    'mask_trunked': ife['mask_trunked'],
++    'relp': tg['relp'], 'token_bonds': tg['token_bonds'],
++    'template_aatype': tfeat['template_aatype'], 'template_distogram': tfeat['template_distogram'],
++    'template_pseudo_beta_mask': tfeat['template_pseudo_beta_mask'],
++    'template_unit_vector': tfeat['template_unit_vector'],
++    'template_backbone_frame_mask': tfeat['template_backbone_frame_mask'],
++    'msa': tfeat['msa'], 'has_deletion': tfeat['has_deletion'], 'deletion_value': tfeat['deletion_value'],
++    'asym_id': tfeat['asym_id'],
++}
++dev = get_device()
++ckc = ttnn.init_device_compute_kernel_config(dev.arch(), math_fidelity=ttnn.MathFidelity.HiFi4,
++                                             fp32_dest_acc_en=True, packer_l1_acc=True)
++model = Protenix.load_from_checkpoint(CKPT, compute_kernel_config=ckc, device=dev)
++model._fast = bool(args.fast)
++print(f"N_atoms={F['ref_pos'].shape[0]} NT={F['restype'].shape[0]} fast={args.fast} "
++      f"n_step={args.n_step} n_sample={args.n_sample}", flush=True)
++t0 = time.time()
++coords = model.fold(feats, n_step=args.n_step, n_sample=args.n_sample, seed=0)
++print(f"fold total {time.time()-t0:.3f}s  coords={tuple(coords.shape)} finite={bool(torch.isfinite(coords).all())}", flush=True)
++
++def kabsch(P, Q):
++    Pc = P - P.mean(0); Qc = Q - Q.mean(0); H = Pc.t() @ Qc
++    U, _, Vt = torch.linalg.svd(H)
++    Dm = torch.diag(torch.tensor([1., 1., torch.sign(torch.det(Vt.t() @ U.t()))]))
++    R = Vt.t() @ Dm @ U.t()
++    return float(((Pc @ R.t()) - Qc).pow(2).sum(-1).mean().sqrt())
++
++x0 = coords[0]
++print('Rg %.3f A' % float((x0 - x0.mean(0)).pow(2).sum(-1).mean().sqrt()), flush=True)
++for k in range(1, coords.shape[0]):
++    print('seed0-vs-seed%d Kabsch RMSD: %.4f A' % (k, kabsch(x0, coords[k])), flush=True)
++ref = traj.get('final_coords')
++if ref is not None:
++    rf = ref.float().reshape(-1, 3)[:x0.shape[0]]
++    print('seed0 vs reference Kabsch RMSD: %.4f A' % kabsch(x0, rf), flush=True)
++print('HARNESS_DONE', flush=True)
+diff --git a/.perf-runs/protenix-batch/inputs/inputs/rand_len_0256.yaml b/.perf-runs/protenix-batch/inputs/inputs/rand_len_0256.yaml
+new file mode 100644
+index 0000000000..f05b9c391c
+--- /dev/null
++++ b/.perf-runs/protenix-batch/inputs/inputs/rand_len_0256.yaml
+@@ -0,0 +1,6 @@
++version: 1
++sequences:
++  - protein:
++      id: A
++      sequence: HEQCMICMAKCCKTDFPWNIYAVGDDHTENPIMCCFQKHNLGSQFNMVRGYDKSELAQSNVHQNNLTWLQCRPYTGIQALEDCSDFIVCKMVTVGKIVYEEFFLNGAKINYQMPQCVSVSIIDPCCFEHCAEDIAVPDGHIDTYLLCDHGTEAYMDMAMYVQGIESMSHFTYVTTRFMIAAGGQYKWYYIFFEFPWTLQSCQWSSLESHTYIKWREDEWTDTYQIMDAYPMWKVTFGGFNGKDWILNWKWMMMAKE
++      msa: /home/ttuser/tt-bio-dev/.perf-runs/protenix-batch/inputs/msa/rand_len_0256.a3m
+diff --git a/.perf-runs/protenix-batch/inputs/inputs/rand_len_0512.yaml b/.perf-runs/protenix-batch/inputs/inputs/rand_len_0512.yaml
+new file mode 100644
+index 0000000000..dd76da744c
+--- /dev/null
++++ b/.perf-runs/protenix-batch/inputs/inputs/rand_len_0512.yaml
+@@ -0,0 +1,6 @@
++version: 1
++sequences:
++  - protein:
++      id: A
++      sequence: PKFIIQCVFRTMNMVCCRSKCPDFQVFISLLFQDMPNEYELQQLEGYNHDFICWDKRWDVSKIDAALKKEQWQSRLPRSGGYTPPWTWWMQRNCELLKQTWHCETDWEATHLVVMPQEDMEGNDDNLQVMCLSFNRTIFALCKCRDKKLKFKGKQRYEGCPHFGFCWIQCMEGWHCMPNYAYKSMFPSGQRYGSAWDATVACIMTNKWAAYCTQTWLVFTRNYTWPPVFASEDSEVYYDYNETQSHLEYKVSNLAQTKVGSKNLVSRDTMDQFDWVYPLMRDFWCEPSDDTQPLLMVAWQLHVWMLCDPCIAEAVYMHAFNQSFKPPYDDGNVMCPLRFSVYQLLRPTPHAAWTITYHTPATPHSSSSAHQMIYSPKIPQMPLYRTEWLTSRCVHKDKWTGKCHCWDKQFDTIENMSHVQGNQMGGMACFFELRKKHRCGYCYNTGDDDFLSSGVETIADIEFKYTVAEWLEECRYKWDWRFEIPTQGRRMQKSGIAHWVGGWEYTGRPRYM
++      msa: /home/ttuser/tt-bio-dev/.perf-runs/protenix-batch/inputs/msa/rand_len_0512.a3m
+diff --git a/.perf-runs/protenix-batch/inputs/manifest.tsv b/.perf-runs/protenix-batch/inputs/manifest.tsv
+new file mode 100644
+index 0000000000..6f01ceb268
+--- /dev/null
++++ b/.perf-runs/protenix-batch/inputs/manifest.tsv
+@@ -0,0 +1,3 @@
++name	length	msa_path	yaml_path
++rand_len_0256	256	.perf-runs/protenix-batch/inputs/msa/rand_len_0256.a3m	.perf-runs/protenix-batch/inputs/inputs/rand_len_0256.yaml
++rand_len_0512	512	.perf-runs/protenix-batch/inputs/msa/rand_len_0512.a3m	.perf-runs/protenix-batch/inputs/inputs/rand_len_0512.yaml
+diff --git a/.perf-runs/protenix-batch/micro_apb.py b/.perf-runs/protenix-batch/micro_apb.py
+new file mode 100644
+index 0000000000..647a85620b
+--- /dev/null
++++ b/.perf-runs/protenix-batch/micro_apb.py
+@@ -0,0 +1,44 @@
++import os, sys, pickle
++os.environ.setdefault('TT_LOGGER_LEVEL', 'FATAL')
++os.environ['TT_PROTENIX_DBG_COND'] = '1'; os.environ['TT_PROTENIX_NOBATCH'] = '1'
++sys.path.insert(0, '/home/ttuser/tt-bio-dev')
++import torch, ttnn
++from tt_bio.tenstorrent import get_device
++from tt_bio.protenix import Protenix
++ife = pickle.load(open('/home/ttuser/protenix_ife_gold.pkl', 'rb'))
++tg = pickle.load(open('/home/ttuser/protenix_trunkin_gold.pkl', 'rb'))
++d = pickle.load(open('/home/ttuser/protenix_ref_out.pkl', 'rb')); tfeat = d['intermediates']['template_embedder']['in'][0]
++F = ife['feat']
++feats = {'ref_pos': F['ref_pos'], 'ref_charge': F['ref_charge'], 'ref_mask': F['ref_mask'], 'ref_element': F['ref_element'],
++    'ref_atom_name_chars': F['ref_atom_name_chars'], 'd_lm': F['d_lm'], 'v_lm': F['v_lm'], 'atom_to_token_idx': F['atom_to_token_idx'],
++    'restype': F['restype'], 'profile': F['profile'], 'deletion_mean': F['deletion_mean'], 'mask_trunked': ife['mask_trunked'],
++    'relp': tg['relp'], 'token_bonds': tg['token_bonds'], 'template_aatype': tfeat['template_aatype'],
++    'template_distogram': tfeat['template_distogram'], 'template_pseudo_beta_mask': tfeat['template_pseudo_beta_mask'],
++    'template_unit_vector': tfeat['template_unit_vector'], 'template_backbone_frame_mask': tfeat['template_backbone_frame_mask'],
++    'msa': tfeat['msa'], 'has_deletion': tfeat['has_deletion'], 'deletion_value': tfeat['deletion_value'], 'asym_id': tfeat['asym_id']}
++dev = get_device()
++ckc = ttnn.init_device_compute_kernel_config(dev.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, packer_l1_acc=True)
++model = Protenix.load_from_checkpoint('/home/ttuser/protenix_ckpt/protenix-v2.pt', compute_kernel_config=ckc, device=dev)
++model._fast = True
++_ = model.fold(feats, n_step=3, n_sample=1, seed=0)
++cond = model._dbg_cond
++NT = cond['s_inputs'].shape[0]
++biases = cond['dit_block_biases']
++adaln_a, apb, ctb_adaln, A, Cc = model.diffusion._dit[1]   # block 1 (the one that diverged)
++bias = biases[1]
++def to_t(x): return ttnn.to_torch(x).float()
++def pcc(a, b):
++    a=a.reshape(-1).double(); b=b.reshape(-1).double()
++    return float(((a-a.mean())*(b-b.mean())).sum()/((a-a.mean()).pow(2).sum().sqrt()*(b-b.mean()).pow(2).sum().sqrt()+1e-12))
++torch.manual_seed(0)
++a1 = ttnn.from_torch(torch.randn(1, NT, 768), layout=ttnn.TILE_LAYOUT, device=dev, dtype=ttnn.bfloat16)
++b1 = adaln_a(a1, cond['ss_base'] if False else ttnn.from_torch(torch.randn(1,NT,cond['s_trunk'].shape[-1] if False else 384), layout=ttnn.TILE_LAYOUT, device=dev, dtype=ttnn.bfloat16))
++# simpler: skip adaln; feed random b directly to apb at B=1 and B=3-identical
++torch.manual_seed(1)
++bb1 = ttnn.from_torch(torch.randn(1, NT, 768), layout=ttnn.TILE_LAYOUT, device=dev, dtype=ttnn.bfloat16)
++o1 = to_t(apb(bb1, bias, bias_precomputed=True))               # (1,NT,768)
++bb3 = ttnn.from_torch(to_t(bb1).repeat(3,1,1).contiguous(), layout=ttnn.TILE_LAYOUT, device=dev, dtype=ttnn.bfloat16)
++o3 = to_t(apb(bb3, bias, bias_precomputed=True))               # (3,NT,768)
++print("apb hd=48: o3[0]-vs-o1 maxdiff", float((o3[0]-o1[0]).abs().max()), "PCC", round(pcc(o3[0],o1[0]),6))
++print("apb hd=48: o3[0]-vs-o3[1] maxdiff", float((o3[0]-o3[1]).abs().max()))
++print("MICRO_APB_DONE")
+diff --git a/.perf-runs/protenix-batch/micro_sdpa.py b/.perf-runs/protenix-batch/micro_sdpa.py
+new file mode 100644
+index 0000000000..9f40464cc0
+--- /dev/null
++++ b/.perf-runs/protenix-batch/micro_sdpa.py
+@@ -0,0 +1,24 @@
++import os, sys
++os.environ.setdefault('TT_LOGGER_LEVEL', 'FATAL')
++sys.path.insert(0, '/home/ttuser/tt-bio-dev')
++import torch, ttnn
++from tt_bio.tenstorrent import get_device
++dev = get_device()
++B, H, NT, hd = 3, 4, 64, 32
++torch.manual_seed(0)
++# identical qkv across batch
++one = torch.randn(1, NT, 3 * H * hd)
++s = one.repeat(B, 1, 1).contiguous()
++st = ttnn.from_torch(s, layout=ttnn.TILE_LAYOUT, device=dev, dtype=ttnn.bfloat16)
++qkv = ttnn.unsqueeze(st, 1)   # (B,1,NT,3Hhd)
++q, k, v = ttnn.experimental.nlp_create_qkv_heads(qkv, num_heads=H, num_kv_heads=H, transpose_k_heads=False)
++print("q shape", tuple(q.shape))
++qh = ttnn.to_torch(q).float()   # expect (B,H,NT,hd) identical across B
++print("q s0-vs-s1 maxdiff", float((qh[0] - qh[1]).abs().max()))
++# SDPA with a (1,H,NT,NT) mask, identical inputs -> outputs must be identical across B
++mask = ttnn.from_torch(torch.randn(1, H, NT, NT), layout=ttnn.TILE_LAYOUT, device=dev, dtype=ttnn.bfloat16)
++o = ttnn.transformer.scaled_dot_product_attention(q, k, v, attn_mask=mask, is_causal=False, scale=hd ** -0.5)
++oh = ttnn.to_torch(o).float()
++print("o shape", tuple(oh.shape))
++print("o s0-vs-s1 maxdiff", float((oh[0] - oh[1]).abs().max()))
++print("MICRO_DONE")
+diff --git a/.perf-runs/protenix-batch/parity_denoise.py b/.perf-runs/protenix-batch/parity_denoise.py
+new file mode 100644
+index 0000000000..7798ee4f22
+--- /dev/null
++++ b/.perf-runs/protenix-batch/parity_denoise.py
+@@ -0,0 +1,63 @@
++import os, sys, pickle
++os.environ.setdefault('TT_LOGGER_LEVEL', 'FATAL')
++os.environ['TT_PROTENIX_DBG_COND'] = '1'
++sys.path.insert(0, '/home/ttuser/tt-bio-dev')
++import torch, ttnn
++from tt_bio.tenstorrent import get_device
++from tt_bio.protenix import Protenix
++
++CKPT = '/home/ttuser/protenix_ckpt/protenix-v2.pt'
++ife = pickle.load(open('/home/ttuser/protenix_ife_gold.pkl', 'rb'))
++tg = pickle.load(open('/home/ttuser/protenix_trunkin_gold.pkl', 'rb'))
++d = pickle.load(open('/home/ttuser/protenix_ref_out.pkl', 'rb'))
++tfeat = d['intermediates']['template_embedder']['in'][0]
++F = ife['feat']
++feats = {
++    'ref_pos': F['ref_pos'], 'ref_charge': F['ref_charge'], 'ref_mask': F['ref_mask'],
++    'ref_element': F['ref_element'], 'ref_atom_name_chars': F['ref_atom_name_chars'],
++    'd_lm': F['d_lm'], 'v_lm': F['v_lm'], 'atom_to_token_idx': F['atom_to_token_idx'],
++    'restype': F['restype'], 'profile': F['profile'], 'deletion_mean': F['deletion_mean'],
++    'mask_trunked': ife['mask_trunked'], 'relp': tg['relp'], 'token_bonds': tg['token_bonds'],
++    'template_aatype': tfeat['template_aatype'], 'template_distogram': tfeat['template_distogram'],
++    'template_pseudo_beta_mask': tfeat['template_pseudo_beta_mask'],
++    'template_unit_vector': tfeat['template_unit_vector'],
++    'template_backbone_frame_mask': tfeat['template_backbone_frame_mask'],
++    'msa': tfeat['msa'], 'has_deletion': tfeat['has_deletion'], 'deletion_value': tfeat['deletion_value'],
++    'asym_id': tfeat['asym_id'],
++}
++FAST = '--fast' in sys.argv
++dev = get_device()
++ckc = ttnn.init_device_compute_kernel_config(dev.arch(), math_fidelity=ttnn.MathFidelity.HiFi4,
++                                             fp32_dest_acc_en=True, packer_l1_acc=True)
++model = Protenix.load_from_checkpoint(CKPT, compute_kernel_config=ckc, device=dev)
++model._fast = FAST
++# populate cond via one short serial fold
++os.environ['TT_PROTENIX_NOBATCH'] = '1'
++_ = model.fold(feats, n_step=3, n_sample=1, seed=0)
++cond = model._dbg_cond
++N = cond['c_l'].shape[0]
++print(f"cond ready N={N} fast={FAST}", flush=True)
++
++def pcc(a, b):
++    a = a.reshape(-1).double(); b = b.reshape(-1).double()
++    return float(((a - a.mean()) * (b - b.mean())).sum() / (((a - a.mean()).pow(2).sum().sqrt()) * ((b - b.mean()).pow(2).sum().sqrt()) + 1e-12))
++
++torch.manual_seed(0)
++for t_hat_v in [8.0]:
++    th = torch.tensor([t_hat_v], dtype=torch.float32)
++    x1 = torch.randn(1, N, 3)
++    dn_s = model.diffusion.denoise(x1, th, cond).float()          # (1,N,3)
++    dn_s2 = model.diffusion.denoise(x1, th, cond).float()         # determinism floor
++    print(f"[serial x2] maxdiff={float((dn_s-dn_s2).abs().max()):.3e} PCC={pcc(dn_s, dn_s2):.6f}", flush=True)
++    # B=1 batched vs serial
++    dn_b1 = model.diffusion.denoise_batched(x1.contiguous(), th, cond, 1).float()
++    print(f"[B=1] maxdiff={float((dn_b1[0]-dn_s[0]).abs().max()):.3e} PCC={pcc(dn_b1[0], dn_s[0]):.6f}", flush=True)
++    # B=3 all-identical: samples must equal each other AND serial
++    B = 3
++    xB = x1.repeat(B, 1, 1).contiguous()
++    dn_b = model.diffusion.denoise_batched(xB, th, cond, B).float()  # (B,N,3)
++    for k in range(B):
++        print(f"[B=3] s{k} vs serial: maxdiff={float((dn_b[k]-dn_s[0]).abs().max()):.3e} PCC={pcc(dn_b[k], dn_s[0]):.6f}", flush=True)
++    print(f"[B=3] s0 vs s1: maxdiff={float((dn_b[0]-dn_b[1]).abs().max()):.3e}", flush=True)
++    print(f"[B=3] s0 vs s2: maxdiff={float((dn_b[0]-dn_b[2]).abs().max()):.3e}", flush=True)
++print('PARITY_DONE', flush=True)
+diff --git a/tests/ca_rmsd.py b/tests/ca_rmsd.py
+new file mode 100644
+index 0000000000..f64c1c6a10
+--- /dev/null
++++ b/tests/ca_rmsd.py
+@@ -0,0 +1,56 @@
++#!/usr/bin/env python3
++"""Seed-paired Ca-RMSD between two predicted CIFs (or pred vs ground truth).
++
++Superposes on matched CA atoms (by chain+seqid) and reports RMSD in Angstrom.
++Used to compare the resident-trunk branch against main on a confident target:
++per-op PCC can hide a fold regression, so we fold a known structure with the
++same seed on both and compare the seed-paired CA-RMSD (eager noise sets the bar).
++"""
++from __future__ import annotations
++
++import argparse
++import sys
++
++import gemmi
++
++
++def ca_atoms(path: str) -> dict:
++    st = gemmi.read_structure(path)
++    st.remove_alternative_conformations()
++    out = {}
++    model = st[0]
++    for chain in model:
++        for res in chain:
++            ca = res.find_atom("CA", "*")
++            if ca is not None:
++                out[(chain.name, res.seqid.num)] = ca.pos
++    return out
++
++
++def main() -> None:
++    ap = argparse.ArgumentParser()
++    ap.add_argument("a")
++    ap.add_argument("b")
++    args = ap.parse_args()
++    a = ca_atoms(args.a)
++    b = ca_atoms(args.b)
++    keys = sorted(set(a) & set(b))
++    if not keys:
++        # fall back to positional matching within chain order
++        av = list(a.values())
++        bv = list(b.values())
++        n = min(len(av), len(bv))
++        pa = [av[i] for i in range(n)]
++        pb = [bv[i] for i in range(n)]
++    else:
++        pa = [a[k] for k in keys]
++        pb = [b[k] for k in keys]
++    if not pa:
++        print("NO_MATCH")
++        sys.exit(1)
++    sup = gemmi.superpose_positions(pa, pb)
++    print(f"n_ca={len(pa)} rmsd={sup.rmsd:.4f}")
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/tests/generate_synthetic_template.py b/tests/generate_synthetic_template.py
+new file mode 100644
+index 0000000000..14b5a2953e
+--- /dev/null
++++ b/tests/generate_synthetic_template.py
+@@ -0,0 +1,117 @@
++#!/usr/bin/env python3
++"""Generate a synthetic template mmCIF (+ a yaml referencing it) for OOM testing.
++
++The template chain A reproduces the query sequence so the parser's
++query<->template alignment is full-length, and lays the residues out as a
++plausible (non-physical) extended chain with N/CA/C/CB atoms. Coordinates need
++not be physical -- this exists only to exercise the device-resident template
++injection path at large L without OOM.
++"""
++from __future__ import annotations
++
++import argparse
++from pathlib import Path
++
++import gemmi
++
++# minimal 1-letter -> 3-letter; query sequences use the 20 canonical AAs.
++AA3 = {
++    "A": "ALA", "C": "CYS", "D": "ASP", "E": "GLU", "F": "PHE", "G": "GLY",
++    "H": "HIS", "I": "ILE", "K": "LYS", "L": "LEU", "M": "MET", "N": "ASN",
++    "P": "PRO", "Q": "GLN", "R": "ARG", "S": "SER", "T": "THR", "V": "VAL",
++    "W": "TRP", "Y": "TYR",
++}
++
++
++def read_query(yaml_path: Path) -> str:
++    """Pull the single-chain protein sequence out of a sweep yaml (no yaml dep)."""
++    for line in yaml_path.read_text().splitlines():
++        line = line.strip()
++        if line.startswith("sequence:"):
++            return line.split("sequence:", 1)[1].strip()
++    raise ValueError(f"no sequence in {yaml_path}")
++
++
++def build_template(seq: str) -> gemmi.Structure:
++    st = gemmi.Structure()
++    st.name = "synth_tmpl"
++    st.spacegroup_hm = "P 1"
++    st.cell = gemmi.UnitCell(1, 1, 1, 90, 90, 90)
++    model = gemmi.Model("1")
++    chain = gemmi.Chain("A")
++    for i, aa in enumerate(seq):
++        res = gemmi.Residue()
++        res.name = AA3.get(aa.upper(), "GLY")
++        res.seqid = gemmi.SeqId(i + 1, " ")
++        x = 3.8 * i  # CA spacing along x; extended chain
++        for name, dx, dy, dz in (
++            ("N", -0.5, 0.8, 0.0),
++            ("CA", 0.0, 0.0, 0.0),
++            ("C", 0.7, 0.9, 0.0),
++            ("CB", 0.0, -0.8, 1.2),
++        ):
++            if res.name == "GLY" and name == "CB":
++                continue
++            atom = gemmi.Atom()
++            atom.name = name
++            atom.element = gemmi.Element(name[0])
++            atom.pos = gemmi.Position(x + dx, dy, dz)
++            atom.occ = 1.0
++            atom.b_iso = 50.0
++            res.add_atom(atom)
++        chain.add_residue(res)
++    model.add_chain(chain)
++    st.add_model(model)
++    st.setup_entities()
++    # Populate each polymer entity's SEQRES (full_sequence) from its residues so
++    # the parser (which reads entity.full_sequence) sees the full-length sequence.
++    for entity in st.entities:
++        if entity.entity_type == gemmi.EntityType.Polymer:
++            names = [res.name for res in seq_to_residues(seq)]
++            entity.full_sequence = names
++    st.assign_label_seq_id()
++    return st
++
++
++def seq_to_residues(seq: str):
++    out = []
++    for aa in seq:
++        r = gemmi.Residue()
++        r.name = AA3.get(aa.upper(), "GLY")
++        out.append(r)
++    return out
++
++
++def main() -> None:
++    ap = argparse.ArgumentParser()
++    ap.add_argument("--in-yaml", type=Path, required=True, help="sweep yaml to read the query from")
++    ap.add_argument("--out-cif", type=Path, required=True)
++    ap.add_argument("--out-yaml", type=Path, required=True, help="yaml with template + msa")
++    args = ap.parse_args()
++
++    seq = read_query(args.in_yaml)
++    st = build_template(seq)
++    args.out_cif.parent.mkdir(parents=True, exist_ok=True)
++    st.make_mmcif_document().write_file(str(args.out_cif))
++
++    # msa line (if any) carried from the source yaml so it stays offline
++    msa_line = ""
++    for line in args.in_yaml.read_text().splitlines():
++        if line.strip().startswith("msa:"):
++            msa_line = "      " + line.strip() + "\n"
++    yaml = (
++        "version: 1\n"
++        "sequences:\n"
++        "  - protein:\n"
++        "      id: A\n"
++        f"      sequence: {seq}\n"
++        f"{msa_line}"
++        "templates:\n"
++        f"  - cif: {args.out_cif.resolve().as_posix()}\n"
++    )
++    args.out_yaml.write_text(yaml)
++    print(f"wrote {args.out_cif} ({len(seq)} res) and {args.out_yaml}")
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/tt_bio/protenix.py b/tt_bio/protenix.py
+index 118c1cb6c3..61bccc8db3 100644
+--- a/tt_bio/protenix.py
++++ b/tt_bio/protenix.py
+@@ -121,9 +121,19 @@ def __init__(self, n_blocks, state_dict, compute_kernel_config):
+         self._kv_widx = {}  # cached KV-window gather indices, keyed by NP
+ 
+     def _adaln(self, a, s, pre):
++        # Cache the AdaLN module per prefix: constructing it re-uploads its 4 weights
++        # (ttnn.from_torch) every call, which for the diffusion enc/decoder means thousands
++        # of redundant device writes per fold (2 AdaLN x 3 blocks x 200 steps). Building once
++        # and replaying is bit-identical and cuts that dispatch (and is a prerequisite for
++        # trace capture, which forbids writes). Keyed by prefix.
+         from .tenstorrent import AdaLN
+-        sub = {k[len(pre):]: v for k, v in self._w.items() if k.startswith(pre)}
+-        return AdaLN(False, remap_adaln(sub), self.compute_kernel_config)(a, s)
++        cache = self.__dict__.setdefault("_adaln_cache", {})
++        ada = cache.get(pre)
++        if ada is None:
++            sub = {k[len(pre):]: v for k, v in self._w.items() if k.startswith(pre)}
++            ada = AdaLN(False, remap_adaln(sub), self.compute_kernel_config)
++            cache[pre] = ada
++        return ada(a, s)
+ 
+     def _windows_q(self, x, N, NP):
+         H, dh = self.N_HEADS, self.HEAD_DIM
+@@ -518,6 +528,99 @@ def denoise(self, x_noisy, t_hat, cond):
+         sr = (t_hat / sd).reshape(-1, 1, 1)
+         return (1.0 / (1.0 + sr ** 2)) * x_noisy[:, :N] + (t_hat.reshape(-1, 1, 1) / torch.sqrt(1.0 + sr ** 2)) * r_update
+ 
++    # ---------------------------------------------------------------------------
++    # ttnn TRACE of the denoise device stream (opt-in TT_PROTENIX_TRACE).
++    # Protenix diffusion warm is per-step DISPATCH-bound (~400 op launches/step,
++    # L-independent): capturing the device stream once per fold and replaying it
++    # collapses the per-step host dispatch. The two per-step-varying host inputs
++    # (fourier(t_hat) and the scaled coords) are staged into fixed device buffers;
++    # the fold-fixed conditioning (cond) stays resident. device_dit path only.
++    # ---------------------------------------------------------------------------
++    def _denoise_device(self, r_noisy_dev, fou_dev, cond):
++        """Pure on-device denoise (device_dit path). r_noisy_dev (N,3) and fou_dev
++        (1,fdim) are device tensors (the per-step host inputs, already uploaded);
++        returns r_update (1,N,3) on device (pre EDM-precond). No host round-trips."""
++        s_inputs = cond["s_inputs"]
++        N = cond["c_l"].shape[0]; NT = s_inputs.shape[0]
++        E = "atom_attention_encoder."
++        mt = cond["mask_trunked"].float()
++        c_la = cond["c_la_dev"]; p = cond["p_dev"]
++        nn_ = self._lin(self._ln(fou_dev, "diffusion_conditioning.layernorm_n.weight"),
++                        "diffusion_conditioning.linear_no_bias_n.weight")
++        ss = ttnn.reshape(ttnn.add(cond["ss_base"], nn_), (1, NT, cond["ss_base"].shape[-1]))
++        for t in self._cond_transitions:
++            ss = ttnn.add(ss, ttnn.reshape(t(ss), tuple(ss.shape)))
++        s_single = ss
++        q_l = ttnn.add(c_la, self._lin(r_noisy_dev, E + "linear_no_bias_r.weight"))
++        q_out = self.atxE(ttnn.reshape(q_l, (1, N, 128)), ttnn.reshape(c_la, (1, N, 128)), p, mt,
++                          bias_cache=cond.get("atxE_bias"))
++        a_tok = ttnn.matmul(cond["Smean_dev"], ttnn.reshape(ttnn.relu(self._lin(q_out, E + "linear_no_bias_q.weight")), (N, 768)),
++                            compute_kernel_config=self.compute_kernel_config, core_grid=CORE_GRID_MAIN)
++        q_skip = q_out; c_skip = c_la; p_skip = p
++        a_tok = ttnn.add(a_tok, ttnn.reshape(
++            self._lin(self._ln(ttnn.reshape(s_single, (NT, s_single.shape[-1])), "layernorm_s.weight"),
++                      "linear_no_bias_s.weight"), (NT, 768)))
++        if "dit_block_biases" not in cond:
++            cond["dit_block_biases"] = self._dit_block_biases(cond["dit_z"])
++        a_t = self._token_dit_device(ttnn.reshape(a_tok, (1, NT, 768)), s_single, cond["dit_block_biases"], NT)
++        a_t = self._ln(a_t, "layernorm_a.weight")
++        DE = "atom_attention_decoder."
++        q = ttnn.add(ttnn.matmul(cond["S_dev"], self._lin(ttnn.reshape(a_t, (NT, 768)), DE + "linear_no_bias_a.weight"),
++                                 compute_kernel_config=self.compute_kernel_config, core_grid=CORE_GRID_MAIN),
++                     ttnn.reshape(q_skip, (N, 128)))
++        qd = self.atxD(ttnn.reshape(q, (1, N, 128)), ttnn.reshape(c_skip, (1, N, 128)), p_skip, mt,
++                       bias_cache=cond.get("atxD_bias"))
++        qn = self._ln(qd, DE + "layernorm_q.weight")
++        return ttnn.reshape(self._lin(qn, DE + "linear_no_bias_out.weight"), (1, N, 3))
++
++    def _host_tt(self, x):
++        """Host-resident ttnn tensor (no device) for copy_host_to_device_tensor staging."""
++        return ttnn.from_torch(x.float(), layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
++
++    def _release_trace(self):
++        tr = getattr(self, "_trace", None)
++        if tr is not None:
++            try:
++                ttnn.release_trace(self.dev, tr["tid"])
++            except Exception:
++                pass
++            self._trace = None
++
++    def _capture_trace(self, fou, r_noisy, cond, N):
++        fou_dev = self._up(fou); r_dev = self._up(r_noisy)   # persistent input buffers
++        _ = self._denoise_device(r_dev, fou_dev, cond)       # warmup / compile
++        _ = self._denoise_device(r_dev, fou_dev, cond)       # 2nd warmup: populate any lazy caches
++        ttnn.synchronize_device(self.dev)
++        tid = ttnn.begin_trace_capture(self.dev, cq_id=0)
++        out = self._denoise_device(r_dev, fou_dev, cond)     # record
++        ttnn.end_trace_capture(self.dev, tid, cq_id=0)
++        self._trace = {"N": N, "tid": tid, "in_fou": fou_dev, "in_r": r_dev, "out": out}
++        return self._trace
++
++    def denoise_traced(self, x_noisy, t_hat, cond):
++        """Traced equivalent of denoise (device_dit path). Falls back to denoise when the
++        device_dit precomputed bias path is unavailable."""
++        import torch
++        self._atom_cond(cond)
++        if not (self.device_dit and cond.get("dit_z") is not None):
++            return self.denoise(x_noisy, t_hat, cond)
++        sd = self.SIGMA_DATA; N = cond["c_l"].shape[0]
++        wf = self._w["diffusion_conditioning.fourier_embedding.w"]; bf = self._w["diffusion_conditioning.fourier_embedding.b"]
++        tp = torch.log(t_hat / sd) / 4
++        fou = torch.cos(2 * torch.pi * (tp.unsqueeze(-1) * wf + bf)).contiguous()          # (1,fdim)
++        r_noisy = (x_noisy / torch.sqrt(torch.tensor(sd ** 2) + t_hat ** 2).reshape(-1, 1, 1))[0].contiguous()  # (N,3)
++        tr = getattr(self, "_trace", None)
++        if tr is None or tr["N"] != N:
++            if tr is not None:
++                self._release_trace()
++            tr = self._capture_trace(fou, r_noisy, cond, N)
++        ttnn.copy_host_to_device_tensor(self._host_tt(fou), tr["in_fou"])
++        ttnn.copy_host_to_device_tensor(self._host_tt(r_noisy), tr["in_r"])
++        ttnn.execute_trace(self.dev, tr["tid"], cq_id=0, blocking=False)
++        r_update = torch.Tensor(ttnn.to_torch(tr["out"])).float().reshape(1, N, 3)[:, :N]
++        sr = (t_hat / sd).reshape(-1, 1, 1)
++        return (1.0 / (1.0 + sr ** 2)) * x_noisy[:, :N] + (t_hat.reshape(-1, 1, 1) / torch.sqrt(1.0 + sr ** 2)) * r_update
++
+     # --- windowing helpers (atom encoder p augmentation) ---
+     def _winq(self, x, N, NP):
+         return _window_q(x, N, NP, self.NQ)
+@@ -929,9 +1032,17 @@ def fold(self, feats, *, n_step=200, n_sample=1, seed=None, progress_fn=None,
+         else:
+             cond["dit_biases"] = self.diffusion._dit_pair_biases(pair_z)
+         coords = []
++        import os as _os, time as _time
++        if _os.environ.get("TT_PROTENIX_DBG_COND"):
++            self._dbg_cond = cond
++        _prof = _os.environ.get("TT_PROTENIX_PROFILE")
+         for k in range(n_sample):
+             sd_seed = None if seed is None else seed + k
++            if _prof:
++                import ttnn as _tn; _tn.synchronize_device(self.diffusion.dev); _ts = _time.time()
+             coords.append(edm_sample(self.diffusion, cond, N, n_step=n_step, seed=sd_seed)[0])
++            if _prof:
++                import ttnn as _tn; _tn.synchronize_device(self.diffusion.dev); print(f"[PROF] edm_sample[{k}] {_time.time()-_ts:.3f}s", flush=True)
+         coords = torch.stack(coords, 0)
+         if return_confidence:
+             # Per-sample confidence so callers can rank samples (best-of-N) and
+@@ -1085,8 +1196,9 @@ def edm_sample(diffusion_module, cond, n_atoms, *, n_step=200, gamma0=0.8, gamma
+     then a final sigma=0; gammas[i] = gamma0 if sigma[i] > gamma_min else 0; per step
+     (sigma_tm=sigmas[k], sigma_t=sigmas[k+1], gamma=gammas[k+1]); t_hat=sigma_tm*(1+gamma).
+     cond is the fixed trunk conditioning dict passed to DiffusionModule.denoise."""
+-    import torch
++    import torch, os
+     from .boltz2 import compute_random_augmentation
++    _denoise = diffusion_module.denoise_traced if os.environ.get("TT_PROTENIX_TRACE") else diffusion_module.denoise
+     if seed is not None:
+         torch.manual_seed(seed)
+     inv_rho = 1.0 / rho
+@@ -1105,7 +1217,7 @@ def edm_sample(diffusion_module, cond, n_atoms, *, n_step=200, gamma0=0.8, gamma
+         noise_var = noise_scale ** 2 * (t_hat ** 2 - sigma_tm ** 2)
+         eps = (noise_var ** 0.5) * torch.randn(shape) if noise_var > 0 else torch.zeros(shape)
+         x_noisy = x + eps
+-        denoised = diffusion_module.denoise(x_noisy, torch.tensor([t_hat], dtype=torch.float32), cond)
++        denoised = _denoise(x_noisy, torch.tensor([t_hat], dtype=torch.float32), cond)
+         d = (x_noisy - denoised) / t_hat
+         x = x_noisy + step_scale * (sigma_t - t_hat) * d
+     return x
+diff --git a/tt_bio/tenstorrent.py b/tt_bio/tenstorrent.py
+index 223c22f75f..1a8ffaf3dc 100644
+--- a/tt_bio/tenstorrent.py
++++ b/tt_bio/tenstorrent.py
+@@ -344,6 +344,13 @@ def get_device():
+             {"dispatch_core_config": ttnn.DispatchCoreConfig(ttnn.DispatchCoreType.ETH)}
+             if eth_dispatch else {}
+         )
++        # Opt-in ttnn trace region for the Protenix denoise trace (dispatch-bound diffusion).
++        # TT_PROTENIX_TRACE=1 reserves a default 1 GiB region; TT_PROTENIX_TRACE_REGION overrides
++        # the size. Default 0 -> binary layout unchanged when the feature is off.
++        _trs = int(os.environ.get("TT_PROTENIX_TRACE_REGION",
++                                  "1073741824" if os.environ.get("TT_PROTENIX_TRACE") else "0"))
++        if _trs > 0:
++            kwargs["trace_region_size"] = _trs
+         dev = _open_device_locked(device_id, kwargs)
+         _assert_local_dispatch(dev)   # raises (and closes) on a remote-only bring-up
+         _device = dev

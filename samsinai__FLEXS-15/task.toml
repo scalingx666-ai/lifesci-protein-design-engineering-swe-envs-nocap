@@ -1,0 +1,68 @@
+version = "1.0"
+
+[task]
+name = "default/samsinai__FLEXS-15"
+description = "Alex/stewy redesign"
+
+[metadata]
+difficulty = "large"
+category = "bugfix"
+keywords = [
+    "FLEXS",
+    "pr_diff",
+]
+
+[metadata.repo2env]
+pipeline = "pr_diff"
+pipeline_version = "0.3.0"
+repo = "samsinai/FLEXS"
+ref = "325de24f16e3925e27a6b5a87058c6e179e56823"
+reference = "https://github.com/samsinai/FLEXS/pull/15"
+source_access = "auto"
+built_at = "2026-11-16T03:16:48.786715+00:00"
+reward_kinds = [
+    "diff_similarity",
+]
+spec_version = "0.2.0"
+content_hash = "sha256:fac62eeb3945ccf38b4cb49311a2a35486931e03c4ba6251da24915eaafc4f72"
+
+[metadata.repo2env.pr_diff]
+pr_merged_at = "2020-09-21T03:02:52Z"
+diff_format = "unified"
+context_files = [
+    "examples/GPR BO.ipynb",
+    "examples/Tutorial.ipynb",
+    "flexs/baselines/explorers/__init__.py",
+    "flexs/baselines/explorers/bo.py",
+    "flexs/baselines/explorers/dqn.py",
+    "flexs/baselines/explorers/environments/PPO_environment.py",
+    "tests/test_explorers.py",
+]
+
+[metadata.repo2env.reward_calibration]
+baseline_reward = 0.0
+loc_changed = 301
+difficulty = "large"
+
+[metadata.repo2env.evaluation]
+schema_version = "1"
+status = "unverified"
+stage = "generation"
+reason_codes = [
+    "validation_not_run",
+]
+detail = "Generated task; validation has not been established."
+provenance = "unknown"
+evidence = []
+
+[metadata.repo2env.reproducibility]
+mode = "local_only"
+image_ref = "python:3.12-slim"
+image_tag = "python:3.12-slim"
+image_visibility = "private"
+
+[agent]
+timeout_sec = 1800.0
+
+[verifier]
+timeout_sec = 300.0

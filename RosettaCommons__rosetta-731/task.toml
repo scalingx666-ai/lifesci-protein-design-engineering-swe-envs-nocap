@@ -1,0 +1,70 @@
+version = "1.0"
+
+[task]
+name = "default/RosettaCommons__rosetta-731"
+description = "Fix off-by-one in 1-indexed loops in frag_picker + accounting (split 2/4 of #707)"
+
+[metadata]
+difficulty = "medium"
+category = "bugfix"
+keywords = [
+    "rosetta",
+    "pr_diff",
+]
+
+[metadata.repo2env]
+pipeline = "pr_diff"
+pipeline_version = "0.3.0"
+repo = "RosettaCommons/rosetta"
+ref = "8ebeca78061b79e9fbbc68db33a78b2fd0361428"
+reference = "https://github.com/RosettaCommons/rosetta/pull/731"
+source_access = "auto"
+built_at = "2026-11-15T22:34:27.613601+00:00"
+reward_kinds = [
+    "diff_similarity",
+]
+spec_version = "0.2.0"
+content_hash = "sha256:c9304f03a1ac27d14b4949d05a06e3c43657580afac6b7638a169fd112c113ef"
+
+[metadata.repo2env.pr_diff]
+pr_merged_at = "2026-07-10T20:36:05Z"
+diff_format = "unified"
+context_files = [
+    "source/src/protocols/canonical_sampling/mc_convergence_checks/HierarchicalLevel.cc",
+    "source/src/protocols/frag_picker/GrabAllCollector.hh",
+    "source/src/protocols/frag_picker/VallProvider.cc",
+    "source/src/protocols/frag_picker/quota/QuotaCollector.cc",
+    "source/src/protocols/frag_picker/scores/AtomBasedConstraintsScore.cc",
+    "source/src/protocols/jd3/JobGenealogist.cc",
+    "source/src/protocols/pose_metric_calculators/DecomposeAndReweightEnergiesCalculator.cc",
+    "source/src/protocols/pose_metric_calculators/SurfaceCalculator.cc",
+    "source/src/protocols/unfolded_state_energy_calculator/UnfoldedStateEnergyCalculatorMover.cc",
+]
+
+[metadata.repo2env.reward_calibration]
+baseline_reward = 0.0
+loc_changed = 28
+difficulty = "medium"
+
+[metadata.repo2env.evaluation]
+schema_version = "1"
+status = "unverified"
+stage = "generation"
+reason_codes = [
+    "validation_not_run",
+]
+detail = "Generated task; validation has not been established."
+provenance = "unknown"
+evidence = []
+
+[metadata.repo2env.reproducibility]
+mode = "local_only"
+image_ref = "python:3.12-slim"
+image_tag = "python:3.12-slim"
+image_visibility = "private"
+
+[agent]
+timeout_sec = 1800.0
+
+[verifier]
+timeout_sec = 300.0

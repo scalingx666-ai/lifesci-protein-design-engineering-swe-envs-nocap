@@ -1,0 +1,198 @@
+diff --git a/source/src/core/scoring/disulfides/CentroidDisulfideEnergyContainer.cc b/source/src/core/scoring/disulfides/CentroidDisulfideEnergyContainer.cc
+index ca093877226..5bddc843ee7 100644
+--- a/source/src/core/scoring/disulfides/CentroidDisulfideEnergyContainer.cc
++++ b/source/src/core/scoring/disulfides/CentroidDisulfideEnergyContainer.cc
+@@ -74,8 +74,6 @@ CentroidDisulfideNeighborIterator::CentroidDisulfideNeighborIterator(
+ 	disulfide_index_( CentroidDisulfideEnergyContainer::NO_DISULFIDE )
+ {}
+ 
+-CentroidDisulfideNeighborIterator::~CentroidDisulfideNeighborIterator() = default;
+-
+ /// @brief Assignment
+ ResidueNeighborIterator &
+ CentroidDisulfideNeighborIterator::operator = ( ResidueNeighborIterator const & rhs)
+@@ -219,8 +217,6 @@ CentroidDisulfideNeighborConstIterator::CentroidDisulfideNeighborConstIterator(
+ 	disulfide_index_( CentroidDisulfideEnergyContainer::NO_DISULFIDE )
+ {}
+ 
+-CentroidDisulfideNeighborConstIterator::~CentroidDisulfideNeighborConstIterator() = default;
+-
+ ResidueNeighborConstIterator &
+ CentroidDisulfideNeighborConstIterator::operator = ( ResidueNeighborConstIterator const & rhs )
+ {
+diff --git a/source/src/core/scoring/disulfides/CentroidDisulfideEnergyContainer.hh b/source/src/core/scoring/disulfides/CentroidDisulfideEnergyContainer.hh
+index fb938b30dc1..7c0f8742e28 100644
+--- a/source/src/core/scoring/disulfides/CentroidDisulfideEnergyContainer.hh
++++ b/source/src/core/scoring/disulfides/CentroidDisulfideEnergyContainer.hh
+@@ -60,7 +60,6 @@ namespace disulfides {
+ * could form a bond, not just the best one. Maybe even include non-cysteines!
+ */
+ class CentroidDisulfideNeighborIterator : public ResidueNeighborIterator {
+-	CentroidDisulfideNeighborIterator & operator = (CentroidDisulfideNeighborIterator const & );
+ public:
+ 
+ 	CentroidDisulfideNeighborIterator(
+@@ -73,7 +72,10 @@ public:
+ 		CentroidDisulfideEnergyContainer * owner
+ 	);
+ 
+-	~CentroidDisulfideNeighborIterator() override;
++	// Assignment must go through the polymorphic operator= below, which
++	// downcasts and copies all members; suppress the implicit derived-derived
++	// copy assignment that would bypass it.
++	CentroidDisulfideNeighborIterator & operator = (CentroidDisulfideNeighborIterator const & ) = delete;
+ 
+ 	ResidueNeighborIterator & operator = ( ResidueNeighborIterator const & ) override;
+ 	ResidueNeighborIterator const & operator ++ () override;
+@@ -113,7 +115,6 @@ public:
+ 
+ /// @brief Just a const version of CentroidDisulfideNeighborIterator
+ class CentroidDisulfideNeighborConstIterator : public ResidueNeighborConstIterator {
+-	CentroidDisulfideNeighborConstIterator & operator = (CentroidDisulfideNeighborConstIterator const & );
+ public:
+ 	CentroidDisulfideNeighborConstIterator(
+ 		CentroidDisulfideEnergyContainer const * owner,
+@@ -123,7 +124,10 @@ public:
+ 
+ 	CentroidDisulfideNeighborConstIterator( CentroidDisulfideEnergyContainer const * owner );
+ 
+-	~CentroidDisulfideNeighborConstIterator() override;
++	// Assignment must go through the polymorphic operator= below, which
++	// downcasts and copies all members; suppress the implicit derived-derived
++	// copy assignment that would bypass it.
++	CentroidDisulfideNeighborConstIterator & operator = (CentroidDisulfideNeighborConstIterator const & ) = delete;
+ 
+ 	ResidueNeighborConstIterator & operator = ( ResidueNeighborConstIterator const & ) override;
+ 	ResidueNeighborConstIterator const & operator ++ () override;
+diff --git a/source/src/core/scoring/disulfides/DisulfideMatchingEnergyContainer.cc b/source/src/core/scoring/disulfides/DisulfideMatchingEnergyContainer.cc
+index d4001439330..d9b7424cea1 100644
+--- a/source/src/core/scoring/disulfides/DisulfideMatchingEnergyContainer.cc
++++ b/source/src/core/scoring/disulfides/DisulfideMatchingEnergyContainer.cc
+@@ -71,8 +71,6 @@ DisulfideMatchingNeighborIterator::DisulfideMatchingNeighborIterator(
+ 	disulfide_index_( DisulfideMatchingEnergyContainer::NO_DISULFIDE )
+ {}
+ 
+-DisulfideMatchingNeighborIterator::~DisulfideMatchingNeighborIterator() = default;
+-
+ /// @brief Assignment
+ ResidueNeighborIterator &
+ DisulfideMatchingNeighborIterator::operator = ( ResidueNeighborIterator const & rhs)
+@@ -216,8 +214,6 @@ DisulfideMatchingNeighborConstIterator::DisulfideMatchingNeighborConstIterator(
+ 	disulfide_index_( DisulfideMatchingEnergyContainer::NO_DISULFIDE )
+ {}
+ 
+-DisulfideMatchingNeighborConstIterator::~DisulfideMatchingNeighborConstIterator() = default;
+-
+ ResidueNeighborConstIterator &
+ DisulfideMatchingNeighborConstIterator::operator = ( ResidueNeighborConstIterator const & rhs )
+ {
+diff --git a/source/src/core/scoring/disulfides/DisulfideMatchingEnergyContainer.hh b/source/src/core/scoring/disulfides/DisulfideMatchingEnergyContainer.hh
+index c62d000614c..36400c4f515 100644
+--- a/source/src/core/scoring/disulfides/DisulfideMatchingEnergyContainer.hh
++++ b/source/src/core/scoring/disulfides/DisulfideMatchingEnergyContainer.hh
+@@ -59,7 +59,6 @@ namespace disulfides {
+ */
+ class DisulfideMatchingNeighborIterator : public ResidueNeighborIterator
+ {
+-	DisulfideMatchingNeighborIterator & operator = (DisulfideMatchingNeighborIterator const & src );
+ public:
+ 
+ 	DisulfideMatchingNeighborIterator(
+@@ -72,7 +71,10 @@ public:
+ 		DisulfideMatchingEnergyContainer * owner
+ 	);
+ 
+-	~DisulfideMatchingNeighborIterator() override;
++	// Assignment must go through the polymorphic operator= below, which
++	// downcasts and copies all members; suppress the implicit derived-derived
++	// copy assignment that would bypass it.
++	DisulfideMatchingNeighborIterator & operator = (DisulfideMatchingNeighborIterator const & src ) = delete;
+ 
+ 	ResidueNeighborIterator & operator = ( ResidueNeighborIterator const & ) override;
+ 	ResidueNeighborIterator const & operator ++ () override;
+@@ -102,7 +104,6 @@ private:
+ 
+ /// @brief Just a const version of DisulfideMatchingNeighborIterator
+ class DisulfideMatchingNeighborConstIterator : public ResidueNeighborConstIterator {
+-	DisulfideMatchingNeighborConstIterator & operator = (DisulfideMatchingNeighborConstIterator const & src );
+ public:
+ 	DisulfideMatchingNeighborConstIterator(
+ 		DisulfideMatchingEnergyContainer const * owner,
+@@ -112,7 +113,10 @@ public:
+ 
+ 	DisulfideMatchingNeighborConstIterator( DisulfideMatchingEnergyContainer const * owner );
+ 
+-	~DisulfideMatchingNeighborConstIterator() override;
++	// Assignment must go through the polymorphic operator= below, which
++	// downcasts and copies all members; suppress the implicit derived-derived
++	// copy assignment that would bypass it.
++	DisulfideMatchingNeighborConstIterator & operator = (DisulfideMatchingNeighborConstIterator const & src ) = delete;
+ 
+ 	ResidueNeighborConstIterator & operator = ( ResidueNeighborConstIterator const & ) override;
+ 	ResidueNeighborConstIterator const & operator ++ () override;
+diff --git a/source/src/core/scoring/disulfides/FullatomDisulfideEnergyContainer.cc b/source/src/core/scoring/disulfides/FullatomDisulfideEnergyContainer.cc
+index e053456d392..7818fcb2650 100644
+--- a/source/src/core/scoring/disulfides/FullatomDisulfideEnergyContainer.cc
++++ b/source/src/core/scoring/disulfides/FullatomDisulfideEnergyContainer.cc
+@@ -69,8 +69,6 @@ DisulfResNeighbIterator::DisulfResNeighbIterator(
+ 	disulfide_index_( FullatomDisulfideEnergyContainer::NO_DISULFIDE )
+ {}
+ 
+-DisulfResNeighbIterator::~DisulfResNeighbIterator() = default;
+-
+ ResidueNeighborIterator &
+ DisulfResNeighbIterator::operator = ( ResidueNeighborIterator const & rhs)
+ {
+@@ -208,8 +206,6 @@ DisulfResNeighbConstIterator::DisulfResNeighbConstIterator(
+ 	disulfide_index_( FullatomDisulfideEnergyContainer::NO_DISULFIDE )
+ {}
+ 
+-DisulfResNeighbConstIterator::~DisulfResNeighbConstIterator() = default;
+-
+ ResidueNeighborConstIterator &
+ DisulfResNeighbConstIterator::operator = ( ResidueNeighborConstIterator const & rhs )
+ {
+diff --git a/source/src/core/scoring/disulfides/FullatomDisulfideEnergyContainer.hh b/source/src/core/scoring/disulfides/FullatomDisulfideEnergyContainer.hh
+index 3d4832dfce6..afb99515b6a 100644
+--- a/source/src/core/scoring/disulfides/FullatomDisulfideEnergyContainer.hh
++++ b/source/src/core/scoring/disulfides/FullatomDisulfideEnergyContainer.hh
+@@ -44,7 +44,6 @@ namespace scoring {
+ namespace disulfides {
+ 
+ class DisulfResNeighbIterator : public ResidueNeighborIterator {
+-	DisulfResNeighbIterator & operator = (DisulfResNeighbIterator const & );
+ public:
+ 
+ 	DisulfResNeighbIterator(
+@@ -57,7 +56,10 @@ public:
+ 		FullatomDisulfideEnergyContainer * owner
+ 	);
+ 
+-	~DisulfResNeighbIterator() override;
++	// Assignment must go through the polymorphic operator= below, which
++	// downcasts and copies all members; suppress the implicit derived-derived
++	// copy assignment that would bypass it.
++	DisulfResNeighbIterator & operator = (DisulfResNeighbIterator const & ) = delete;
+ 
+ 	ResidueNeighborIterator & operator = ( ResidueNeighborIterator const & ) override;
+ 	ResidueNeighborIterator const & operator ++ () override;
+@@ -87,7 +89,6 @@ private:
+ };
+ 
+ class DisulfResNeighbConstIterator : public ResidueNeighborConstIterator {
+-	DisulfResNeighbConstIterator & operator = (DisulfResNeighbConstIterator const & );
+ public:
+ 	DisulfResNeighbConstIterator(
+ 		FullatomDisulfideEnergyContainer const * owner,
+@@ -97,7 +98,10 @@ public:
+ 
+ 	DisulfResNeighbConstIterator( FullatomDisulfideEnergyContainer const * owner );
+ 
+-	~DisulfResNeighbConstIterator() override;
++	// Assignment must go through the polymorphic operator= below, which
++	// downcasts and copies all members; suppress the implicit derived-derived
++	// copy assignment that would bypass it.
++	DisulfResNeighbConstIterator & operator = (DisulfResNeighbConstIterator const & ) = delete;
+ 
+ 	ResidueNeighborConstIterator & operator = ( ResidueNeighborConstIterator const & ) override;
+ 	ResidueNeighborConstIterator const & operator ++ () override;

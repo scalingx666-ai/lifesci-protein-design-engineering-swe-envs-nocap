@@ -1,0 +1,71 @@
+diff --git a/README.md b/README.md
+index bfc4c832df0..ffb1e782ffd 100644
+--- a/README.md
++++ b/README.md
+@@ -157,3 +157,4 @@ To obtain the contents of submodules which aren't currently cloned:
+ or if you want to get all the submodules
+ 
+     git submodule update --init --recursive
++
+diff --git a/tests/benchmark/tests/PyRosetta.py b/tests/benchmark/tests/PyRosetta.py
+index 091cb767bc1..c3a048f4f55 100644
+--- a/tests/benchmark/tests/PyRosetta.py
++++ b/tests/benchmark/tests/PyRosetta.py
+@@ -80,7 +80,8 @@ def run_unit_tests(rosetta_dir, working_dir, platform, config, hpc_driver=None,
+ 
+         packages: str = get_required_pyrosetta_python_packages_for_testing(platform, static_versions=False)
+ 
+-        python_virtual_environment = setup_persistent_python_virtual_environment(result.python_environment, packages)
++        #python_virtual_environment = setup_persistent_python_virtual_environment(result.python_environment, packages)
++        python_virtual_environment = setup_python_virtual_environment(f'{working_dir}/.venv', result.python_environment, packages)
+ 
+         additional_flags = ' --timeout 4096' if platform['os'].startswith('aarch64') else ''
+ 
+@@ -114,6 +115,8 @@ def run_unit_tests(rosetta_dir, working_dir, platform, config, hpc_driver=None,
+             # makeing sure that results could be serialize in to json, but ommiting logs because they could take too much space
+             with open(working_dir+'/output.json', 'w') as f: json.dump({_ResultsKey_:results[_ResultsKey_], _StateKey_:results[_StateKey_]}, f, sort_keys=True, indent=2)
+ 
++        if os.path.isdir(python_virtual_environment.root): shutil.rmtree(python_virtual_environment.root)
++
+     return results
+ 
+ 
+diff --git a/tests/benchmark/tests/__init__.py b/tests/benchmark/tests/__init__.py
+index 70c98c02ee9..cb34adceb3b 100644
+--- a/tests/benchmark/tests/__init__.py
++++ b/tests/benchmark/tests/__init__.py
+@@ -502,7 +502,9 @@ def get_required_pyrosetta_python_packages_for_testing(platform, conda=False, st
+     '''
+     python_version = tuple( map(int, platform.get('python', DEFAULT_PYTHON_VERSION).split('.') ) )
+ 
+-    packages = copy.deepcopy(DEFAULT_PACKAGE_VERSIONS_FOR_PYROSETTA_DISTRIBUTED)
++    if python_version == (3, 12): packages = dict(numpy=DEFAULT_PACKAGE_VERSIONS_FOR_PYROSETTA_DISTRIBUTED['numpy'])
++    else: packages = copy.deepcopy(DEFAULT_PACKAGE_VERSIONS_FOR_PYROSETTA_DISTRIBUTED)
++
+     packages = update_packages_for_python_version(packages, python_version)
+     packages = update_packages_for_conda(packages, conda)
+ 
+@@ -941,7 +943,9 @@ def local_python_install(platform, config):
+         # if 'certifi' not in packages:
+         #     packages += ' certifi'
+ 
+-        if packages: execute( f'Installing packages {packages}...', f'cd {root} && unset __PYVENV_LAUNCHER__ && {root}/bin/pip{python_version} install --upgrade {packages}' )
++        if packages:
++            execute( f'Installing packages {packages}...', f'cd {root} && unset __PYVENV_LAUNCHER__ && {root}/bin/pip{python_version} install --no-cache-dir --upgrade pip' )
++            execute( f'Installing packages {packages}...', f'cd {root} && unset __PYVENV_LAUNCHER__ && {root}/bin/pip{python_version} install --no-cache-dir --upgrade {packages}' )
+         #if packages: execute( f'Installing packages {packages}...', f'cd {root} && unset __PYVENV_LAUNCHER__ && {executable} -m pip install --upgrade {packages}' )
+ 
+         remove_pip_and_easy_install(root)  # removing all pip's and easy_install's to make sure that environment is immutable
+@@ -978,8 +982,10 @@ def setup_python_virtual_environment(working_dir, python_environment, packages='
+ 
+     bin=working_dir+'/bin'
+ 
+-    if packages: execute('Installing packages: {}...'.format(packages), 'unset __PYVENV_LAUNCHER__ && {bin}/python {bin}/pip install --upgrade pip setuptools && {bin}/python {bin}/pip install --progress-bar off {packages}'.format(**vars()) )
+-    #if packages: execute('Installing packages: {}...'.format(packages), '{bin}/pip{python_environment.version} install {packages}'.format(**vars()) )
++    #if packages: execute('Installing packages: {}...'.format(packages), 'unset __PYVENV_LAUNCHER__ && {bin}/python {bin}/pip install --no-cache-dir --upgrade pip setuptools && {bin}/python {bin}/pip install --no-cache-dir --progress-bar off {packages}'.format(**vars()) )
++    if packages:
++        packages = ' '.join( f"'{p}'"for p in packages.split() )
++        execute('Installing packages: {}...'.format(packages), '{activate} && {bin}/pip install --no-cache-dir --upgrade pip setuptools && {bin}/pip install --no-cache-dir --progress-bar off {packages}'.format(**vars()) )
+ 
+     return NT(activate = activate, python = bin + '/python', root = working_dir, bin = bin)
+ 

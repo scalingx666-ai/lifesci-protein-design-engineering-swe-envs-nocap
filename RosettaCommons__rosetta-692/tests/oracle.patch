@@ -1,0 +1,349 @@
+diff --git a/source/src/cppcheck_suppressions.txt b/source/src/cppcheck_suppressions.txt
+index 516457906ef..ee16ebc26a9 100644
+--- a/source/src/cppcheck_suppressions.txt
++++ b/source/src/cppcheck_suppressions.txt
+@@ -33,3 +33,8 @@ noExplicitConstructor
+ 
+ // The TenANeighborGraph::tenA_edge_pool_ is handled properly through virtual function calls made by the parent operator
+ operatorEqVarError:core/scoring/TenANeighborGraph.cc
++
++// UpperEdgeGraph::get_vertex_ptr and ::note_edge_deleted are called from the
++// friend class UEEdge (constructors and delete_edge); cppcheck does not trace
++// template friend usage and flags them as unused.
++unusedPrivateFunction:utility/graph/UpperEdgeGraph.hh
+diff --git a/source/src/utility/DereferenceIterator.hh b/source/src/utility/DereferenceIterator.hh
+index 419e9b38b3f..04a917bc062 100644
+--- a/source/src/utility/DereferenceIterator.hh
++++ b/source/src/utility/DereferenceIterator.hh
+@@ -51,8 +51,6 @@ public:
+ 		it_ = s_iter;
+ 	}
+ 
+-	~DereferenceIterator() {}
+-
+ 	bool operator==( const DereferenceIterator& other ) const {
+ 		return ( it_ == other.it_ );
+ 	}
+diff --git a/source/src/utility/graph/ArrayPool.hh b/source/src/utility/graph/ArrayPool.hh
+index 1b1bd2bd589..6c4dd1d9c7d 100644
+--- a/source/src/utility/graph/ArrayPool.hh
++++ b/source/src/utility/graph/ArrayPool.hh
+@@ -58,26 +58,6 @@ public:
+ 		size_( size )
+ 	{}
+ 
+-	/// @brief Copy constructor -- point this Array0 at a block of memory
+-	Array0( Array0< T > const & other ) :
+-		array_( other.array_ ),
+-		size_( other.size_ )
+-	{}
+-
+-	/// @brief Assignment operator -- point this Array0 at a different block of memory.
+-	Array0< T > const &
+-	operator = ( Array0< T > const & rhs ) {
+-		if ( &rhs != this ) {
+-			array_ = rhs.array_;
+-			size_ = rhs.size_;
+-		}
+-		return *this;
+-	}
+-
+-	/// @brief The destructor does not deallocate the memory that this Array0 points at.
+-	/// That is the responsibility of some other class.  Array0 is for bounds checking only.
+-	~Array0() = default;
+-
+ public:
+ 	/// Accessors and mutators.
+ 
+diff --git a/source/src/utility/graph/Digraph.hh b/source/src/utility/graph/Digraph.hh
+index 946512ae4f9..4dce824031d 100644
+--- a/source/src/utility/graph/Digraph.hh
++++ b/source/src/utility/graph/Digraph.hh
+@@ -84,9 +84,6 @@ public:
+ 	DirectedEdgeListElement( DirectedEdge * edge, DirectedEdgeListElement * previous, DirectedEdgeListElement * next )
+ 	: edge_( edge ), previous_( previous ), next_( next ) {}
+ 
+-
+-	~DirectedEdgeListElement() {}
+-
+ 	DirectedEdge * edge() {debug_assert( edge_ ); return edge_; }
+ 	void edge( DirectedEdge * setting ) { edge_ = setting; }
+ 	DirectedEdge const * const_edge() const {debug_assert( edge_ ); return edge_; }
+@@ -130,21 +127,6 @@ public:
+ 	DirectedEdgeListIterator( DirectedEdgeList const * owner, DirectedEdgeListElement * element )
+ 	: owner_( owner ), element_( element ) {}
+ 
+-	/// @brief copy constructor
+-	DirectedEdgeListIterator( DirectedEdgeListIterator const & src )
+-	: owner_( src.owner_ ), element_( src.element_ ) {}
+-
+-	/// @brief non-virtual destructor, does nothing
+-	~DirectedEdgeListIterator() {}
+-
+-	/// @brief assignmnet operator
+-	DirectedEdgeListIterator & operator = ( DirectedEdgeListIterator const & rhs )
+-	{
+-		owner_ = rhs.owner_;
+-		element_ = rhs.element_;
+-		return *this;
+-	}
+-
+ 	/// @brief increment operator.  Point this iterator at the next element in the list.
+ 	inline
+ 	DirectedEdgeListIterator const & operator ++ ()
+@@ -213,26 +195,10 @@ public:
+ 	DirectedEdgeListConstIterator( DirectedEdgeList const * owner, DirectedEdgeListElement const * element )
+ 	: owner_( owner ), element_( element ) {}
+ 
+-	/// @brief copy constructor
+-	DirectedEdgeListConstIterator( DirectedEdgeListConstIterator const & src )
+-	: owner_( src.owner_ ), element_( src.element_ ) {}
+-
+ 	/// @brief const-cast constructor
+ 	DirectedEdgeListConstIterator( DirectedEdgeListIterator const & src )
+ 	: owner_( src.owner_ ), element_( src.element_ ) {}
+ 
+-
+-	/// @brief non-virtual destructor, does nothing
+-	~DirectedEdgeListConstIterator() {}
+-
+-	/// @brief assignmnet operator
+-	DirectedEdgeListConstIterator & operator = ( DirectedEdgeListConstIterator const & rhs )
+-	{
+-		owner_ = rhs.owner_;
+-		element_ = rhs.element_;
+-		return *this;
+-	}
+-
+ 	/// @brief increment operator.  Point this iterator at the next element in the list.
+ 	inline
+ 	DirectedEdgeListConstIterator const & operator ++ ()
+diff --git a/source/src/utility/graph/Graph.hh b/source/src/utility/graph/Graph.hh
+index 9d207e16427..51bc685d1c0 100644
+--- a/source/src/utility/graph/Graph.hh
++++ b/source/src/utility/graph/Graph.hh
+@@ -110,9 +110,6 @@ public:
+ 	EdgeListElement( Edge * edge, EdgeListElement * previous, EdgeListElement * next )
+ 	: edge_( edge ), previous_( previous ), next_( next ) {}
+ 
+-
+-	~EdgeListElement() = default;
+-
+ 	Edge * edge() {debug_assert( edge_ ); return edge_; }
+ 	void edge( Edge * setting ) { edge_ = setting; }
+ 	Edge const * const_edge() const {debug_assert( edge_ ); return edge_; }
+@@ -156,17 +153,6 @@ public:
+ 	EdgeListIterator( EdgeList const * owner, EdgeListElement * element )
+ 	: owner_( owner ), element_( element ) {}
+ 
+-	/// @brief copy constructor
+-	EdgeListIterator( EdgeListIterator const & src )
+-	= default;
+-
+-	/// @brief non-virtual destructor, does nothing
+-	~EdgeListIterator() = default;
+-
+-	/// @brief assignmnet operator
+-	EdgeListIterator & operator = ( EdgeListIterator const & rhs )
+-	= default;
+-
+ 	/// @brief increment operator.  Point this iterator at the next element in the list.
+ 	EdgeListIterator const & operator ++ ()
+ 	{debug_assert( valid() ); element_ = element_->next(); return *this; }
+@@ -233,22 +219,10 @@ public:
+ 	EdgeListConstIterator( EdgeList const * owner, EdgeListElement const * element )
+ 	: owner_( owner ), element_( element ) {}
+ 
+-	/// @brief copy constructor
+-	EdgeListConstIterator( EdgeListConstIterator const & src )
+-	= default;
+-
+ 	/// @brief const-cast constructor
+ 	EdgeListConstIterator( EdgeListIterator const & src )
+ 	: owner_( src.owner_ ), element_( src.element_ ) {}
+ 
+-
+-	/// @brief non-virtual destructor, does nothing
+-	~EdgeListConstIterator() = default;
+-
+-	/// @brief assignmnet operator
+-	EdgeListConstIterator & operator = ( EdgeListConstIterator const & rhs )
+-	= default;
+-
+ 	/// @brief increment operator.  Point this iterator at the next element in the list.
+ 	EdgeListConstIterator const & operator ++ ()
+ 	{debug_assert( valid() ); element_ = element_->const_next(); return *this; }
+diff --git a/source/src/utility/graph/LowMemGraph.hh b/source/src/utility/graph/LowMemGraph.hh
+index 94835112c93..0b579222262 100644
+--- a/source/src/utility/graph/LowMemGraph.hh
++++ b/source/src/utility/graph/LowMemGraph.hh
+@@ -352,8 +352,6 @@ class LowMemGraphBase : public utility::VirtualBase {
+ public:
+ 	LowMemGraphBase() {}
+ 
+-	~LowMemGraphBase() override {}
+-
+ 	virtual LowMemNode const * get_node( uint32_t index ) const = 0;
+ 
+ 	virtual LowMemNode * get_node( uint32_t index ) = 0;
+diff --git a/source/src/utility/graph/UpperEdgeGraph.hh b/source/src/utility/graph/UpperEdgeGraph.hh
+index fd14da3605f..99c6a713c5c 100644
+--- a/source/src/utility/graph/UpperEdgeGraph.hh
++++ b/source/src/utility/graph/UpperEdgeGraph.hh
+@@ -319,12 +319,6 @@ public:
+ 		upper_vertex_->note_lower_edge_added();
+ 	}
+ 
+-	~UEEdge()
+-	{
+-		//std::cout << "UEEdge dstor" << std::endl;
+-	}
+-
+-
+ 	UEEdge( GraphClass * owner, int lower_node, int upper_node, E const & data )
+ 	:
+ 		owner_( owner ),
+@@ -396,8 +390,6 @@ public:
+ 		copy_from( other );
+ 	}
+ 
+-	~UpperEdgeGraph() override = default;
+-
+ 	UpperEdgeGraph< V, E > const &
+ 	operator = ( UpperEdgeGraph< V, E > const & other )
+ 	{
+diff --git a/source/src/utility/options/BooleanOption.hh b/source/src/utility/options/BooleanOption.hh
+index f7052999037..38acd484709 100644
+--- a/source/src/utility/options/BooleanOption.hh
++++ b/source/src/utility/options/BooleanOption.hh
+@@ -91,11 +91,6 @@ public: // Creation
+ 	}
+ 
+ 
+-	/// @brief Destructor
+-	inline
+-	~BooleanOption() override {}
+-
+-
+ public: // Properties
+ 
+ 
+diff --git a/source/src/utility/options/BooleanVectorOption.hh b/source/src/utility/options/BooleanVectorOption.hh
+index 0e457db147a..e6c47a6a5e8 100644
+--- a/source/src/utility/options/BooleanVectorOption.hh
++++ b/source/src/utility/options/BooleanVectorOption.hh
+@@ -76,12 +76,6 @@ public: // Creation
+ 	}
+ 
+ 
+-	/// @brief Destructor
+-	inline
+-
+-	~BooleanVectorOption() override {}
+-
+-
+ public: // Properties
+ 
+ 
+diff --git a/source/src/utility/options/FileOption.hh b/source/src/utility/options/FileOption.hh
+index ba184fae01e..58fd3a6d3a4 100644
+--- a/source/src/utility/options/FileOption.hh
++++ b/source/src/utility/options/FileOption.hh
+@@ -89,12 +89,6 @@ public: // Creation
+ 	}
+ 
+ 
+-	/// @brief Destructor
+-	inline
+-
+-	~FileOption() override {}
+-
+-
+ public: // Methods
+ 
+ 
+diff --git a/source/src/utility/options/FileVectorOption.hh b/source/src/utility/options/FileVectorOption.hh
+index 96dd683ff16..3a444f49b61 100644
+--- a/source/src/utility/options/FileVectorOption.hh
++++ b/source/src/utility/options/FileVectorOption.hh
+@@ -89,12 +89,6 @@ public: // Creation
+ 	}
+ 
+ 
+-	/// @brief Destructor
+-	inline
+-
+-	~FileVectorOption() override {}
+-
+-
+ public: // Methods
+ 
+ 
+diff --git a/source/src/utility/options/IntegerOption.hh b/source/src/utility/options/IntegerOption.hh
+index 111b1d9c8a3..b823c47eb09 100644
+--- a/source/src/utility/options/IntegerOption.hh
++++ b/source/src/utility/options/IntegerOption.hh
+@@ -79,12 +79,6 @@ public: // Creation
+ 	}
+ 
+ 
+-	/// @brief Destructor
+-	inline
+-
+-	~IntegerOption() override {}
+-
+-
+ public: // Properties
+ 
+ 
+diff --git a/source/src/utility/options/IntegerVectorOption.hh b/source/src/utility/options/IntegerVectorOption.hh
+index a53154169c6..2359f4acbac 100644
+--- a/source/src/utility/options/IntegerVectorOption.hh
++++ b/source/src/utility/options/IntegerVectorOption.hh
+@@ -80,12 +80,6 @@ public: // Creation
+ 	}
+ 
+ 
+-	/// @brief Destructor
+-	inline
+-
+-	~IntegerVectorOption() override {}
+-
+-
+ public: // Properties
+ 
+ 
+diff --git a/source/src/utility/options/RealOption.hh b/source/src/utility/options/RealOption.hh
+index cbfbf53a625..6e1ab6973ce 100644
+--- a/source/src/utility/options/RealOption.hh
++++ b/source/src/utility/options/RealOption.hh
+@@ -80,12 +80,6 @@ public: // Creation
+ 	}
+ 
+ 
+-	/// @brief Destructor
+-	inline
+-
+-	~RealOption() override {}
+-
+-
+ public: // Properties
+ 
+ 
+diff --git a/source/src/utility/options/RealVectorOption.hh b/source/src/utility/options/RealVectorOption.hh
+index 77a25fbf10b..6fdf310d2bd 100644
+--- a/source/src/utility/options/RealVectorOption.hh
++++ b/source/src/utility/options/RealVectorOption.hh
+@@ -80,12 +80,6 @@ public: // Creation
+ 	}
+ 
+ 
+-	/// @brief Destructor
+-	inline
+-
+-	~RealVectorOption() override {}
+-
+-
+ public: // Properties
+ 
+ 

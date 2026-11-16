@@ -1,0 +1,1444 @@
+diff --git a/config.json b/config.json
+index f49ba4d..36acec1 100644
+--- a/config.json
++++ b/config.json
+@@ -74,7 +74,8 @@
+         "ProSST-4096":{"input_score_name":"ProSST-4096", "location":"ProSST/ProSST-4096", "directionality": 1, "key": "mutant","model_type":"Single sequence & Structure"},
+         "ESCOTT":{"input_score_name":"ESCOTT_score", "location":"ESCOTT", "directionality": 1, "key": "mutant","model_type":"Structure & MSA"},
+         "VenusREM":{"input_score_name":"VenusREM", "location":"VenusREM", "directionality": 1, "key": "mutant","model_type":"Structure & MSA"},
+-        "RSALOR":{"input_score_name":"RSALOR", "location":"RSALOR", "directionality": -1, "key": "mutant","model_type":"Structure & MSA"}
++        "RSALOR":{"input_score_name":"RSALOR", "location":"RSALOR", "directionality": -1, "key": "mutant","model_type":"Structure & MSA"},
++        "SiteRM":{"input_score_name":"SiteRM_score", "location":"SiteRM", "directionality": 1, "key": "mutant", "model_type":"MSA"}
+     },
+     "model_list_zero_shot_indels_DMS":{
+         "Unirep":{"input_score_name":"Unirep_score", "location":"UniRep", "directionality": -1, "key": "mutated_sequence","model_type":"Single sequence"},
+@@ -152,7 +153,8 @@
+         "GEMME":{"input_score_name":"GEMME_score", "location":"GEMME", "directionality": 1, "key": "mutant","model_type":"MSA"},
+         "EVE":{"input_score_name":"EVE_evol_index", "location":"EVE", "directionality": -1, "key": "mutant","model_type":"MSA"},
+         "ESM1b":{"input_score_name":"esm1b_t33_650M_UR50S", "location":"ESM1b", "directionality": 1, "key": "mutant","model_type":"Single sequence"},
+-        "PoET": {"input_score_name": "PoET_score","location":"PoET","directionality":-1,"key":"mutated_sequence","model_type":"MSA"}
++        "PoET": {"input_score_name": "PoET_score","location":"PoET","directionality":-1,"key":"mutated_sequence","model_type":"MSA"},
++        "SiteRM":{"input_score_name":"SiteRM_score", "location":"SiteRM", "directionality": 1, "key": "mutant", "model_type":"MSA"}
+     },
+     "model_list_supervised_substitutions_DMS":{
+         "OHE - Not augmented":{"input_score_name":"predictions_fitness", "label_name": "labels_fitness","location":"OHE_not_augmented","key":"mutated_sequence", "model_type": "One-hot Encoding"},
+diff --git a/environments/proteingym_env.txt b/environments/proteingym_env.txt
+index f1f365b..eb6a163 100644
+--- a/environments/proteingym_env.txt
++++ b/environments/proteingym_env.txt
+@@ -13,6 +13,7 @@ brotlipy==0.7.0
+ certifi==2023.7.22
+ cffi==1.16.0
+ charset-normalizer==3.3.2
++cherryml==0.2.0
+ chex==0.1.7
+ click==8.1.7
+ contourpy==1.2.0
+diff --git a/proteingym/baselines/SiteRM/_datasets.py b/proteingym/baselines/SiteRM/_datasets.py
+new file mode 100644
+index 0000000..4d742ac
+--- /dev/null
++++ b/proteingym/baselines/SiteRM/_datasets.py
+@@ -0,0 +1,468 @@
++"""
++This module creates the training MSAs for CherryML based on the raw data.
++
++This involves carefully extracting the region of interest from the MSA,
++and formatting the MSAs in the format expected by CherryML.
++"""
++import os
++from typing import Dict, List, Optional, Tuple
++
++import numpy as np
++import pandas as pd
++import random
++
++from cherryml import io as cherryml_io
++from cherryml import caching as cherryml_caching
++
++
++GAP_CHARACTER = "-"
++
++
++@cherryml_caching.cached_parallel_computation(
++    parallel_arg="families",
++    output_dirs=["output_transitions_dir"],
++)
++def create_transitions_from_pairs_and_time(
++    families: List[str],
++    transition_pairs_dir: str,
++    t: float,
++    output_transitions_dir: Optional[str] = None,
++    _version: str = "2024_05_01_v1",
++):
++    for family in families:
++        transitions = []
++        lines = open(
++            os.path.join(
++                transition_pairs_dir,
++                family + ".txt"
++            ), "r"
++        )
++        for line in lines:
++            x, y = line.split(" ")
++            y = y.replace("\n", "")  # Remove endline character
++            # print(f"len(x) = {len(x)}")
++            # print(f"len(y) = {len(y)}")
++            assert(len(x) == len(y))
++            transitions.append((x, y, t))
++        cherryml_io.write_transitions(
++            transitions,
++            os.path.join(
++                output_transitions_dir,
++                family + ".txt"
++            )
++        )
++        cherryml_caching.secure_parallel_output(
++            output_transitions_dir,
++            family
++        )
++
++
++def translate_msa(
++    a2m_path: str,
++    subsample_n_sequences: int,
++    random_seed: int = 42,
++) -> Tuple[Dict[str, str], int, int]:
++    """
++    Created the training MSA from the a2m ProteinGym file.
++
++    It also tries to find the MSA start and end indices.
++    If not found, returns -1 for both.
++    """
++    # Need to manually read the MSA
++    protein_names_and_sequences = []  # Type: List[Tuple[str, str]]
++    lengths = []
++    start_idx_0_based = None
++    end_idx_0_based = None
++    seen_protein_names = set()
++    start_idx_0_based, end_idx_0_based = -1, -1
++    with open(a2m_path, "r") as a2m_file:
++        curr_protein = ""
++        protein_name = None
++        for line_idx, line in enumerate(a2m_file.read().split("\n")):
++            if line_idx == 0:
++                # This is the reference protein -- we need to extract the indices.
++                try:
++                    start_idx_0_based, end_idx_0_based = line.split('/')[-1].split('-')
++                    start_idx_0_based = int(start_idx_0_based) - 1
++                    end_idx_0_based = int(end_idx_0_based) - 1
++                    assert(start_idx_0_based >= 0)
++                    assert(end_idx_0_based >= 0)
++                except:
++                    print(f"WARNING: MSA file {a2m_path} does not specify the start and end indices.")
++            if line.startswith(">"):
++                # Push the previous protein, which we have already built
++                if curr_protein != "":
++                    assert protein_name is not None
++                    protein_name = f"protein-{len(lengths)}"  # Override because their MSAs have duplicate sequence names!!!
++                    protein_names_and_sequences.append(
++                        (
++                            protein_name,
++                            curr_protein
++                        )
++                    )
++                    if protein_name in seen_protein_names:
++                        raise ValueError(
++                            f"Issue parsing protein names in file {a2m_path} . "
++                            f"Found duplicate name: {protein_name} . Might be "
++                            f"because I am parsing the MSA file incorrectly."
++                        )
++                    seen_protein_names.add(protein_name)
++                    lengths.append(len(curr_protein))
++                protein_name = line.split("\t")[0][1:]
++                curr_protein = ""
++            else:
++                curr_protein += line.upper().replace(".", "-")
++    assert(len(set(lengths)) == 1)
++
++    # Remove duplicates from protein_names_and_sequences
++    def make_unique(
++        protein_names_and_sequences: List[Tuple[str, str]]
++    ) -> List[Tuple[str, str]]:
++        protein_names_and_sequences_unique = []
++        seen_proteins = set()
++        for protein_name, protein_sequence in protein_names_and_sequences:
++            if protein_sequence not in seen_proteins:
++                protein_names_and_sequences_unique.append(
++                    (
++                        protein_name,
++                        protein_sequence
++                    )
++                )
++                seen_proteins.add(protein_sequence)
++        return protein_names_and_sequences_unique
++    # print(f"Size of MSA before removing duplicates: {len(protein_names_and_sequences)}")
++    protein_names_and_sequences = make_unique(protein_names_and_sequences)
++    # print(f"Size of MSA after removing duplicates: {len(protein_names_and_sequences)}")
++    # Check uniqueness
++    assert(
++        len(
++            set(
++                [x[1] for x in protein_names_and_sequences]
++            )
++        ) == len(protein_names_and_sequences)
++    )
++
++    # Create a random number generator object
++    rng = random.Random(random_seed)
++    sampled_indices = [0] + rng.sample(
++        range(1, len(protein_names_and_sequences), 1),
++        min(
++            subsample_n_sequences,
++            len(protein_names_and_sequences)
++        ) - 1
++    )
++    assert(len(set(sampled_indices)) == min(subsample_n_sequences, len(protein_names_and_sequences)))
++    sampled_protein_names_and_sequences = [
++        protein_names_and_sequences[i]
++        for i in sampled_indices
++    ]
++    assert(len(set(sampled_protein_names_and_sequences)) == min(subsample_n_sequences, len(protein_names_and_sequences)))
++    subsampled_msa = dict(sampled_protein_names_and_sequences)
++    # print(f"subsampled_msa = {subsampled_msa}")
++    # print(f"subsampled_msa length = {len(subsampled_msa)}")
++    return subsampled_msa, start_idx_0_based, end_idx_0_based
++
++
++@cherryml_caching.cached_parallel_computation(
++    parallel_arg="families",
++    output_dirs=[
++        "output_msa_dir",
++        "output_aligned_region_0_based_dir",
++    ],
++)
++def DMS_substitutions_dataset_create_training_msas(
++    DMS_reference_file_path: str,
++    DMS_data_folder: str,
++    DMS_MSA_data_folder: str,
++    families: List[str],  # With the list of DMS_id
++    subsample_n_sequences: int = 1000,
++    output_msa_dir: Optional[str] = None,
++    output_aligned_region_0_based_dir: Optional[str] = None,
++    _version: str = "2024_05_05__10_29_am",
++):
++    """
++    Create training MSAs for DMS substitutions dataset.
++    """
++    # We need to convert the training alignment into standard format, etc.
++    for family_idx, family in enumerate(families):
++        DMS_id = family
++        mapping_protein_seq_DMS = pd.read_csv(DMS_reference_file_path)
++        DMS_file_name = mapping_protein_seq_DMS["DMS_filename"][mapping_protein_seq_DMS["DMS_id"]==DMS_id].values[0]
++        target_seq = mapping_protein_seq_DMS["target_seq"][mapping_protein_seq_DMS["DMS_id"]==DMS_id].values[0].upper()
++        
++        DMS_data_path = DMS_data_folder + os.sep + DMS_file_name
++        DMS_data = pd.read_csv(DMS_data_path, low_memory=False)
++
++        DMS_MSA_file_name = mapping_protein_seq_DMS["MSA_filename"][mapping_protein_seq_DMS["DMS_id"]==DMS_id].values[0]
++        DMS_MSA_file_path = DMS_MSA_data_folder + os.sep + DMS_MSA_file_name
++        print(f"Creating standardized data for: {DMS_id} ({family_idx + 1} / {len(families)}). DMS file path:\n{DMS_MSA_file_path}")
++        if not os.path.exists(DMS_MSA_file_path):
++            raise ValueError(
++                f"DMS_MSA_file_path {DMS_MSA_file_path} does not exist!"
++            )
++
++        start_idx_0_based, end_idx_0_based = (
++            int(mapping_protein_seq_DMS[mapping_protein_seq_DMS["DMS_id"]==DMS_id]["MSA_start"]) - 1,
++            int(mapping_protein_seq_DMS[mapping_protein_seq_DMS["DMS_id"]==DMS_id]["MSA_end"]) - 1
++        )
++        print(f"start_idx_0_based = {start_idx_0_based}")
++        print(f"end_idx_0_based = {end_idx_0_based}")
++
++        subsetted_msa, start_idx_0_based_msa, end_idx_0_based_msa = translate_msa(
++            a2m_path=DMS_MSA_file_path,
++            subsample_n_sequences=subsample_n_sequences,
++        )
++        # print(f"start_idx_0_based_msa = {start_idx_0_based_msa}")
++        # print(f"end_idx_0_based_msa = {end_idx_0_based_msa}")
++        # assert(False)
++        if start_idx_0_based_msa != -1 and end_idx_0_based_msa != -1:
++            if start_idx_0_based != start_idx_0_based_msa or end_idx_0_based != end_idx_0_based_msa:
++                raise ValueError(
++                    f"start_idx_0_based = {start_idx_0_based}\n"
++                    f"start_idx_0_based_msa = {start_idx_0_based_msa}\n"
++                    f"end_idx_0_based = {end_idx_0_based}\n"
++                    f"end_idx_0_based_msa = {end_idx_0_based_msa}\n"
++                )
++
++        cherryml_io.write_msa(
++            subsetted_msa,
++            os.path.join(
++                output_msa_dir,
++                family + ".txt",
++            ),
++        )
++        cherryml_caching.secure_parallel_output(output_msa_dir, family)
++
++        with open(
++            os.path.join(
++                output_aligned_region_0_based_dir,
++                family + ".txt",
++            ),
++            "w"
++        ) as f:
++            f.write(f"{start_idx_0_based} {end_idx_0_based}")
++        cherryml_caching.secure_parallel_output(output_aligned_region_0_based_dir, family)
++
++
++def get_dms_substitutions_families(
++    DMS_reference_file_path: str,
++) -> List[str]:
++    mapping_protein_seq_DMS = pd.read_csv(DMS_reference_file_path)
++    res = sorted(list(set(mapping_protein_seq_DMS["DMS_id"])))
++    if len(res) not in [217, 2525]:
++        raise ValueError(
++            f"Expected 217 DMS assays or 2525 clinical assays. "
++            f"Found: {len(res)} instead. Assays: {res}."
++        )
++    return res
++
++
++@cherryml_caching.cached_parallel_computation(
++    parallel_arg="families",
++    output_dirs=["output_transition_pairs_dir"],
++)
++def create_test_transition_pairs(
++    families: List[str],
++    DMS_reference_file_path: str,
++    DMS_data_folder: str,
++    output_transition_pairs_dir: Optional[str] = None,
++    _version: str = "2024_04_30_v1",
++):
++    for family in families:
++        DMS_id = family
++        mapping_protein_seq_DMS = pd.read_csv(DMS_reference_file_path)
++        DMS_file_name = mapping_protein_seq_DMS["DMS_filename"][mapping_protein_seq_DMS["DMS_id"]==DMS_id].values[0]
++        target_seq = mapping_protein_seq_DMS["target_seq"][mapping_protein_seq_DMS["DMS_id"]==DMS_id].values[0].upper()
++        
++        DMS_data_path = DMS_data_folder + os.sep + DMS_file_name
++        DMS_data = pd.read_csv(DMS_data_path, low_memory=False)
++        ys = np.array(DMS_data['mutated_sequence'])
++        xs = []
++        mutated_xs = []
++        mutated_ys = []
++        for protein, mutantions_concatenated in zip(DMS_data['mutated_sequence'], DMS_data['mutant']):
++            mutated_x = ""
++            mutated_y = ""
++            source_protein_chars = [aa for aa in protein]
++
++            mutations = mutantions_concatenated.split(':')
++            for mutation in mutations:
++                original_aa, zero_based_idx, new_aa = mutation[0], int(mutation[1:-1]) - 1, mutation[-1]
++                mutated_x += original_aa
++                mutated_y += new_aa
++                if protein[zero_based_idx] != new_aa:
++                    raise ValueError(f"Protein {protein} should be mutant, i.e. {original_aa} mutating at zero-based position {zero_based_idx} to {new_aa}, but there is not {new_aa} at index {zero_based_idx}.")
++                source_protein_chars[zero_based_idx] = original_aa
++
++            xs.append(''.join(source_protein_chars))
++            assert(len(mutated_x) == len(mutated_y))
++            assert(len(mutated_x) > 0)
++            assert(len(mutated_x) == 1 + mutantions_concatenated.count(':'))
++            mutated_xs.append(mutated_x)
++            mutated_ys.append(mutated_y)
++        # Confirm that all the xs are the same (it's a DMS after all)
++        if len(set(xs)) != 1:
++            raise ValueError(
++                f"There should be only one source protein in a DMS assay, "
++                f"but found more than one! This assumption is used to speed "
++                f"up likelihood computations under the LG model."
++            )
++        pairs = list(zip(xs, ys))
++        pairs_str = "\n".join(f"{x} {y}" for (x, y) in pairs)
++        with open(
++            os.path.join(
++                output_transition_pairs_dir,
++                family + ".txt"
++            ),
++            "w"
++        ) as test_transition_pairs_file:
++            test_transition_pairs_file.write(pairs_str)
++        cherryml_caching.secure_parallel_output(output_transition_pairs_dir, family)
++
++
++@cherryml_caching.cached_parallel_computation(
++    parallel_arg="families",
++    output_dirs=["output_transition_pairs_dir"]
++)
++def substring_the_aligned_region(
++    families: List[str],
++    transition_pairs_dir: str,
++    aligned_region_0_based_dir: str,
++    output_transition_pairs_dir: Optional[str] = None,
++    _version: str = "2024_04_30_v1",
++):
++    for family in families:
++        transition_pairs_strs = open(
++            os.path.join(
++                transition_pairs_dir,
++                family + ".txt"
++            )
++        ).read().split('\n')
++        aligned_region_0_based_str = open(
++            os.path.join(
++                aligned_region_0_based_dir,
++                family + ".txt"
++            )
++        ).read()
++        start_idx_0_based = int(aligned_region_0_based_str.split(" ")[0])
++        end_idx_0_based = int(aligned_region_0_based_str.split(" ")[1])
++        transition_pairs_aligned_region_strs = []
++        for line in transition_pairs_strs:
++            x, y = line.split(" ")
++            assert(len(x) == len(y))
++            x_aligned_region = x[start_idx_0_based:(end_idx_0_based + 1)]
++            y_aligned_region = y[start_idx_0_based:(end_idx_0_based + 1)]
++            transition_pairs_aligned_region_strs.append(f"{x_aligned_region} {y_aligned_region}")
++        transition_pairs_aligned_region_str = "\n".join(transition_pairs_aligned_region_strs)
++        open(
++            os.path.join(
++                output_transition_pairs_dir,
++                family + ".txt"
++            ), "w"
++        ).write(transition_pairs_aligned_region_str)
++        cherryml_caching.secure_parallel_output(output_transition_pairs_dir, family)
++
++
++def DMS_substitutions_dataset(
++    DMS_reference_file_path: str,
++    DMS_data_folder: str,
++    DMS_MSA_data_folder: str,
++    subsample_n_sequences: int = 100,
++    max_families: int = None,  # For testing
++):
++    """
++    Create training MSAs for DMS substitutions benchmark.
++    """
++
++    families = get_dms_substitutions_families(
++        DMS_reference_file_path=DMS_reference_file_path,
++    )
++    if max_families is not None:
++        families = families[:max_families]
++
++    msa_dirs = DMS_substitutions_dataset_create_training_msas(
++        DMS_reference_file_path=DMS_reference_file_path,
++        DMS_data_folder=DMS_data_folder,
++        DMS_MSA_data_folder=DMS_MSA_data_folder,
++        families=families,
++        subsample_n_sequences=subsample_n_sequences,
++    )
++    train_msa_dir = msa_dirs["output_msa_dir"]
++    aligned_region_0_based_dir = msa_dirs["output_aligned_region_0_based_dir"]
++    # print(f"train_msa_dir = {train_msa_dir}")
++    # print(f"aligned_region_0_based_dir = {aligned_region_0_based_dir}")
++
++    test_transition_pairs_dir = create_test_transition_pairs(
++        families=families,
++        DMS_reference_file_path=DMS_reference_file_path,
++        DMS_data_folder=DMS_data_folder,
++    )["output_transition_pairs_dir"]
++    # print(f"test_transition_pairs_dir = {test_transition_pairs_dir}")
++
++    test_transition_pairs_aligned_region_dir = substring_the_aligned_region(
++        families=families,
++        transition_pairs_dir=test_transition_pairs_dir,
++        aligned_region_0_based_dir=aligned_region_0_based_dir,
++    )["output_transition_pairs_dir"]
++    # print(f"test_transition_pairs_aligned_region_dir = {test_transition_pairs_aligned_region_dir}")
++
++    res_dict = {
++        "families": families,
++        "train_msa_dir": train_msa_dir,
++        "train_aligned_region_0_based_dir": aligned_region_0_based_dir,
++        "test_transition_pairs_dir": test_transition_pairs_dir,
++        "test_transition_pairs_aligned_region_dir": test_transition_pairs_aligned_region_dir,
++    }
++    return res_dict
++
++
++def clinical_substitutions_dataset(
++    clinical_reference_file_path: str,
++    clinical_data_folder: str,
++    clinical_MSA_data_folder: str,
++    subsample_n_sequences: int = 100,
++    max_families: int = None,  # For testing
++):
++    return DMS_substitutions_dataset(
++        DMS_reference_file_path=clinical_reference_file_path,
++        DMS_data_folder=clinical_data_folder,
++        DMS_MSA_data_folder=clinical_MSA_data_folder,
++        subsample_n_sequences=subsample_n_sequences,
++        max_families=max_families,
++    )
++    
++
++if __name__ == '__main__':
++    # This takes around 5 minutes to run. It will generate all the training MSAs for CherryML.
++    cherryml_caching.set_cache_dir("_cache_cherryml")
++    cherryml_caching.set_log_level(9)
++    cherryml_caching.set_read_only(False)
++
++    dir_path = os.path.dirname(os.path.realpath(__file__))
++    data_dir = os.path.join(dir_path, "../../../input_data/ProteinGym")
++    git_dir = os.path.join(dir_path, "../../..")
++    DMS_reference_file_path = os.path.abspath(f"{git_dir}/reference_files/DMS_substitutions.csv")
++    DMS_data_folder = os.path.abspath(f"{data_dir}/DMS_ProteinGym_substitutions/DMS_ProteinGym_substitutions")
++    DMS_MSA_data_folder = os.path.abspath(f"{data_dir}/DMS_msa_files/DMS_msa_files")
++    clinical_reference_file_path = os.path.abspath(f"{git_dir}/reference_files/clinical_substitutions.csv")
++    clinical_data_folder = os.path.abspath(f"{data_dir}/clinical_ProteinGym_substitutions")
++    clinical_MSA_data_folder = os.path.abspath(f"{data_dir}/clinical_msa_files/subs")
++
++    ##### DMS substitutions
++    res_dict = DMS_substitutions_dataset(
++        DMS_reference_file_path=DMS_reference_file_path,
++        DMS_data_folder=DMS_data_folder,
++        DMS_MSA_data_folder=DMS_MSA_data_folder,
++        subsample_n_sequences=100000000,
++        max_families=217,
++    )
++    ##### clinical substitutions
++    res_dict = clinical_substitutions_dataset(
++        clinical_reference_file_path=clinical_reference_file_path,
++        clinical_data_folder=clinical_data_folder,
++        clinical_MSA_data_folder=clinical_MSA_data_folder,
++        subsample_n_sequences=100000000,
++        max_families=2525,
++    )
++
++    print("\n".join(f"{key}: {value}" for (key, value) in res_dict.items() if key != "families"))
+diff --git a/proteingym/baselines/SiteRM/compute_fitness.py b/proteingym/baselines/SiteRM/compute_fitness.py
+new file mode 100644
+index 0000000..86497ce
+--- /dev/null
++++ b/proteingym/baselines/SiteRM/compute_fitness.py
+@@ -0,0 +1,764 @@
++"""
++Usage (call this from the associated bash script):
++$ bash scoring_SiteRM_substitutions.sh
++"""
++import multiprocessing
++import os
++import argparse
++import tqdm
++import time
++import logging
++
++import numpy as np
++import pandas as pd
++import random
++
++import tempfile
++from cherryml import io as cherryml_io
++from cherryml import utils as cherryml_utils
++from cherryml.phylogeny_estimation import fast_tree
++from ._datasets import DMS_substitutions_dataset, create_transitions_from_pairs_and_time, clinical_substitutions_dataset, GAP_CHARACTER
++from cherryml import learn_site_specific_rate_matrices
++from cherryml.caching import secure_parallel_output
++from cherryml.utils import get_process_args
++from cherryml import markov_chain
++
++import sys
++# # Get the directory of the current script
++# current_script_path = os.path.realpath(__file__)
++# # Calculate the path to the directory containing the 'caching' package
++# package_directory = os.path.join(current_script_path, '../../..')
++# # Normalize the path to resolve any '..'
++# normalized_path = os.path.normpath(package_directory)
++# # Append this path to sys.path if not already included
++# if normalized_path not in sys.path:
++#     sys.path.append(normalized_path)
++
++from cherryml import caching as cherryml_caching
++
++from typing import Dict, List, Optional, Tuple
++
++def _init_logger():
++    logger = logging.getLogger(__name__)
++    logger.setLevel(logging.INFO)
++    fmt_str = "[%(asctime)s] - %(name)s - %(levelname)s - %(message)s"
++    formatter = logging.Formatter(fmt_str)
++
++    consoleHandler = logging.StreamHandler(sys.stdout)
++    consoleHandler.setFormatter(formatter)
++    logger.addHandler(consoleHandler)
++
++
++_init_logger()
++
++
++ALPHABET = cherryml_utils.get_amino_acids() + [GAP_CHARACTER]
++
++
++def _transition_ll(
++    x: str,
++    y: str,
++    matrix_exponentials: List[pd.DataFrame],
++    matrix_exponential_indices: List[int],
++    alphabet_to_int: Dict[str, int],
++) -> float:
++    assert(len(x) == len(y))
++    assert(len(x) == len(matrix_exponential_indices))
++    res = 0.0
++    for i, idx in enumerate(matrix_exponential_indices):
++        res += np.log(
++            matrix_exponentials[idx][
++                alphabet_to_int[x[i]],
++                alphabet_to_int[y[i]]
++            ]
++        )
++    return res
++
++
++@cherryml_caching.cached_parallel_computation(
++    parallel_arg="families",
++    output_dirs=["output_likelihood_dir"],
++    exclude_args=["num_processes"],
++)
++def evaluate_site_specific_rate_matrix_model_transitions_log_likelihood_per_site_custom(
++    transitions_dir: str,
++    families: List[str],
++    model_dir: str,
++    alphabet: List[str],
++    condition_on_non_gap: bool = False,
++    num_processes: int = 1,
++    output_likelihood_dir: Optional[str] = None,
++    _version: str = "2024_05_02_v1",
++):
++    if condition_on_non_gap:
++        raise NotImplementedError
++    logger = logging.getLogger(__name__)
++    logger.info(f"Going to evaluate SiteRM model on {len(families)} families using {num_processes} cores.")
++
++    alphabet_to_int = {
++        alphabet[i]: i for i in range(len(alphabet))
++    }
++    for f_idx, family in enumerate(families):
++        print(f"Processing family: {family} ({f_idx + 1} / {len(families)})")
++        transitions = cherryml_io.read_transitions(
++            os.path.join(transitions_dir, family + ".txt")
++        )
++        assert(
++            len(
++                set(
++                    (x, t) for (x, y, t) in transitions
++                )
++            ) == 1
++        )
++        t = transitions[0][2]
++
++        site_specific_rate_matrices = np.stack(
++                cherryml_io.read_pickle(
++                os.path.join(model_dir, family + ".txt")
++            ),
++            axis=0,
++        )
++        num_sites = site_specific_rate_matrices.shape[0]
++        matrix_exponentials = [
++            matrix_exponential_reversible(
++                rate_matrix=site_specific_rate_matrices[site_id, :, :],
++                exponents=[t],  # Since we are using the same time for all positions.
++            )[0, :, :]
++            for site_id in range(num_sites)
++        ]
++
++        lls = []
++        time_log_prob_x_x_t = 0
++        time_log_probs_xi_xi_t = 0
++        time_log_probs_yi_xi_t = 0
++
++        # First, we compute the universal offset log P(x | x, t)
++        # print(f"Going to compute log_prob_x_x_t ...")
++        st = time.time()
++        log_prob_x_x_t = _transition_ll(
++            x=transitions[0][0],
++            y=transitions[0][0],  # Here is where we feed in y=x
++            matrix_exponentials=matrix_exponentials,
++            matrix_exponential_indices=list(range(len(transitions[0][0]))),
++            alphabet_to_int=alphabet_to_int,
++        )
++        time_log_prob_x_x_t += time.time() - st
++        # print(f"log_prob_x_x_t = {log_prob_x_x_t}")
++
++        for (x, y, t) in transitions:
++            assert(len(x) == len(y))
++            assert(len(x) == len(matrix_exponentials))
++            mutated_indices = [
++                i for i in range(len(x))
++                if x[i] != y[i]
++            ]
++            mutated_x = "".join(
++                [x[i] for i in mutated_indices]
++            )
++            mutated_y = "".join(
++                [y[i] for i in mutated_indices]
++            )
++
++            # print(f"x = {x}")
++            # print(f"y = {y}")
++            # print(f"mutated_indices = {mutated_indices}")
++
++            # We use the following identity to speed things up:
++            # log P(y | x, t) = log P(x | x, t) + \sum_{i: x_i != y_i} log P(y_i | x_i, t)/P(x_i | x_i, t)
++            # Now we compute the 'lost' likelihood for each test datapoint
++            # print(f"Going to compute log_probs_xi_xi_t ...")
++            st = time.time()
++            log_probs_xi_xi_t = _transition_ll(
++                x=mutated_x,
++                y=mutated_x,  # Here is where we feed in y=x
++                matrix_exponentials=matrix_exponentials,
++                matrix_exponential_indices=mutated_indices,
++                alphabet_to_int=alphabet_to_int,
++            )
++            time_log_probs_xi_xi_t += time.time() - st
++            # Finally, we compute the 'won' likelihoods
++            # print(f"Going to compute log_probs_yi_xi_t ...")
++            st = time.time()
++            log_probs_yi_xi_t = _transition_ll(
++                x=mutated_x,
++                y=mutated_y,
++                matrix_exponentials=matrix_exponentials,
++                matrix_exponential_indices=mutated_indices,
++                alphabet_to_int=alphabet_to_int,
++            )
++            time_log_probs_yi_xi_t += time.time() - st
++            # print(f"Done!")
++            # Now we just use the identity to get the true log transition probabilities
++            log_probs_y_x_t = log_prob_x_x_t + log_probs_yi_xi_t - log_probs_xi_xi_t
++            lls.append(
++                log_probs_y_x_t
++            )
++            # print(f"log_probs_y_x_t = {log_probs_y_x_t}")
++        print(f"time_log_prob_x_x_t = {time_log_prob_x_x_t}")
++        print(f"time_log_probs_xi_xi_t = {time_log_probs_xi_xi_t}")
++        print(f"time_log_probs_yi_xi_t = {time_log_probs_yi_xi_t}")
++        cherryml_io.write_transitions_log_likelihood(
++            lls,
++            os.path.join(
++                output_likelihood_dir, family + ".txt"
++            )
++        )
++        cherryml_caching.secure_parallel_output(
++            output_dir=output_likelihood_dir, parallel_arg=family
++        )
++
++
++def _map_func(args):
++    assert(len(args) == 14)
++    families = args[0]
++    tree = args[1]
++    msa_dir = args[2]
++    alphabet = args[3]
++    regularization_rate_matrix = args[4]
++    regularization_strength = args[5]
++    device = args[6]
++    num_rate_categories = args[7]
++    alphabet_for_site_rate_estimation = args[8]
++    rate_matrix_for_site_rate_estimation = args[9]
++    num_epochs = args[10]
++    quantization_grid_num_steps = args[11]
++    use_vectorized_implementation = args[12]
++    output_dir = args[13]
++    for family_id, family in enumerate(families):
++        msa_path = os.path.join(msa_dir, family + ".txt")
++        msa = cherryml_io.read_msa(msa_path)
++        print(f"Processing family {family_id + 1} / {len(families)} ({family}). Family len: {len(list(msa.values())[0])}, family size: {len(msa)}.")
++        st = time.time()
++        res_dict = learn_site_specific_rate_matrices(
++            tree=tree,
++            msa=msa,
++            alphabet=alphabet,
++            regularization_rate_matrix=regularization_rate_matrix,
++            regularization_strength=regularization_strength,
++            device=device,
++            num_rate_categories=num_rate_categories,
++            alphabet_for_site_rate_estimation=alphabet_for_site_rate_estimation,
++            rate_matrix_for_site_rate_estimation=rate_matrix_for_site_rate_estimation,
++            num_epochs=num_epochs,
++            quantization_grid_num_steps=quantization_grid_num_steps,
++            use_vectorized_implementation=use_vectorized_implementation,
++        )
++        learnt_rate_matrices = res_dict["learnt_rate_matrices"]
++        learnt_site_rates = res_dict["learnt_site_rates"]
++        learnt_tree = res_dict["learnt_tree"]
++        sum_of_times = 0.0
++        profiling_str_breakdown = ""
++        for k, v in res_dict.items():
++            if k.startswith("time_"):
++                print(k, v)
++                sum_of_times += float(v)
++                profiling_str_breakdown += f"{k}: {v}\n"
++        profiling_str = f"Family: {family}\nSum of times: {sum_of_times}\nTotal time: {time.time() - st}\nFamily len: {len(list(msa.values())[0])}\nFamily size: {len(msa)}\nTime breakdown:\n{profiling_str_breakdown}"
++        print(profiling_str)
++        cherryml_io.write_pickle(learnt_rate_matrices, os.path.join(output_dir, family + ".txt"))
++        cherryml_io.write_site_rates(learnt_site_rates, os.path.join(output_dir, family + ".site_rates"))
++        cherryml_io.write_tree(learnt_tree, os.path.join(output_dir, family + ".tree"))
++        cherryml_io.write_str(profiling_str, os.path.join(output_dir, family + ".profiling"))
++        secure_parallel_output(output_dir, family)
++
++
++@cherryml_caching.cached_parallel_computation(
++    parallel_arg="families",
++    exclude_args=["num_processes", "device"],
++    output_dirs=["output_dir"],
++)
++def train_site_specific_rate_matrix_model__cached(
++    msa_dir: str,
++    families: List[str],
++    regularization_rate_matrix_path: str,
++    regularization_strength: float,
++    device: str,
++    num_rate_categories: int,
++    rate_matrix_for_site_rate_estimation_path: str,
++    num_processes: int,
++    num_epochs: int = 100,
++    quantization_grid_num_steps: int = 64,
++    output_dir: Optional[str] = None,
++):
++    """
++    Wrapper for CherryML's `learn_site_specific_rate_matrices`.
++    """
++    logger = logging.getLogger(__name__)
++    logger.info(f"Going to train SiteRM model on {len(families)} families using {num_processes} cores.")
++
++    map_args = [
++        [
++            get_process_args(process_rank, num_processes, families),  # families
++            None,  # tree
++            msa_dir,  # msa_dir
++            ALPHABET[:],  # alphabet
++            cherryml_io.read_rate_matrix(regularization_rate_matrix_path),  # regularization_rate_matrix
++            regularization_strength,  # regularization_strength
++            device,  # device
++            num_rate_categories,  # num_rate_categories
++            cherryml_utils.get_amino_acids(),  # alphabet_for_site_rate_estimation
++            cherryml_io.read_rate_matrix(rate_matrix_for_site_rate_estimation_path),  # rate_matrix_for_site_rate_estimation
++            num_epochs,  # num_epochs.
++            quantization_grid_num_steps,  # quantization_grid_num_steps.
++            False,  # use_vectorized_implementation
++            output_dir,  # output_dir
++        ]
++        for process_rank in range(num_processes)
++    ]
++
++    if num_processes > 1:
++        with multiprocessing.Pool(num_processes) as pool:
++            list(
++                tqdm.tqdm(
++                    pool.imap(_map_func, map_args),
++                    total=len(map_args),
++                )
++            )
++    else:
++        list(
++            tqdm.tqdm(
++                map(_map_func, map_args),
++                total=len(map_args),
++            )
++        )
++    logger.info("Done learning SiteRM model for all MSAs!")
++
++
++def matrix_exponential_reversible(
++    rate_matrix: np.array,
++    exponents: List[float],
++) -> np.array:
++    """
++    Compute matrix exponential (batched).
++
++    Args:
++        rate_matrix: Rate matrix for which to compute the matrix exponential
++        exponents: List of exponents.
++    Returns:
++        3D tensor where res[:, i, i] contains exp(rate_matrix * exponents[i])
++    """
++    return markov_chain.matrix_exponential_reversible(
++        exponents=exponents,
++        fact=markov_chain.FactorizedReversibleModel(rate_matrix),
++        device="cpu",
++    )
++
++
++def _condition_on_non_gap(conditional_probability_matrix: pd.DataFrame) -> pd.DataFrame:
++    """
++    NOTE: Assumes that the gap state is the last one in the alphabet!
++    """
++    if conditional_probability_matrix.columns[-1] != "-":
++        raise ValueError(
++            "It is assumed that the gap state is the last one! "
++            "Last state was instead: "
++            f"{conditional_probability_matrix.columns[-1]}"
++        )
++
++    data = conditional_probability_matrix.values.copy()
++    row_sums = np.sum(data[:, :-1], axis=1, keepdims=True)
++    data[:, :-1] /= row_sums
++    data[:, -1] = 1.0
++
++    res = pd.DataFrame(
++        data,
++        index=conditional_probability_matrix.index,
++        columns=conditional_probability_matrix.columns
++    )
++    return res
++
++
++def evaluate_site_specific_rate_matrix_model_transitions_log_likelihood_per_site(
++    transitions: List[Tuple[str, str, float]],
++    site_specific_rate_matrices: np.array,
++    alphabet: List[str],
++    condition_on_non_gap: bool = False,
++) -> List[List[float]]:
++    """
++    Compute the per-site log-likelihood of the given transitions under the
++    site-specific rate matrix model.
++
++    It is assumed that the site_specific_rate_matrices are reversible.
++
++    The log-likelihood under the site-specific rate matrix model is given by:
++    P(y[i] | x[i], t) = log( exp(rate_matrix[i] * t)[x[i], y[i]] )
++
++    Args:
++        transitions: The transitions for which to compute the log-likelihood.
++        site_specific_rate_matrices: The site-specific rate matrices of the model;
++            3D array indexed by [site_id, state_1, state_2]
++        alphabet: Alphabet (of states).
++        condition_on_non_gap: If True, then the per-site probabilities will be
++            renormalized after conditioning on the gap status.
++    Returns:
++        lls: The log-likelihood of each transition.
++    """
++    assert(len(transitions[0][0]) == site_specific_rate_matrices.shape[0])
++    num_sites = len(transitions[0][0])
++    matrix_exponentials = [
++        matrix_exponential_reversible(
++            rate_matrix=site_specific_rate_matrices[site_id, :, :],
++            exponents=[t for (x, y, t) in transitions],
++        )
++        for site_id in range(num_sites)
++    ]  # Indexed by [site_id][transition_id, :, :]
++    res = []
++    for i, (x, y, t) in enumerate(transitions):
++        if len(x) != len(y):
++            raise ValueError(
++                f"Transition has two sequences of different lengths: {x}, {y}."
++            )
++        mexp_dfs = [
++            pd.DataFrame(
++                matrix_exponentials[site_id][i, :, :],
++                index=alphabet,
++                columns=alphabet,
++            )
++            for site_id in range(num_sites)
++        ]  # Indexed by [site_id][:, :]
++        if condition_on_non_gap:
++            mexp_dfs = [
++                _condition_on_non_gap(
++                    mexp_dfs[site_id]
++                )
++                for site_id in range(num_sites)
++            ]  # Indexed by [site_id][:, :]
++        assert len(x) == len(y)
++        assert len(x) == site_specific_rate_matrices.shape[0]
++        lls = [
++            np.log(
++                mexp_dfs[site_id].at[x[site_id], y[site_id]]
++            )
++            for site_id in range(len(x))
++        ]
++        res.append(lls)
++    return res
++
++
++def _evaluate_site_specific_rate_matrix_model_transitions_log_likelihood__cached__map_func(
++    args: List,
++):
++    """
++    Auxiliary version of
++    "evaluate_site_specific_rate_matrix_model_transitions_log_likelihood__cached"
++    used for multiprocessing.
++    """
++    assert len(args) == 7
++    transitions_dir = args[0]
++    families = args[1]
++    model_dir = args[2]
++    output_transitions_log_likelihood_dir = args[3]
++    output_transitions_log_likelihood_per_site_dir = args[4]
++    condition_on_non_gap = args[5]
++    alphabet = args[6]
++    for family in families:
++        transitions = cherryml_io.read_transitions(
++            os.path.join(transitions_dir, family + ".txt")
++        )
++        site_specific_rate_matrices = cherryml_io.read_pickle(os.path.join(model_dir, f"{family}.txt"))
++
++        ##### Now do the per-site LLs
++        st = time.time()
++        transitions_log_likelihood_per_site = (
++            evaluate_site_specific_rate_matrix_model_transitions_log_likelihood_per_site(
++                transitions=transitions,
++                site_specific_rate_matrices=site_specific_rate_matrices,
++                alphabet=alphabet,
++                condition_on_non_gap=condition_on_non_gap,
++            )
++        )
++        cherryml_io.write_transitions_log_likelihood_per_site(
++            transitions_log_likelihood_per_site=transitions_log_likelihood_per_site,
++            transitions_log_likelihood_per_site_path=os.path.join(
++                output_transitions_log_likelihood_per_site_dir, family + ".txt"
++            ),
++        )
++        secure_parallel_output(
++            output_dir=output_transitions_log_likelihood_per_site_dir,
++            parallel_arg=family,
++        )
++        ##### Now do total LLs
++        transitions_log_likelihood = [
++            sum(x) for x in transitions_log_likelihood_per_site
++        ]
++        cherryml_io.write_transitions_log_likelihood(
++            transitions_log_likelihood=transitions_log_likelihood,
++            transitions_log_likelihood_path=os.path.join(
++                output_transitions_log_likelihood_dir, family + ".txt"
++            ),
++        )
++        secure_parallel_output(
++            output_dir=output_transitions_log_likelihood_dir,
++            parallel_arg=family,
++        )
++
++        profiling_str = f"Total time: {time.time() - st}\n"
++        for profiling_path in [  # (We write it in both places)
++            os.path.join(
++                output_transitions_log_likelihood_per_site_dir,
++                family + ".profiling"
++            ),
++            os.path.join(
++                output_transitions_log_likelihood_dir,
++                family + ".profiling"
++            )
++        ]:
++            with open(profiling_path, "w") as f:
++                f.write(profiling_str)
++
++
++@cherryml_caching.cached_parallel_computation(
++    parallel_arg="families",
++    output_dirs=[
++        "output_transitions_log_likelihood_dir",
++        "output_transitions_log_likelihood_per_site_dir",
++    ],
++    exclude_args=["num_processes"],
++    exclude_args_if_default=["condition_on_non_gap"],
++    write_extra_log_files=True,
++)
++def evaluate_site_specific_rate_matrix_model_transitions_log_likelihood__cached(
++    transitions_dir: str,
++    families: List[str],
++    model_dir: str,
++    alphabet: List[str],
++    condition_on_non_gap: bool = False,
++    num_processes: int = 1,
++    output_transitions_log_likelihood_dir: Optional[str] = None,
++    output_transitions_log_likelihood_per_site_dir: Optional[str] = None,
++    _version: str = "2024_04_26_v1",
++) -> None:
++    """
++    Compute transitions log-likelihood under the site-specific rate matrix model.
++
++    Rate matrices must be stored in {model_dir}/{family}.txt
++
++    Args:
++        transitions_dir: The directory with the transitions for which to
++            compute the log-likelihood. The transitions for family 'family'
++            should be in the file '{family}.txt'
++        families: List of families for which to compute the log-likelihood.
++        model_dir: The directory containing the rate matrices in the files
++            '{family}.txt'
++        alphabet: The alphabet (e.g. amino acids, or amino acids + gap)
++        condition_on_non_gap: If True, then the per-site probabilities will be
++            renormalized after conditioning on the gap status.
++        num_processes: How many processes to use to paralellize the likelihood
++            evaluation. The parallelization is family-based.
++        output_transitions_log_likelihood_dir: Where the log-likelihoods will
++            get written. The log-likelihoods for family 'family' will be in
++            the file '{family}.txt', with one line per transition.
++        output_transitions_log_likelihood_per_site_dir: Where the per-site
++            log-likelihoods will get written. The log-likelihoods for family
++            'family' will be in the file '{family}.txt', with one line per
++            transition.
++    """
++    logger = logging.getLogger(__name__)
++    logger.info(
++        "Going to evaluate site-specific rate matrix model on "
++        f"{len(families)} families using {num_processes} processes"
++    )
++
++    map_args = [
++        [
++            transitions_dir,
++            get_process_args(process_rank, num_processes, families),
++            model_dir,
++            output_transitions_log_likelihood_dir,
++            output_transitions_log_likelihood_per_site_dir,
++            condition_on_non_gap,
++            alphabet,
++        ]
++        for process_rank in range(num_processes)
++    ]
++
++    map_func = _evaluate_site_specific_rate_matrix_model_transitions_log_likelihood__cached__map_func
++    if num_processes > 1:
++        with multiprocessing.Pool(num_processes) as pool:
++            list(
++                tqdm.tqdm(
++                    pool.imap(
++                        map_func,
++                        map_args,
++                    ),
++                    total=len(map_args),
++                )
++            )
++    else:
++        list(
++            tqdm.tqdm(
++                map(
++                    map_func,
++                    map_args,
++                ),
++                total=len(map_args),
++            )
++        )
++
++
++def main():
++    """
++    Main script to score sets of mutated protein sequences (substitutions or indels) with SiteRM model.
++    """
++    parser = argparse.ArgumentParser(description='SiteRM model scoring')
++
++    parser.add_argument('--subsample_n_sequences', default=100000000, type=int, help='How many sequences to subsample from each MSA.')
++
++    # Method hyperparameters
++    parser.add_argument('--tree_estimator_name', default="FastCherries", type=str, help='Tree estimator name.')
++    parser.add_argument('--tree_estimation_rate_matrix_path', default="proteingym/baselines/SiteRM/lg.txt", type=str, help='Tree estimator rate matrix path.')
++    parser.add_argument('--regularization_rate_matrix_path', default="proteingym/baselines/SiteRM/lg_with_gaps.txt" ,type=str, help='Rate matrix used as a prior to generate pseudocounts.')
++    parser.add_argument('--regularization_strength', default=0.5, type=float, help='Between 0 (no regularization) and 1 (fully regularized)')
++    parser.add_argument('--num_rate_categories', default=20, type=int, help='Number of rate categories. Used only for generating pseudocounts.')
++    parser.add_argument('--evolutionary_time', default=1.0, type=float, help='Evolutionary time used to compute fitness scores. Basically, the evolutionary radius around the source protein to consider.')
++
++    parser.add_argument('--DMS_reference_file_path', type=str, help='Path of DMS reference')
++    parser.add_argument('--DMS_data_folder', type=str, help='Path of DMS folder')
++    parser.add_argument('--DMS_MSA_data_folder', type=str, help='Path of DMS folder (containing .a2m files)')
++    parser.add_argument('--clinical_reference_file_path', type=str, help='Path of clinical reference')
++    parser.add_argument('--clinical_data_folder', type=str, help='Path of clinical folder')
++    parser.add_argument('--clinical_MSA_data_folder', type=str, help='Path of clinical folder (containing .a2m files)')
++    parser.add_argument('--DMS_indices', type=int, default=list(range(217)), nargs='+', help='Indices of DMS folders')
++    parser.add_argument('--output_scores_folder', default=None, type=str, help='Name of folder to write model scores to')
++    parser.add_argument('--num_processes', default=1, type=int, help='Number of processes used to parallelize.')
++
++    parser.add_argument('--device', type=str, help='Whether to use "cpu" or "cuda" to train the SiteRM model.')
++
++    parser.add_argument('--clinical', action="store_true", help='Whether to use clinical instead')
++    args = parser.parse_args()
++
++    if args.clinical:
++        # Just replace the DMS args since those get pulled down in the code (we are just "wrapping" the DMS code)
++        args.DMS_reference_file_path = args.clinical_reference_file_path
++        args.DMS_data_folder = args.clinical_data_folder
++        args.DMS_MSA_data_folder = args.clinical_MSA_data_folder
++
++    args.DMS_reference_file_path = os.path.abspath(args.DMS_reference_file_path)
++    args.DMS_data_folder = os.path.abspath(args.DMS_data_folder)
++    args.DMS_MSA_data_folder = os.path.abspath(args.DMS_MSA_data_folder)
++
++    if args.clinical:
++        dataset_dict = clinical_substitutions_dataset(
++            subsample_n_sequences=args.subsample_n_sequences,
++            clinical_reference_file_path=args.DMS_reference_file_path,
++            clinical_data_folder=args.DMS_data_folder,
++            clinical_MSA_data_folder=args.DMS_MSA_data_folder,
++            max_families=len(args.DMS_indices),
++        )
++    else:
++        dataset_dict = DMS_substitutions_dataset(
++            subsample_n_sequences=args.subsample_n_sequences,
++            DMS_reference_file_path=args.DMS_reference_file_path,
++            DMS_data_folder=args.DMS_data_folder,
++            DMS_MSA_data_folder=args.DMS_MSA_data_folder,
++            max_families=len(args.DMS_indices),
++        )
++
++    # Need to set the families to only the desired subset
++    families = [
++        dataset_dict["families"][i]
++        for i in args.DMS_indices
++    ]
++    dataset_dict["families"] = families
++
++    model_dir = train_site_specific_rate_matrix_model__cached(
++        msa_dir=dataset_dict["train_msa_dir"],
++        families=dataset_dict["families"],
++        regularization_rate_matrix_path=args.regularization_rate_matrix_path,
++        regularization_strength=args.regularization_strength,
++        device=args.device,
++        num_rate_categories=args.num_rate_categories,
++        rate_matrix_for_site_rate_estimation_path=args.tree_estimation_rate_matrix_path,
++        num_processes=args.num_processes,
++        num_epochs=100,
++        quantization_grid_num_steps=64,
++    )["output_dir"]
++
++    # Report the slowest family
++    families_and_total_times_and_profiling_strs = []
++    families_and_fastcherries_times_and_profiling_strs = []
++    for family in families:
++        profiling_path = os.path.join(model_dir, family + ".profiling")
++        assert(os.path.exists(profiling_path))
++        with open(profiling_path, "r") as f:
++            lines = f.readlines()
++            for line in lines:
++                if line.startswith("Total time:"):
++                    families_and_total_times_and_profiling_strs.append(
++                        (float(line.split(":")[-1]), "".join(lines))
++                    )
++                if line.startswith("time_estimate_tree"):
++                    families_and_fastcherries_times_and_profiling_strs.append(
++                        (float(line.split(":")[-1]), "".join(lines))
++                    )
++    families_and_total_times_and_profiling_strs = sorted(families_and_total_times_and_profiling_strs, key=lambda x: x[0])
++    print(f"Slowest family in total runtime:\n{families_and_total_times_and_profiling_strs[-1][1]}")
++    families_and_fastcherries_times_and_profiling_strs = sorted(families_and_fastcherries_times_and_profiling_strs, key=lambda x: x[0])
++    print(f"Slowest family for FastCherries:\n{families_and_fastcherries_times_and_profiling_strs[-1][1]}")
++
++
++    # Now we compute the model scores. This will require creating a transitions
++    # dataset with the times added, to be able to use the evaluation API...
++    transitions_dir = create_transitions_from_pairs_and_time(
++        families=families,
++        transition_pairs_dir=dataset_dict["test_transition_pairs_aligned_region_dir"],
++        t=args.evolutionary_time,
++    )["output_transitions_dir"]
++    print(f"transitions_dir = {transitions_dir}")
++
++    ##### LL computation using custom computation (for computational speedup)
++    lls_dir = evaluate_site_specific_rate_matrix_model_transitions_log_likelihood_per_site_custom(
++        transitions_dir=transitions_dir,
++        families=families,
++        model_dir=model_dir,
++        alphabet=ALPHABET[:],
++        condition_on_non_gap=False,
++        num_processes=args.num_processes,
++    )["output_likelihood_dir"]
++    print(f"lls_dir = {lls_dir}")
++
++    if not os.path.exists(args.output_scores_folder):
++        os.makedirs(args.output_scores_folder)
++
++    for DMS_index in args.DMS_indices:
++        # Now all the old boilerplate...
++        mapping_protein_seq_DMS = pd.read_csv(args.DMS_reference_file_path)
++        list_DMS = mapping_protein_seq_DMS["DMS_id"]
++        DMS_id=list_DMS[DMS_index]
++        print(f"Computing scores for: {DMS_id} ({DMS_index + 1} / {len(args.DMS_indices)}) with SiteRM-{args.regularization_strength} model")
++        DMS_file_name = mapping_protein_seq_DMS["DMS_filename"][mapping_protein_seq_DMS["DMS_id"]==DMS_id].values[0]
++        target_seq = mapping_protein_seq_DMS["target_seq"][mapping_protein_seq_DMS["DMS_id"]==DMS_id].values[0].upper()
++        
++        DMS_data_path = args.DMS_data_folder + os.sep + DMS_file_name
++        DMS_data = pd.read_csv(DMS_data_path, low_memory=False)
++
++        DMS_MSA_file_name = mapping_protein_seq_DMS["MSA_filename"][mapping_protein_seq_DMS["DMS_id"]==DMS_id].values[0]
++        DMS_MSA_file_path = args.DMS_MSA_data_folder + os.sep + DMS_MSA_file_name
++        if not os.path.exists(DMS_MSA_file_path):
++            raise ValueError(
++                f"DMS_MSA_file_path {DMS_MSA_file_path} does not exist!"
++            )
++
++        family = DMS_id
++        lls = cherryml_io.read_transitions_log_likelihood(
++            os.path.join(
++                lls_dir,
++                family + ".txt"
++            )
++        )
++
++        model_scores = lls
++
++        DMS_data['SiteRM_score'] = model_scores
++        scoring_filename = args.output_scores_folder+os.sep+DMS_id+'.csv'
++        if args.clinical:
++            DMS_data[['mutant','SiteRM_score','DMS_bin_score']].to_csv(scoring_filename, index=False)
++        else:
++            DMS_data[['mutant','SiteRM_score','DMS_score']].to_csv(scoring_filename, index=False)
++
++
++if __name__ == '__main__':
++    cherryml_caching.set_cache_dir("_cache_cherryml")
++    cherryml_caching.set_log_level(9)
++    cherryml_caching.set_read_only(False)
++    main()
+diff --git a/proteingym/baselines/SiteRM/lg.txt b/proteingym/baselines/SiteRM/lg.txt
+new file mode 100644
+index 0000000..0cdeddd
+--- /dev/null
++++ b/proteingym/baselines/SiteRM/lg.txt
+@@ -0,0 +1,21 @@
++	A	R	N	D	C	Q	E	G	H	I	L	K	M	F	P	S	T	W	Y	V
++A -1.089601890965000042e+00 2.378012751299999825e-02 1.161998918600000083e-02 2.096317948799999997e-02 3.220127970800000516e-02 3.953966869799999811e-02 7.434528237000000150e-02 1.184605354800000038e-01 8.022270589999999993e-03 9.312983309999998266e-03 3.917038529700000299e-02 3.465906280000000811e-02 2.579772728499999529e-02 1.073205970200000019e-02 5.186375004000000344e-02 2.892893568539999793e-01 1.140075897870000132e-01 2.180531321999999890e-03 7.478544644999998887e-03 1.761775668899999980e-01
++R 3.361040313799999735e-02 -8.833460017429998201e-01 3.156158280600000060e-02 6.576007608000000206e-03 6.915486287000000357e-03 1.144699854359999824e-01 2.605515641999999951e-02 2.237243870399999862e-02 5.424666535499999415e-02 7.893379586999999670e-03 2.990740168800000084e-02 4.086639282000000262e-01 1.111133648299999881e-02 2.230246043999999789e-03 1.464475332000000213e-02 5.251626674700000247e-02 3.085248026900000093e-02 7.162462062000000268e-03 1.073969819999999985e-02 1.181632338900000072e-02
++N 2.188689198799999985e-02 4.206080719800000395e-02 -1.187062077838999974e+00 2.692998567479999994e-01 6.840671616000000566e-03 6.913072178399999601e-02 3.877899523199999920e-02 8.243025136499999850e-02 1.008040154899999957e-01 1.190325197099999927e-02 6.779815587000000490e-03 1.385720387999999914e-01 8.514912803999999738e-03 3.787086549999999809e-03 7.125099480000000006e-03 2.452994845260000334e-01 1.066101818729999900e-01 5.475068160000000047e-04 2.090371387500000039e-02 5.786774136000000061e-03
++D 3.124245550400000029e-02 6.934110713999999155e-03 2.130815065730000124e-01 -8.632897985519999429e-01 8.092869720000000090e-04 2.133687706199999951e-02 3.753876778199999875e-01 4.844552206199999322e-02 2.072563347000000097e-02 6.644583299999999148e-04 1.493745156000000126e-03 1.827915140000000230e-02 5.863521480000000044e-04 7.367316319999999861e-04 1.737184224000000096e-02 7.590110917500000887e-02 2.269280182000000048e-02 3.606527400000000133e-04 4.614579584999999561e-03 2.625304149000000017e-03
++C 1.968019155440000056e-01 2.990331749099999978e-02 2.219609433600000167e-02 3.318720912000000089e-03 -8.678211094820000859e-01 3.457367735999999480e-03 2.504794139999999840e-04 3.263994730499999997e-02 1.431933876500000001e-02 1.992921243899999778e-02 5.885480756699999760e-02 8.569836000000000597e-04 2.051084967999999842e-02 4.675432780199999944e-02 3.319823280000000574e-03 1.704017001660000086e-01 6.093261876000000132e-02 8.085764448000000437e-03 3.980874545999999597e-02 1.354790947769999865e-01
++Q 7.668563900399999467e-02 1.570771814279999790e-01 7.118258170399999196e-02 2.776667407200000132e-02 1.097161095999999976e-03 -1.249535323837999812e+00 2.955493153259999839e-01 1.536396518299999910e-02 1.076059042749999972e-01 4.528386078000000252e-03 5.771042201700000290e-02 2.089353924000000029e-01 3.838713111899999531e-02 1.516738209999999925e-03 2.749390776000000189e-02 7.489460211599999195e-02 5.755720703199999899e-02 2.849977133999999964e-03 8.789311079999998985e-03 1.454382680399999954e-02
++E 8.211359897000000685e-02 2.036084577000000020e-02 2.273944462399999852e-02 2.781977912400000474e-01 4.526656300000000342e-05 1.683102692969999925e-01 -8.425450013040000075e-01 2.000184043899999944e-02 9.475859754999999690e-03 2.751379604999999728e-03 6.903270512999999664e-03 1.167436342000000155e-01 3.987391984999999819e-03 7.957429220000000010e-04 1.847077235999999845e-02 3.745091168100000284e-02 3.221438941500000264e-02 9.393622320000000582e-04 4.099863734999999697e-03 1.694336599800000051e-02
++G 1.633535186400000006e-01 2.182773067199999736e-02 6.034802416499999989e-02 4.482501415199999922e-02 7.364581305000000334e-03 1.092388455299999998e-02 2.497256134199999852e-02 -5.041456487850000112e-01 6.963224819999999822e-03 5.410766849999999002e-04 4.385424141000000484e-03 1.916268560000000329e-02 3.202536637999999804e-03 3.789666971999999714e-03 8.674162440000000862e-03 1.064821680300000045e-01 6.918570932000000367e-03 3.239612405999999899e-03 1.867561244999999892e-03 5.303644046999999966e-03
++H 2.837346662799999919e-02 1.357464865409999943e-01 1.892842835259999912e-01 4.918525192800000251e-02 8.286704791000000514e-03 1.962321583349999898e-01 3.034394526600000044e-02 1.785955810799999890e-02 -1.093246453866999923e+00 6.767778474000000176e-03 3.629505467699999793e-02 4.504325440000000319e-02 1.015517487199999944e-02 2.885584397800000298e-02 2.240979804000000492e-02 6.058576436400000403e-02 3.113356919399999645e-02 7.204053563999999674e-03 1.812549152700000110e-01 8.229391911000000226e-03
++I 1.184645877999999930e-02 7.104003530999999406e-03 8.038721430999999987e-03 5.671258799999999824e-04 4.147951498999999723e-03 2.970039017999999767e-03 3.168754289999999897e-03 4.991185849999999402e-04 2.434057110000000315e-03 -1.415001896134000070e+00 4.106973834270000179e-01 1.027585739999999949e-02 9.808355425699999408e-02 4.707057755400000099e-02 3.447495240000000415e-03 3.923033684999999680e-03 5.508485009300000124e-02 1.347289559999999926e-03 7.941823064999999071e-03 7.363538017290000015e-01
++L 3.125771524200000179e-02 1.688567896800000079e-02 2.872360179000000169e-03 7.998119520000000890e-04 7.684668558999999469e-03 2.374502451899999922e-02 4.987611377999999658e-03 2.537792957000000165e-03 8.189016534999999514e-03 2.576449295189999766e-01 -7.937553314879999267e-01 8.882500000000001505e-03 1.448749284579999852e-01 1.096760569840000005e-01 1.096860240000000104e-02 1.115541753899999995e-02 1.614255063199999951e-02 7.476479712000000041e-03 1.023447744000000048e-02 1.177397085149999995e-01
++K 4.242033218800000255e-02 3.538865140470000004e-01 9.004393920599999823e-02 1.501154086800000204e-02 1.716222419999999997e-04 1.318524634979999777e-01 1.293685727220000026e-01 1.700821833199999897e-02 1.558733671999999910e-02 9.887251832999998519e-03 1.362363750000000068e-02 -9.764443458579999957e-01 1.506971840399999943e-02 1.011779235999999901e-03 1.718978088000000168e-02 4.581715355100000192e-02 6.058001868099999881e-02 6.021657959999999555e-04 4.506137459999999366e-03 1.280616269400000097e-02
++M 8.887295130999998960e-02 2.708288415299999613e-02 1.557363490800000097e-02 1.355372496000000057e-03 1.156153816000000077e-02 6.818562042299999848e-02 1.243699371000000012e-02 8.000690305999999183e-03 9.891461560000000194e-03 2.656345902989999952e-01 6.254347429979999484e-01 4.241661840000000155e-02 -1.541961389976999719e+00 7.609507960599999621e-02 4.397349959999999683e-03 2.123291111999999967e-02 1.076592430420000024e-01 8.400047549999999433e-03 1.643900642999999995e-02 1.312906535460000024e-01
++F 2.005912326600000142e-02 2.949321401999999669e-03 3.757990924999999888e-03 9.239536320000001123e-04 1.429863218700000091e-02 1.461700784999999921e-03 1.346604246000000045e-03 5.136592481999999529e-03 1.524921734500000146e-02 6.916377213900000431e-02 2.568865160520000246e-01 1.545102800000000077e-03 4.128547520300000079e-02 -8.106181028510001108e-01 4.160194560000000236e-03 2.214223734300000204e-02 8.792408286999999975e-03 2.964762198599999940e-02 2.665422728099999805e-01 4.526936540100000295e-02
++P 9.311215396599999139e-02 1.860222855300000186e-02 6.791332898999999194e-03 2.092667971200000074e-02 9.752169340000000578e-04 2.545059349799999940e-02 3.002381267399999859e-02 1.129315285699999949e-02 1.137536410500000067e-02 4.865712117000000302e-03 2.467711386000000229e-02 2.521480120000000116e-02 2.291634398999999565e-03 3.996016128000000160e-03 -4.166480295299999637e-01 8.188966400400000956e-02 3.045181531600000061e-02 1.147850645999999976e-03 3.060732014999999542e-03 2.050215464700000031e-02
++S 3.737593720119999907e-01 4.800582509100000117e-02 1.682588437660000047e-01 6.579906929999999876e-02 3.602279188600000098e-02 4.989179607599999317e-02 4.380869917799999624e-02 9.976580662999999516e-02 2.213171825999999884e-02 3.984574484999999638e-03 1.806117824700000096e-02 4.836492180000000196e-02 7.963078959999999804e-03 1.530566733799999975e-02 5.893133328000000476e-02 -1.428428380301999923e+00 3.448883310730000429e-01 3.002768892000000182e-03 1.368068278499999860e-02 6.801921243000000165e-03
++T 1.691617860659999917e-01 3.238911176700000338e-02 8.398250238299999337e-02 2.259272472000000212e-02 1.479320076000000157e-02 4.403390431199999400e-02 4.327695837000000018e-02 7.444406732000000311e-03 1.306117700999999930e-02 6.425411502299999134e-02 3.001520181599999851e-02 7.344134979999999979e-02 4.636942006599999860e-02 6.979872302000000341e-03 2.516745072000000152e-02 3.960840579630000025e-01 -1.234447694840999921e+00 1.699194450000000162e-03 8.396699355000000406e-03 1.513045612260000006e-01
++W 1.428857032199999828e-02 3.320696918700000166e-02 1.904748352000000056e-03 1.585724280000000127e-03 8.669445935999999311e-03 9.629124632999998962e-03 5.573113271999999979e-03 1.539446846699999913e-02 1.334714216999999953e-02 6.940450619999999175e-03 6.139375819199999890e-02 3.223927600000000334e-03 1.597791242500000083e-02 1.039411325419999921e-01 4.189569239999999667e-03 1.522960781400000026e-02 7.504141775000000569e-03 -4.427540961220000071e-01 1.076502413249999929e-01 1.310404797000000107e-02
++Y 1.731221229399999839e-02 1.759008804000000009e-02 2.569097342500000283e-02 7.167696564000000659e-03 1.507848748400000133e-02 1.049081671199999892e-02 8.592968681999999317e-03 3.135129822999999701e-03 1.186342740700000037e-01 1.445293211099999905e-02 2.968942348800000450e-02 8.522807199999999500e-03 1.104645400599999980e-02 3.301206624040000093e-01 3.946556520000000026e-03 2.451227475899999883e-02 1.310012936700000012e-02 3.802979978999999899e-02 -7.143529327500000026e-01 1.723924601099999926e-02
++V 2.014498894200000001e-01 9.559589667000000651e-03 3.512971175999999879e-03 2.014225284000000296e-03 2.534734766699999961e-02 8.574604643999998721e-03 1.754100392400000097e-02 4.397805237000000644e-03 2.660535615000000041e-03 6.619165437990000012e-01 1.687096773450000031e-01 1.196404920000000184e-02 4.357747681799999800e-02 2.769440026600000077e-02 1.305790404000000196e-02 6.019887693000000074e-03 1.166003753459999986e-01 2.286627660000000242e-03 8.515285515000000152e-03 -1.335400200315999930e+00
+diff --git a/proteingym/baselines/SiteRM/lg_with_gaps.txt b/proteingym/baselines/SiteRM/lg_with_gaps.txt
+new file mode 100644
+index 0000000..d31c569
+--- /dev/null
++++ b/proteingym/baselines/SiteRM/lg_with_gaps.txt
+@@ -0,0 +1,22 @@
++	A	R	N	D	C	Q	E	G	H	I	L	K	M	F	P	S	T	W	Y	V	-
++A	-1.2603289	0.024911068	0.008703393	0.02694004	0.037233427	0.042584304	0.07935159	0.14022306	0.008579188	0.004288332	0.03913164	0.036495242	0.028871473	0.011683773	0.059664156	0.34041047	0.14048977	0.0021444885	0.0077247857	0.21363927	0.0072594755
++R	0.03639267	-0.9848629	0.03294917	0.007294665	0.009495974	0.12292714	0.02902484	0.028948875	0.06409377	0.009625886	0.036849316	0.44090188	0.011952992	0.00034298352	0.01713362	0.0581238	0.03605081	0.00816462	0.011742033	0.012262451	0.010585508
++N	0.016757024	0.043424144	-1.3219106	0.28970677	0.007705753	0.07698689	0.041259766	0.08861297	0.11129994	0.016679525	0.0042774547	0.15770392	0.011881906	0.0029639117	0.005202943	0.2791801	0.122551434	0.000562007	0.02413008	0.006644085	0.014379938
++D	0.041217837	0.0076396023	0.23021694	-0.96433747	0.0005083435	0.026445016	0.40279448	0.05679109	0.025739465	0.00055634306	0.000677962	0.021858014	0.0001526357	2.0848584e-05	0.017121773	0.08311297	0.027999435	0.00036717	0.0068495288	0.0016199094	0.01264818
++C	0.2402964	0.041950025	0.025829798	0.0021442953	-1.1160882	0.0058475174	9.417805e-06	0.044365667	0.01926729	0.03324726	0.07033221	2.64428e-05	0.02538466	0.05991657	0.0023583649	0.23052856	0.07384927	0.010053557	0.054026607	0.16140716	0.015247008
++Q	0.08684132	0.17159441	0.08154274	0.03524794	0.0018477114	-1.4012274	0.30833966	0.018365432	0.13106991	0.0017466736	0.071355075	0.22996996	0.046788387	0.00036951664	0.034969557	0.07984888	0.059995804	0.003606637	0.010611426	0.017624503	0.009491837
++E	0.0933264	0.023366688	0.025203874	0.30963168	1.7162648e-06	0.17782849	-0.9444648	0.026450524	0.010967809	0.0009574886	0.008074823	0.12607911	0.0046788044	2.9147928e-05	0.018462619	0.039995603	0.038061436	0.0008631009	0.004644532	0.025265293	0.010575651
++G	0.19735318	0.027889121	0.06477593	0.052241772	0.009675143	0.012675027	0.03165265	-0.6122117	0.008865438	0.001362564	0.0042383876	0.021546839	0.0035547568	0.003609953	0.0075411927	0.12661123	0.005842761	0.00357115	0.0017191073	0.0052084615	0.022277066
++H	0.031227713	0.15969387	0.21041687	0.061235964	0.010866768	0.23394841	0.033944152	0.022928175	-1.272425	0.007477499	0.042653475	0.047536492	0.008288146	0.04007701	0.027358586	0.066698834	0.035406545	0.0075504887	0.20378673	0.009833814	0.011495515
++I	0.0058008875	0.008913026	0.011718753	0.0004918829	0.0069686333	0.0011586196	0.0011012624	0.0013095989	0.0027788712	-1.7078549	0.47439674	0.013614603	0.12899333	0.057868913	0.0025730662	0.0023612545	0.07683257	0.0010813307	0.009066657	0.89435273	0.0064721103
++L	0.032817855	0.021153878	0.0018631988	0.0003716212	0.009139493	0.029344728	0.0057579284	0.0025255627	0.00982749	0.29411542	-0.94694436	0.010264243	0.17438878	0.12992898	0.013686197	0.016968288	0.016973821	0.00923499	0.011160193	0.14809638	0.009325398
++K	0.047383673	0.39184368	0.10634732	0.018548815	5.319681e-06	0.14641535	0.13918316	0.01987702	0.016956085	0.013067467	0.015890487	-1.1086227	0.02135236	0.00057199085	0.01690649	0.051470082	0.071809396	0.0006576123	0.0060921754	0.01286037	0.011383795
++M	0.104056574	0.029488701	0.022242231	0.00035955865	0.01417613	0.08269167	0.014337935	0.009103026	0.008206613	0.34368598	0.74944025	0.05927261	-1.886624	0.08974354	0.0025318693	0.020329403	0.1395269	0.0099410545	0.018101582	0.16232252	0.0070658335
++F	0.023117855	0.00046453255	0.0030459403	2.696212e-05	0.01836949	0.00035852674	4.903693e-05	0.005075061	0.02178541	0.08464547	0.30654082	0.00087168807	0.04926824	-0.9774485	0.003609598	0.031486973	0.007115493	0.034918297	0.32083744	0.05553917	0.010322489
++P	0.11771907	0.02313987	0.005331802	0.022079797	0.0007209913	0.03383347	0.030972607	0.010571795	0.014829721	0.003752997	0.032198377	0.025691789	0.0013860344	0.00359938	-0.5141991	0.101493284	0.037122753	0.0011665294	0.002876505	0.02452828	0.021184003
++S	0.44425115	0.0519228	0.18923512	0.07089367	0.04661612	0.051099606	0.04438018	0.117401384	0.023913873	0.0022780455	0.026404716	0.051735427	0.0073612174	0.020767877	0.067132	-1.6505909	0.39764348	0.0034094271	0.01581725	0.0032138245	0.015113878
++T	0.21409452	0.03760576	0.096999824	0.02788837	0.017437845	0.044833723	0.049317066	0.006326366	0.014823489	0.086556606	0.030843126	0.084284894	0.05899541	0.0054802634	0.028672645	0.46433252	-1.4705262	0.0019260749	0.009356408	0.17877844	0.0119728455
++W	0.01477242	0.03849837	0.002010765	0.0016531342	0.010730832	0.012182976	0.005055227	0.017478786	0.014289236	0.0055065607	0.075854644	0.0034890356	0.01900027	0.12156722	0.0040727733	0.017996319	0.008706432	-0.52080846	0.11925627	0.0143573545	0.014329833
++Y	0.01897374	0.019741869	0.030783424	0.01099614	0.020561744	0.012780957	0.00969973	0.0030001625	0.13751449	0.016462952	0.032685574	0.011525148	0.012336229	0.39827874	0.003580951	0.029769523	0.015080467	0.042522606	-0.8558117	0.018211199	0.0113060605
++V	0.25707376	0.010100257	0.004152441	0.0012740322	0.030094361	0.0103996005	0.0258495	0.004453089	0.0032509076	0.7955719	0.21249022	0.0119189415	0.054194454	0.03377626	0.014959272	0.002963283	0.14116627	0.0025079746	0.008921721	-1.6334519	0.00833369
++-	0.049518626	0.04942578	0.050946224	0.056390308	0.016115127	0.031749487	0.061336868	0.107968405	0.021542586	0.032636475	0.075848795	0.059807822	0.013372919	0.035586342	0.073238276	0.07899756	0.053591985	0.01418981	0.031398445	0.047241542	-0.9609034
+diff --git a/proteingym/constants.json b/proteingym/constants.json
+index 731684c..f292b3f 100644
+--- a/proteingym/constants.json
++++ b/proteingym/constants.json
+@@ -77,7 +77,8 @@
+         "ProSST-4096": "ProSST (K=4096)",
+         "ESCOTT": "ESCOTT",
+         "VenusREM": "VenusREM",
+-        "RSALOR": "RSALOR model"
++        "RSALOR": "RSALOR model",
++        "SiteRM": "SiteRM"
+     },
+     "model_references":{
+         "Tranception_L_no_retrieval":"<a href='https://proceedings.mlr.press/v162/notin22a.html'>Notin, P., Dias, M., Frazer, J., Marchena-Hurtado, J., Gomez, A.N., Marks, D.S., & Gal, Y. (2022). Tranception: Protein Fitness Prediction with Autoregressive Transformers and Inference-time Retrieval. ICML.</a>",
+@@ -157,7 +158,8 @@
+         "ProSST-4096": "<a href='https://www.biorxiv.org/content/10.1101/2024.04.15.589672v3'>Mingchen Li, Yang Tan, Xinzhu Ma, Bozitao Zhong, Ziyi Zhou, Huiqun Yu, Wanli Ouyang, Liang Hong, Bingxin Zhou, Pan Tan. (2024). ProSST: Protein language modeling with quantizied structure and disentangled attention. bioRxiv.</a>",
+         "ESCOTT": "<a href='https://www.medrxiv.org/content/10.1101/2024.02.03.24302219v1'>Mustafa Tekpinar, Laurent David, Thomas Henry, Alessandra Carbone. (2024). PRESCOTT: a population aware, epistatic and structural model accurately predicts missense effect. medRxiv.</a>",
+         "VenusREM": "<a href='https://arxiv.org/abs/2410.21127'>Yang Tan, Ruilin Wang, Banghao Wu, Liang Hong, Bingxin Zhou. (2024). Retrieval-Enhanced Mutation Mastery: Augmenting Zero-Shot Prediction of Protein Language Model. ArXiv, abs/2410.21127.</a>",
+-        "RSALOR": "<a href='https://www.biorxiv.org/content/10.1101/2025.02.03.636212v1'>Matsvei Tsishyn, Pauline Hermans, Fabrizio Pucci, Marianne Rooman. (2025). Residue conservation and solvent accessibility are (almost) all you need for predicting mutational effects in proteins. bioRxiv.</a>"
++        "RSALOR": "<a href='https://www.biorxiv.org/content/10.1101/2025.02.03.636212v1'>Matsvei Tsishyn, Pauline Hermans, Fabrizio Pucci, Marianne Rooman. (2025). Residue conservation and solvent accessibility are (almost) all you need for predicting mutational effects in proteins. bioRxiv.</a>",
++        "SiteRM": "<a href='https://papers.nips.cc/paper_files/paper/2024/hash/eb2f4fb51ac3b8dc4aac9cf71b0e7799-Abstract-Conference.html'>Sebastian Prillo, Wilson Wu, Yun Song. (2024). Ultrafast classical phylogenetic method beats large protein language models on variant effect prediction. NeurIPS.</a>"
+     },
+     "clean_names":{
+         "Tranception_L_no_retrieval":"Tranception L no retrieval",
+@@ -243,7 +245,8 @@
+         "ProSST-4096": "ProSST (K=4096)",
+         "ESCOTT": "ESCOTT",
+         "VenusREM": "VenusREM",
+-        "RSALOR": "RSALOR"
++        "RSALOR": "RSALOR",
++        "SiteRM": "SiteRM"
+     },
+     "supervised_model_details": {
+         "ProteinNPT":"ProteinNPT Model",
+diff --git a/scripts/scoring_DMS_zero_shot/scoring_SiteRM_substitutions.sh b/scripts/scoring_DMS_zero_shot/scoring_SiteRM_substitutions.sh
+new file mode 100644
+index 0000000..e987b9d
+--- /dev/null
++++ b/scripts/scoring_DMS_zero_shot/scoring_SiteRM_substitutions.sh
+@@ -0,0 +1,31 @@
++#!/bin/bash 
++
++source ../zero_shot_config.sh
++source activate proteingym_env
++
++subsample_n_sequences=100000000
++export tree_estimation_rate_matrix_path="proteingym/baselines/SiteRM/lg.txt"
++export regularization_rate_matrix_path="proteingym/baselines/SiteRM/lg_with_gaps.txt"
++regularization_strength=0.5
++evolutionary_time=1.0
++num_processes=8
++device="cpu"
++
++export output_scores_folder="${DMS_output_score_folder_subs}/SiteRM"
++
++n=216
++DMS_indices=$(seq 0 $n | tr '\n' ' ' | sed 's/ $//')
++cd ../..
++python -m proteingym.baselines.SiteRM.compute_fitness \
++            --regularization_strength ${regularization_strength} \
++            --subsample_n_sequences ${subsample_n_sequences} \
++            --DMS_indices ${DMS_indices} \
++            --output_scores_folder ${output_scores_folder} \
++            --evolutionary_time ${evolutionary_time} \
++            --num_processes ${num_processes} \
++            --regularization_rate_matrix_path ${regularization_rate_matrix_path} \
++            --tree_estimation_rate_matrix_path ${tree_estimation_rate_matrix_path} \
++            --DMS_reference_file_path ${DMS_reference_file_path_subs} \
++            --DMS_data_folder ${DMS_data_folder_subs} \
++            --DMS_MSA_data_folder ${DMS_MSA_data_folder} \
++            --device ${device}
+diff --git a/scripts/scoring_clinical_zero_shot/scoring_SiteRM_substitutions.sh b/scripts/scoring_clinical_zero_shot/scoring_SiteRM_substitutions.sh
+new file mode 100644
+index 0000000..552ba72
+--- /dev/null
++++ b/scripts/scoring_clinical_zero_shot/scoring_SiteRM_substitutions.sh
+@@ -0,0 +1,32 @@
++#!/bin/bash 
++
++source ../zero_shot_config.sh
++source activate proteingym_env
++
++subsample_n_sequences=100000000
++export tree_estimation_rate_matrix_path="proteingym/baselines/SiteRM/lg.txt"
++export regularization_rate_matrix_path="proteingym/baselines/SiteRM/lg_with_gaps.txt"
++regularization_strength=0.5
++evolutionary_time=1.0
++num_processes=8
++device="cpu"
++
++export output_scores_folder="${clinical_output_score_folder_subs}/SiteRM"
++
++n=2524
++DMS_indices=$(seq 0 $n | tr '\n' ' ' | sed 's/ $//')
++cd ../..
++python -m proteingym.baselines.SiteRM.compute_fitness \
++            --regularization_strength ${regularization_strength} \
++            --subsample_n_sequences ${subsample_n_sequences} \
++            --DMS_indices ${DMS_indices} \
++            --output_scores_folder ${output_scores_folder} \
++            --evolutionary_time ${evolutionary_time} \
++            --num_processes ${num_processes} \
++            --regularization_rate_matrix_path ${regularization_rate_matrix_path} \
++            --tree_estimation_rate_matrix_path ${tree_estimation_rate_matrix_path} \
++            --clinical_reference_file_path ${clinical_reference_file_path_subs} \
++            --clinical_data_folder ${clinical_data_folder_subs} \
++            --clinical_MSA_data_folder ${clinical_MSA_data_folder_subs} \
++            --device ${device} \
++            --clinical

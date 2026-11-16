@@ -1,0 +1,441 @@
+diff --git a/rdock-utils/pyproject.toml b/rdock-utils/pyproject.toml
+index 5a77585..36616a9 100644
+--- a/rdock-utils/pyproject.toml
++++ b/rdock-utils/pyproject.toml
+@@ -13,6 +13,7 @@ optional-dependencies = { dev = {file = ["requirements-dev.txt"]} }
+ sdfield = "rdock_utils.sdfield:main"
+ sdrmsd_old = "rdock_utils.sdrmsd_original:main"
+ sdrmsd = "rdock_utils.sdrmsd.main:main"
++sdsplit = "rdock_utils.sdsplit:main"
+ sdtether = "rdock_utils.sdtether.main:main"
+ sdtether_old = "rdock_utils.sdtether_original:main"
+ sdfilter = "rdock_utils.sdfilter.main:main"
+diff --git a/rdock-utils/rdock_utils/sdsplit.py b/rdock-utils/rdock_utils/sdsplit.py
+new file mode 100644
+index 0000000..d430ab4
+--- /dev/null
++++ b/rdock-utils/rdock_utils/sdsplit.py
+@@ -0,0 +1,87 @@
++import argparse
++import itertools
++import logging
++import re
++import sys
++from dataclasses import dataclass
++from typing import Generator, TextIO
++
++from .common import inputs_generator, read_molecules_from_all_inputs
++
++logger = logging.getLogger("SDSplit")
++
++
++def main(argv: list[str] | None = None) -> None:
++    logging.basicConfig(level=logging.WARNING)
++    config = get_config(argv)
++    logging.root.setLevel(config.log_level)
++    inputs = inputs_generator(config.infiles)
++    batched_molecules = itertools.batched(read_molecules_from_all_inputs(inputs), config.record_size)
++    outputs = outputs_generator(config.output_root)
++    for molecule_batch, output in zip(batched_molecules, outputs):
++        for molecule in molecule_batch:
++            molecule.write(output)
++
++
++def get_parser() -> argparse.ArgumentParser:
++    parser = argparse.ArgumentParser(description="Splits SD records into multiple files of equal number of records")
++    infile_help = "input file[s] to be processed. if not provided, stdin is used."
++    parser.add_argument("infiles", type=str, nargs="*", help=infile_help)
++    parser.add_argument(
++        "-r",
++        "--record-size",
++        dest="rec_size",
++        default=1000,
++        type=int,
++        metavar="RecSize",
++        help="Record size to split into (default = 1000 records)",
++    )
++    output_root_help = "Root name for output files (default = tmp)"
++    parser.add_argument("-o", default="tmp", type=str, dest="output_root", metavar="OutputRoot", help=output_root_help)
++    parser.add_argument("-l", "--log-level", type=str, default="INFO")
++    return parser
++
++
++@dataclass
++class SDSplitConfig:
++    infiles: list[str]
++    record_size: int
++    output_root: str
++    log_level: str
++
++
++def get_config(argv: list[str] | None = None) -> SDSplitConfig:
++    parser = get_parser()
++    argv = argv if argv is not None else sys.argv[1:]
++    args = parser.parse_args(sanitize_args(argv))
++    return SDSplitConfig(
++        infiles=args.infiles,
++        record_size=args.rec_size,
++        output_root=args.output_root,
++        log_level=args.log_level,
++    )
++
++
++def outputs_generator(output_root: str) -> Generator[TextIO, None, None]:
++    for file_index in itertools.count():
++        filename = f"{output_root}{file_index}.sd"
++        logger.info(f"Opening {filename}")
++        with open(filename, "w") as f:
++            yield f
++
++
++# This function is just for retrocompatibility with the old -<size> argument
++def sanitize_args(argv: list[str]) -> list[str]:
++    def _replace_invalid_arg(arg: str) -> str:
++        if regex.match(arg):
++            logger.warning("Record size definition as -<size> is deprecated. Use -r <size> instead.")
++            logger.warning(f"Replacing {arg} with -r={arg[1:]}")
++            arg = arg.replace("-", "-r=")
++        return arg
++
++    regex = re.compile(r"-[0-9]+")
++    return [_replace_invalid_arg(arg) for arg in argv]
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/rdock-utils/tests/fixtures/sdsplit/input.sdf b/rdock-utils/tests/fixtures/sdsplit/input.sdf
+new file mode 100644
+index 0000000..38ee158
+--- /dev/null
++++ b/rdock-utils/tests/fixtures/sdsplit/input.sdf
+@@ -0,0 +1,252 @@
++MOL1
++JME 2017-11-16 Fri Jan 26 21:43:27 GMT+100 2024
++
++ 16 17  0  0  0  0  0  0  0  0999 V2000
++    6.2184    0.0000    0.0000 I   0  0  0  0  0  0  0  0  0  0  0  0
++    5.6489    1.2789    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0
++    6.4718    2.4115    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0
++    5.9024    3.6906    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0
++    4.5101    3.8369    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0
++    3.9406    5.1159    0.0000 N   0  0  0  0  0  0  0  0  0  0  0  0
++    4.6406    6.3283    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0
++    6.0329    6.4746    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0
++    3.7039    7.3687    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0
++    2.4250    6.7993    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0
++    1.2124    7.4993    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0
++    4.2566    1.4253    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0
++    0.0000    6.7993    0.0000 O   0  0  0  0  0  0  0  0  0  0  0  0
++    2.5713    5.4070    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0
++    1.5308    4.4701    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0
++    3.6872    2.7043    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0
++  2  1  1  0  0  0  0
++  3  2  2  0  0  0  0
++  4  3  1  0  0  0  0
++  5  4  2  0  0  0  0
++  6  5  1  0  0  0  0
++  7  6  1  0  0  0  0
++  8  7  1  0  0  0  0
++  9  7  2  0  0  0  0
++ 10  9  1  0  0  0  0
++ 11 10  1  0  0  0  0
++ 12  2  1  0  0  0  0
++ 13 11  2  0  0  0  0
++ 14 10  2  0  0  0  0
++ 14  6  1  0  0  0  0
++ 15 14  1  0  0  0  0
++ 16  5  1  0  0  0  0
++ 12 16  2  0  0  0  0
++M  END
++>  <test_field>
++0.0
++
++$$$$
++MOL2
++JME 2017-11-16 Fri Jan 26 21:43:27 GMT+100 2024
++
++ 16 17  0  0  0  0  0  0  0  0999 V2000
++    6.2184    0.0000    0.0000 I   0  0  0  0  0  0  0  0  0  0  0  0
++    5.6489    1.2789    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0
++    6.4718    2.4115    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0
++    5.9024    3.6906    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0
++    4.5101    3.8369    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0
++    3.9406    5.1159    0.0000 N   0  0  0  0  0  0  0  0  0  0  0  0
++    4.6406    6.3283    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0
++    6.0329    6.4746    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0
++    3.7039    7.3687    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0
++    2.4250    6.7993    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0
++    1.2124    7.4993    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0
++    4.2566    1.4253    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0
++    0.0000    6.7993    0.0000 O   0  0  0  0  0  0  0  0  0  0  0  0
++    2.5713    5.4070    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0
++    1.5308    4.4701    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0
++    3.6872    2.7043    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0
++  2  1  1  0  0  0  0
++  3  2  2  0  0  0  0
++  4  3  1  0  0  0  0
++  5  4  2  0  0  0  0
++  6  5  1  0  0  0  0
++  7  6  1  0  0  0  0
++  8  7  1  0  0  0  0
++  9  7  2  0  0  0  0
++ 10  9  1  0  0  0  0
++ 11 10  1  0  0  0  0
++ 12  2  1  0  0  0  0
++ 13 11  2  0  0  0  0
++ 14 10  2  0  0  0  0
++ 14  6  1  0  0  0  0
++ 15 14  1  0  0  0  0
++ 16  5  1  0  0  0  0
++ 12 16  2  0  0  0  0
++M  END
++>  <test_field>
++0.0
++
++$$$$
++MOL3
++JME 2017-11-16 Fri Jan 26 21:43:27 GMT+100 2024
++
++ 16 17  0  0  0  0  0  0  0  0999 V2000
++    6.2184    0.0000    0.0000 I   0  0  0  0  0  0  0  0  0  0  0  0
++    5.6489    1.2789    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0
++    6.4718    2.4115    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0
++    5.9024    3.6906    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0
++    4.5101    3.8369    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0
++    3.9406    5.1159    0.0000 N   0  0  0  0  0  0  0  0  0  0  0  0
++    4.6406    6.3283    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0
++    6.0329    6.4746    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0
++    3.7039    7.3687    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0
++    2.4250    6.7993    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0
++    1.2124    7.4993    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0
++    4.2566    1.4253    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0
++    0.0000    6.7993    0.0000 O   0  0  0  0  0  0  0  0  0  0  0  0
++    2.5713    5.4070    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0
++    1.5308    4.4701    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0
++    3.6872    2.7043    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0
++  2  1  1  0  0  0  0
++  3  2  2  0  0  0  0
++  4  3  1  0  0  0  0
++  5  4  2  0  0  0  0
++  6  5  1  0  0  0  0
++  7  6  1  0  0  0  0
++  8  7  1  0  0  0  0
++  9  7  2  0  0  0  0
++ 10  9  1  0  0  0  0
++ 11 10  1  0  0  0  0
++ 12  2  1  0  0  0  0
++ 13 11  2  0  0  0  0
++ 14 10  2  0  0  0  0
++ 14  6  1  0  0  0  0
++ 15 14  1  0  0  0  0
++ 16  5  1  0  0  0  0
++ 12 16  2  0  0  0  0
++M  END
++>  <test_field>
++2.0
++
++$$$$
++MOL4
++JME 2017-11-16 Fri Jan 26 21:43:27 GMT+100 2024
++
++ 16 17  0  0  0  0  0  0  0  0999 V2000
++    6.2184    0.0000    0.0000 I   0  0  0  0  0  0  0  0  0  0  0  0
++    5.6489    1.2789    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0
++    6.4718    2.4115    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0
++    5.9024    3.6906    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0
++    4.5101    3.8369    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0
++    3.9406    5.1159    0.0000 N   0  0  0  0  0  0  0  0  0  0  0  0
++    4.6406    6.3283    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0
++    6.0329    6.4746    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0
++    3.7039    7.3687    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0
++    2.4250    6.7993    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0
++    1.2124    7.4993    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0
++    4.2566    1.4253    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0
++    0.0000    6.7993    0.0000 O   0  0  0  0  0  0  0  0  0  0  0  0
++    2.5713    5.4070    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0
++    1.5308    4.4701    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0
++    3.6872    2.7043    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0
++  2  1  1  0  0  0  0
++  3  2  2  0  0  0  0
++  4  3  1  0  0  0  0
++  5  4  2  0  0  0  0
++  6  5  1  0  0  0  0
++  7  6  1  0  0  0  0
++  8  7  1  0  0  0  0
++  9  7  2  0  0  0  0
++ 10  9  1  0  0  0  0
++ 11 10  1  0  0  0  0
++ 12  2  1  0  0  0  0
++ 13 11  2  0  0  0  0
++ 14 10  2  0  0  0  0
++ 14  6  1  0  0  0  0
++ 15 14  1  0  0  0  0
++ 16  5  1  0  0  0  0
++ 12 16  2  0  0  0  0
++M  END
++>  <test_field>
++3.0
++
++$$$$
++MOL5
++JME 2017-11-16 Fri Jan 26 21:43:27 GMT+100 2024
++
++ 16 17  0  0  0  0  0  0  0  0999 V2000
++    6.2184    0.0000    0.0000 I   0  0  0  0  0  0  0  0  0  0  0  0
++    5.6489    1.2789    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0
++    6.4718    2.4115    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0
++    5.9024    3.6906    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0
++    4.5101    3.8369    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0
++    3.9406    5.1159    0.0000 N   0  0  0  0  0  0  0  0  0  0  0  0
++    4.6406    6.3283    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0
++    6.0329    6.4746    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0
++    3.7039    7.3687    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0
++    2.4250    6.7993    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0
++    1.2124    7.4993    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0
++    4.2566    1.4253    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0
++    0.0000    6.7993    0.0000 O   0  0  0  0  0  0  0  0  0  0  0  0
++    2.5713    5.4070    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0
++    1.5308    4.4701    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0
++    3.6872    2.7043    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0
++  2  1  1  0  0  0  0
++  3  2  2  0  0  0  0
++  4  3  1  0  0  0  0
++  5  4  2  0  0  0  0
++  6  5  1  0  0  0  0
++  7  6  1  0  0  0  0
++  8  7  1  0  0  0  0
++  9  7  2  0  0  0  0
++ 10  9  1  0  0  0  0
++ 11 10  1  0  0  0  0
++ 12  2  1  0  0  0  0
++ 13 11  2  0  0  0  0
++ 14 10  2  0  0  0  0
++ 14  6  1  0  0  0  0
++ 15 14  1  0  0  0  0
++ 16  5  1  0  0  0  0
++ 12 16  2  0  0  0  0
++M  END
++>  <test_field>
++4.0
++
++$$$$
++MOL6
++JME 2017-11-16 Fri Jan 26 21:43:27 GMT+100 2024
++
++ 16 17  0  0  0  0  0  0  0  0999 V2000
++    6.2184    0.0000    0.0000 I   0  0  0  0  0  0  0  0  0  0  0  0
++    5.6489    1.2789    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0
++    6.4718    2.4115    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0
++    5.9024    3.6906    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0
++    4.5101    3.8369    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0
++    3.9406    5.1159    0.0000 N   0  0  0  0  0  0  0  0  0  0  0  0
++    4.6406    6.3283    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0
++    6.0329    6.4746    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0
++    3.7039    7.3687    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0
++    2.4250    6.7993    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0
++    1.2124    7.4993    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0
++    4.2566    1.4253    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0
++    0.0000    6.7993    0.0000 O   0  0  0  0  0  0  0  0  0  0  0  0
++    2.5713    5.4070    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0
++    1.5308    4.4701    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0
++    3.6872    2.7043    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0
++  2  1  1  0  0  0  0
++  3  2  2  0  0  0  0
++  4  3  1  0  0  0  0
++  5  4  2  0  0  0  0
++  6  5  1  0  0  0  0
++  7  6  1  0  0  0  0
++  8  7  1  0  0  0  0
++  9  7  2  0  0  0  0
++ 10  9  1  0  0  0  0
++ 11 10  1  0  0  0  0
++ 12  2  1  0  0  0  0
++ 13 11  2  0  0  0  0
++ 14 10  2  0  0  0  0
++ 14  6  1  0  0  0  0
++ 15 14  1  0  0  0  0
++ 16  5  1  0  0  0  0
++ 12 16  2  0  0  0  0
++M  END
++>  <test_field>
++0.0
++
++$$$$
+\ No newline at end of file
+diff --git a/rdock-utils/tests/sdfilter/test_integration.py b/rdock-utils/tests/sdfilter/test_integration.py
+index bc077a5..6fc64cf 100644
+--- a/rdock-utils/tests/sdfilter/test_integration.py
++++ b/rdock-utils/tests/sdfilter/test_integration.py
+@@ -36,7 +36,7 @@ def test_do_nothing():
+ def test_basic_run(args: list[str], expected_titles: list[str], capsys: pytest.CaptureFixture):
+     main(args)
+     captured = capsys.readouterr()
+-    input = StringIO(captured.out)
+-    molecules = read_molecules(input)
++    output = StringIO(captured.out)
++    molecules = read_molecules(output)
+     titles = [m.title for m in molecules]
+     assert titles == expected_titles
+diff --git a/rdock-utils/tests/sdsplit/__init__.py b/rdock-utils/tests/sdsplit/__init__.py
+new file mode 100644
+index 0000000..e69de29
+diff --git a/rdock-utils/tests/sdsplit/conftest.py b/rdock-utils/tests/sdsplit/conftest.py
+new file mode 100644
+index 0000000..e8b590c
+--- /dev/null
++++ b/rdock-utils/tests/sdsplit/conftest.py
+@@ -0,0 +1,4 @@
++from ..conftest import FIXTURES_FOLDER
++
++SDSPLIT_FIXTURES_FOLDER = FIXTURES_FOLDER / "sdsplit"
++INPUT_FILE = str(SDSPLIT_FIXTURES_FOLDER / "input.sdf")
+diff --git a/rdock-utils/tests/sdsplit/test_integration.py b/rdock-utils/tests/sdsplit/test_integration.py
+new file mode 100644
+index 0000000..5817e87
+--- /dev/null
++++ b/rdock-utils/tests/sdsplit/test_integration.py
+@@ -0,0 +1,44 @@
++from pathlib import Path
++from unittest import mock
++
++import pytest
++
++from rdock_utils.common import read_molecules
++from rdock_utils.sdsplit import main, sanitize_args
++
++from .conftest import INPUT_FILE
++
++
++@pytest.mark.parametrize(
++    "args, expected_molecule_count",
++    [
++        pytest.param(["-2", INPUT_FILE], [2, 2, 2], id="Deprecated (2 mols per file)"),
++        pytest.param(["-r", "2", INPUT_FILE], [2, 2, 2], id="Non-deprecated (2 mols per file)"),
++        pytest.param(["-r", "3", INPUT_FILE], [3, 3], id="Non-deprecated (3 mols per file)"),
++        pytest.param(["-r", "4", INPUT_FILE], [4, 2], id="Non-deprecated (4 mols per file)"),
++    ],
++)
++def test_basic_run(args: list[str], expected_molecule_count: list[int], tmp_path: Path):
++    output_root = str(tmp_path / "test_")
++    output_args = ["-o", output_root]
++    full_args = output_args + args
++    main(full_args)
++
++    for i, molecule_count in enumerate(expected_molecule_count):
++        current_file = Path(f"{output_root}{i}.sd")
++        assert current_file.is_file()
++        with open(current_file, "r") as f:
++            assert sum(1 for _ in read_molecules(f)) == molecule_count
++
++
++@pytest.mark.parametrize(
++    "args, gives_warning",
++    [
++        pytest.param(["-4"], True, id="Deprecated args"),
++        pytest.param(["-r", "4"], False, id="accepted args"),
++    ],
++)
++@mock.patch("rdock_utils.sdsplit.logger")
++def test_sanitize_args(m_logger: mock.Mock, args: list[str], gives_warning: bool):
++    sanitize_args(args)
++    assert (m_logger.warning.call_count > 0) == gives_warning

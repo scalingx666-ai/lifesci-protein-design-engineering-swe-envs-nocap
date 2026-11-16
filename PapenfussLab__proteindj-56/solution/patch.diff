@@ -1,0 +1,262 @@
+diff --git a/bindsweeper/pyproject.toml b/bindsweeper/pyproject.toml
+index 3f0a9e2..7dc9ba3 100644
+--- a/bindsweeper/pyproject.toml
++++ b/bindsweeper/pyproject.toml
+@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
+ 
+ [project]
+ name = "bindsweeper"
+-version = "3.0.1" 
++version = "3.0.2" 
+ authors = [
+     { name = "Dylan Silke", email = "silke.dy@wehi.edu.au"},
+     { name = "Josh Hardy", email = "hardy.j@wehi.edu.au"}
+diff --git a/bindsweeper/uv.lock b/bindsweeper/uv.lock
+index 862ba1c..4c8dc11 100644
+--- a/bindsweeper/uv.lock
++++ b/bindsweeper/uv.lock
+@@ -10,7 +10,7 @@ resolution-markers = [
+ 
+ [[package]]
+ name = "bindsweeper"
+-version = "3.0.0"
++version = "3.0.2"
+ source = { editable = "." }
+ dependencies = [
+     { name = "click", version = "8.1.8", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+diff --git a/nextflow.config b/nextflow.config
+index 79d4fa6..5f25687 100644
+--- a/nextflow.config
++++ b/nextflow.config
+@@ -850,6 +850,6 @@ manifest {
+     description = 'Nextflow pipeline for protein design using RFdiffusion, BindCraft, ProteinMPNN, FullAtom MPNN, AlphaFold2 Initial-Guess, and Boltz-2.'
+     mainScript = 'main.nf'
+     nextflowVersion = '!>=24.04.0'
+-    version = '3.0.1'
++    version = '3.0.2'
+     doi = '10.1101/2025.09.24.678028'
+ }
+diff --git a/scripts/bump_version.py b/scripts/bump_version.py
+index ee7f54d..dce50cc 100644
+--- a/scripts/bump_version.py
++++ b/scripts/bump_version.py
+@@ -80,6 +80,17 @@ def main() -> None:
+     if changed:
+         print(f"  version → \"{new_full}\"")
+ 
++    # ── bindsweeper/uv.lock ─────────────────────────────────────────────────────
++    uv_lock = root / "bindsweeper" / "uv.lock"
++    print(f"\n[bindsweeper/uv.lock]")
++    changed = replace_in_file(
++        uv_lock,
++        r'(name = "bindsweeper"\nversion = ")[^"]*(")',
++        rf"\g<1>{new_full}\g<2>",
++    )
++    if changed:
++        print(f"  bindsweeper version → \"{new_full}\"")
++
+     # ── apptainer/*.def ────────────────────────────────────────────────────────
+     def_files = sorted((root / "apptainer").glob("*.def"))
+     print(f"\n[apptainer/*.def]  (label Version → {new_major_minor})")
+diff --git a/scripts/metadata_converter.py b/scripts/metadata_converter.py
+index 52a7c47..06c519b 100644
+--- a/scripts/metadata_converter.py
++++ b/scripts/metadata_converter.py
+@@ -38,6 +38,75 @@
+ 
+ class MetadataConverter:
+     """Base class for converting metadata files to JSONL."""
++
++    @staticmethod
++    def _description_priority(record):
++        """Return the authority of a record's structure description.
++
++        Several pipeline stages emit metadata for the same ``(fold_id, seq_id)``.
++        Their descriptions refer to different versions of that design, so a plain
++        ``dict.update`` makes the result depend on channel arrival order.  Analysis
++        metadata is authoritative because it is generated from the structure sent
++        to final filtering.  Prediction-stage descriptions are the fallbacks, with
++        sequence-design names having the lowest priority.
++        """
++        keys = record.keys()
++
++        if any(key.startswith('pr_') for key in keys):
++            return 400
++        if any(key.startswith('boltz_') for key in keys):
++            return 300
++        if any(key.startswith('af2_') for key in keys):
++            return 200
++        if (
++            any(key.startswith(('mpnn_', 'fampnn_', 'seq_')) for key in keys)
++            or 'sequence' in record
++        ):
++            return 100
++        return 0
++
++    @staticmethod
++    def _description_ids(description):
++        """Extract fold/sequence IDs from a supported structure basename."""
++        if not isinstance(description, str):
++            return None
++
++        match = re.match(r'^fold_(\d+)(?:_seq_(\d+))?(?:_.+)?$', description)
++        if not match:
++            return None
++
++        return (
++            int(match.group(1)),
++            int(match.group(2)) if match.group(2) is not None else None,
++        )
++
++    def _merge_fold_seq_record(self, entry, data, key):
++        """Merge metadata while selecting description by semantic precedence."""
++        incoming_description = data.get('description')
++        incoming_priority = self._description_priority(data)
++
++        # Description is handled separately so ordinary metadata merging cannot
++        # accidentally replace the final structure name.
++        entry.update({name: value for name, value in data.items() if name != 'description'})
++
++        if not incoming_description:
++            return
++
++        description_ids = self._description_ids(incoming_description)
++        if description_ids is not None and description_ids != key:
++            logging.warning(
++                "Ignoring description '%s' because its IDs %s do not match metadata key %s",
++                incoming_description,
++                description_ids,
++                key,
++            )
++            return
++
++        current_priority = entry.get('_description_priority', -1)
++        if incoming_priority > current_priority:
++            entry['description'] = incoming_description
++            entry['_description_priority'] = incoming_priority
++
+     def _is_fold_id_present(self, combined_entries, fold_id_to_check):
+         # Iterate through the keys of combined_entries
+         for key in combined_entries.keys():
+@@ -138,11 +207,17 @@ def merge_all(self, metadata_fold_file: str, metadata_fold_seq_file: str, output
+                         if key not in combined_entries:
+                             combined_entries[key] = {}
+                             metadata_fold_seq_count += 1
+-                        combined_entries[key].update(data)
++                        self._merge_fold_seq_record(combined_entries[key], data, key)
+                         
+                         # Fold-only Metadata Merging
+                         if fold_id in metadata_fold_data:
+-                            combined_entries[key].update(metadata_fold_data[fold_id])
++                            # A fold-level description cannot identify the final
++                            # sequence-level structure, so never let it overwrite one.
++                            combined_entries[key].update({
++                                name: value
++                                for name, value in metadata_fold_data[fold_id].items()
++                                if name != 'description'
++                            })
+                             merge_count += 1
+ 
+                     logging.info(f"Processed {metadata_fold_seq_count} fold_id + seq_id metadata entries")
+@@ -162,6 +237,10 @@ def merge_all(self, metadata_fold_file: str, metadata_fold_seq_file: str, output
+                     }
+             logging.info(f"Added {fold_only_count} fold-only entries")
+ 
++            # Internal merge bookkeeping is not part of the published metadata.
++            for entry in combined_entries.values():
++                entry.pop('_description_priority', None)
++
+             # DataFrame Creation
+             logging.info("Creating DataFrame from combined entries")
+             df = pd.DataFrame(list(combined_entries.values()))
+@@ -764,4 +843,4 @@ def main():
+                 print("Conversion to csv failed.")
+ 
+ if __name__ == "__main__":
+-    main()
+\ No newline at end of file
++    main()
+diff --git a/scripts/tests/test_metadata_converter.py b/scripts/tests/test_metadata_converter.py
+index 35b0fe0..44bef24 100644
+--- a/scripts/tests/test_metadata_converter.py
++++ b/scripts/tests/test_metadata_converter.py
+@@ -1,5 +1,6 @@
+ """Tier A unit tests for metadata_converter.py."""
+ import json
++import logging
+ import pickle
+ 
+ import numpy as np
+@@ -306,6 +307,72 @@ def _write_jsonl(path, entries):
+             f.write(json.dumps(entry) + '\n')
+ 
+ class TestMergeAll:
++    @pytest.mark.parametrize("entries", [
++        [
++            {'fold_id': 0, 'seq_id': 1, 'description': 'fold_0_seq_1', 'mpnn_score': 0.5},
++            {'fold_id': 0, 'seq_id': 1, 'description': 'fold_0_seq_1_af2pred', 'af2_iptm': 0.8},
++        ],
++        [
++            {'fold_id': 0, 'seq_id': 1, 'description': 'fold_0_seq_1_af2pred', 'af2_iptm': 0.8},
++            {'fold_id': 0, 'seq_id': 1, 'description': 'fold_0_seq_1', 'mpnn_score': 0.5},
++        ],
++    ])
++    def test_prediction_description_beats_sequence_description_in_any_order(self, tmp_path, entries):
++        fold_file = tmp_path / "fold.jsonl"
++        _write_jsonl(fold_file, [{'fold_id': 0, 'rfd_time': 100}])
++        fold_seq_file = tmp_path / "fold_seq.jsonl"
++        _write_jsonl(fold_seq_file, entries)
++        out_file = tmp_path / "out.csv"
++
++        conv = MetadataConverter()
++        assert conv.merge_all(str(fold_file), str(fold_seq_file), str(out_file)) is True
++
++        row = pd.read_csv(out_file).iloc[0]
++        assert row['description'] == 'fold_0_seq_1_af2pred'
++
++    @pytest.mark.parametrize("entries", [
++        [
++            {'fold_id': 2, 'seq_id': 3, 'description': 'fold_2_seq_3_af2pred', 'af2_iptm': 0.8},
++            {'fold_id': 2, 'seq_id': 3, 'description': 'fold_2_seq_3_boltzpred', 'boltz_ptm': 0.9},
++            {'fold_id': 2, 'seq_id': 3, 'description': 'fold_2_seq_3_boltzpred', 'pr_RoG': 12.0},
++        ],
++        [
++            {'fold_id': 2, 'seq_id': 3, 'description': 'fold_2_seq_3_boltzpred', 'pr_RoG': 12.0},
++            {'fold_id': 2, 'seq_id': 3, 'description': 'fold_2_seq_3_boltzpred', 'boltz_ptm': 0.9},
++            {'fold_id': 2, 'seq_id': 3, 'description': 'fold_2_seq_3_af2pred', 'af2_iptm': 0.8},
++        ],
++    ])
++    def test_analysis_description_is_authoritative_in_any_order(self, tmp_path, entries):
++        fold_file = tmp_path / "fold.jsonl"
++        _write_jsonl(fold_file, [{'fold_id': 2, 'description': 'fold_2'}])
++        fold_seq_file = tmp_path / "fold_seq.jsonl"
++        _write_jsonl(fold_seq_file, entries)
++        out_file = tmp_path / "out.csv"
++
++        conv = MetadataConverter()
++        assert conv.merge_all(str(fold_file), str(fold_seq_file), str(out_file)) is True
++
++        row = pd.read_csv(out_file).iloc[0]
++        assert row['description'] == 'fold_2_seq_3_boltzpred'
++
++    def test_description_with_mismatched_ids_is_ignored(self, tmp_path, caplog):
++        fold_file = tmp_path / "fold.jsonl"
++        _write_jsonl(fold_file, [{'fold_id': 0}])
++        fold_seq_file = tmp_path / "fold_seq.jsonl"
++        _write_jsonl(fold_seq_file, [
++            {'fold_id': 0, 'seq_id': 1, 'description': 'fold_0_seq_1', 'mpnn_score': 0.5},
++            {'fold_id': 0, 'seq_id': 1, 'description': 'fold_9_seq_9_af2pred', 'af2_iptm': 0.8},
++        ])
++        out_file = tmp_path / "out.csv"
++
++        conv = MetadataConverter()
++        with caplog.at_level(logging.WARNING):
++            assert conv.merge_all(str(fold_file), str(fold_seq_file), str(out_file)) is True
++
++        row = pd.read_csv(out_file).iloc[0]
++        assert row['description'] == 'fold_0_seq_1'
++        assert "do not match metadata key" in caplog.text
++
+     def test_merges_fold_only_metadata_into_fold_seq_entries(self, tmp_path):
+         fold_file = tmp_path / "fold.jsonl"
+         _write_jsonl(fold_file, [{'fold_id': 0, 'rfd_time': 100}])

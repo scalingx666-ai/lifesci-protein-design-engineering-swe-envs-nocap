@@ -1,0 +1,1214 @@
+diff --git a/APPLE_SILICON.md b/APPLE_SILICON.md
+index 0be55e5..71ec641 100644
+--- a/APPLE_SILICON.md
++++ b/APPLE_SILICON.md
+@@ -167,6 +167,24 @@ and maintainer build instructions](installation/metaljax/README.md). Future
+ upgrades require a new reviewed source commit, versioned artifact and checksum;
+ installation never follows a moving upstream branch.
+ 
++### Unchunked model preparation
++
++Metal runs unchunked by default to avoid the overhead of ColabDesign's small
++sub-batches on larger jobs. This gave about 3× faster recycles in the 406-residue
++test, using ~27.5 GiB versus ~18 GiB with chunking; the 146-residue ubiquitin
++example uses ~6.9 GiB.
++
++Apple Silicon and CUDA use different chunking defaults. CUDA retains four-residue
++sub-batches above 384 total target-plus-binder residues, while Apple Silicon runs
++unchunked for speed. Consequently, memory requirements grow differently with
++sequence length; CUDA memory figures should not be used directly to estimate Mac
++memory requirements. The ~27.5 GiB unchunked versus ~18 GiB chunked comparison
++measures both policies on the same M5 Max.
++
++Set `FREEBINDCRAFT_METAL_CHUNKING=1` before launching a job to restore chunking
++above 384 total residues when memory is limited. See the
++[chunking policy](installation/colabdesign-metal/README.md) for details.
++
+ ## Verify the installation
+ 
+ Run the Metal alignment tests and native OpenMM/DSSP/ProteinMPNN check:
+diff --git a/README.md b/README.md
+index d235509..03c5f30 100644
+--- a/README.md
++++ b/README.md
+@@ -103,6 +103,13 @@ uses the CPU. Apple Command Line Tools are required; the remaining tools install
+ inside the checkout. See the [Apple Silicon guide](APPLE_SILICON.md) for setup,
+ examples, and tested performance.
+ 
++Apple Silicon disables ColabDesign's size-based chunking by default to avoid
++severe Metal slowdowns: about 3× faster recycles in the tested 406-residue case,
++with higher memory use for larger targets (~27.5 GiB versus ~18 GiB chunked).
++The 76-residue ubiquitin + 70-aa binder example uses ~6.9 GiB. Set
++`FREEBINDCRAFT_METAL_CHUNKING=1` to restore chunking when memory is limited;
++see the [chunking policy](installation/colabdesign-metal/README.md).
++
+ ## Running BindCraft
+ 
+ Activate the Conda environment:
+diff --git a/installation/apply_colabdesign_metal.py b/installation/apply_colabdesign_metal.py
+new file mode 100644
+index 0000000..f948fd1
+--- /dev/null
++++ b/installation/apply_colabdesign_metal.py
+@@ -0,0 +1,120 @@
++#!/usr/bin/env python3
++"""Apply the pinned, checksummed ColabDesign Metal design patch in this venv."""
++import argparse
++import base64
++import csv
++import hashlib
++import importlib.metadata
++import importlib.util
++import json
++import os
++from pathlib import Path
++import shutil
++import subprocess
++import sys
++import tempfile
++
++
++def sha(path):
++    return hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None
++
++
++def apply(package, assets):
++    manifest = json.loads((assets / 'manifest.json').read_text())
++    full_patch = assets / manifest['patch']
++    if sha(full_patch) != manifest['patch_sha256']:
++        raise RuntimeError('ColabDesign patch checksum mismatch; package unchanged')
++    files = manifest['files']
++    before = {name: values['before'] for name, values in files.items()}
++    after = {name: values['after'] for name, values in files.items()}
++    actual = {name: sha(package / name) for name in files}
++    if actual == after:
++        return dict(status='already applied', **manifest)
++    if actual != before:
++        raise RuntimeError('ColabDesign source differs from the exact pinned baseline; package unchanged')
++    patch = full_patch
++    for name, values in files.items():
++        if 'payload' in values and sha(assets / values['payload']) != values['after']:
++            raise RuntimeError('ColabDesign helper checksum mismatch; package unchanged')
++    # Patch and verify a private staging copy before changing the target files.
++    with tempfile.TemporaryDirectory(prefix='fbc-colabdesign-patch-') as temporary:
++        stage = Path(temporary)
++        for name, digest in actual.items():
++            if digest is not None:
++                target = stage / 'colabdesign' / name
++                target.parent.mkdir(parents=True, exist_ok=True)
++                shutil.copyfile(package / name, target)
++        for name, values in files.items():
++            if 'payload' in values:
++                target = stage / 'colabdesign' / name
++                target.parent.mkdir(parents=True, exist_ok=True)
++                shutil.copyfile(assets / values['payload'], target)
++        env = dict(os.environ, GIT_CEILING_DIRECTORIES=str(stage))
++        subprocess.run(['git', 'apply', '--no-index', str(patch)], cwd=stage, env=env, check=True)
++        if {name: sha(stage / 'colabdesign' / name) for name in files} != after:
++            raise RuntimeError('Patched ColabDesign checksum mismatch; package unchanged')
++        for name in sorted(files):
++            target = package / name
++            target.parent.mkdir(parents=True, exist_ok=True)
++            with tempfile.NamedTemporaryFile(dir=target.parent, delete=False) as file:
++                pending = Path(file.name)
++                file.write((stage / 'colabdesign' / name).read_bytes())
++            try:
++                pending.chmod(0o644)
++                pending.replace(target)
++            finally:
++                pending.unlink(missing_ok=True)
++    return dict(status='applied', **manifest)
++
++
++def update_record(package, files):
++    """Let normal package uninstall/reinstall account for the added helpers."""
++    distribution = importlib.metadata.distribution('colabdesign')
++    records = [distribution.locate_file(p) for p in distribution.files
++               if p.name == 'RECORD' and p.parent.name.endswith('.dist-info')]
++    if len(records) != 1 or package.parent not in records[0].resolve().parents:
++        raise RuntimeError('Cannot identify this venv ColabDesign RECORD')
++    record = records[0]
++    rows = {row[0]: row for row in csv.reader(record.read_text().splitlines())}
++    for name in files:
++        path = package / name
++        digest = base64.urlsafe_b64encode(hashlib.sha256(path.read_bytes()).digest()).decode().rstrip('=')
++        relative = 'colabdesign/' + name
++        rows[relative] = [relative, 'sha256=' + digest, str(path.stat().st_size)]
++    with tempfile.NamedTemporaryFile(mode='w', dir=record.parent, newline='', delete=False) as file:
++        pending = Path(file.name)
++        csv.writer(file, lineterminator='\n').writerows(rows[name] for name in sorted(rows))
++    try:
++        pending.chmod(0o644)
++        pending.replace(record)
++    finally:
++        pending.unlink(missing_ok=True)
++
++
++def main():
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument('--report', type=Path)
++    args = parser.parse_args()
++    if sys.prefix == sys.base_prefix:
++        raise RuntimeError('Expected a virtual environment; system package unchanged')
++    spec = importlib.util.find_spec('colabdesign')
++    if spec is None or spec.origin is None:
++        raise RuntimeError('ColabDesign is not installed in this venv')
++    package = Path(spec.origin).resolve().parent
++    if Path(sys.prefix).resolve() not in package.parents:
++        raise RuntimeError('ColabDesign is outside this venv; external package unchanged')
++    assets = Path(__file__).resolve().parent / 'colabdesign-metal'
++    manifest = json.loads((assets / 'manifest.json').read_text())
++    origin = importlib.metadata.distribution('colabdesign').read_text('direct_url.json')
++    revision = json.loads(origin or '{}').get('vcs_info', {}).get('commit_id')
++    if revision != manifest['source_commit']:
++        raise RuntimeError('ColabDesign is not installed from the pinned source revision; package unchanged')
++    result = dict(package=str(package), **apply(package, assets))
++    update_record(package, result['files'])
++    if args.report:
++        args.report.write_text(json.dumps(result, indent=2) + '\n')
++    print('ColabDesign Metal preparation:', result['status'], result['source_commit'])
++
++
++if __name__ == '__main__':
++    main()
+diff --git a/installation/colabdesign-metal/.gitattributes b/installation/colabdesign-metal/.gitattributes
+new file mode 100644
+index 0000000..573d70e
+--- /dev/null
++++ b/installation/colabdesign-metal/.gitattributes
+@@ -0,0 +1,2 @@
++# Preserve literal upstream whitespace inside the patch.
++*.patch whitespace=-blank-at-eol
+diff --git a/installation/colabdesign-metal/README.md b/installation/colabdesign-metal/README.md
+new file mode 100644
+index 0000000..6640957
+--- /dev/null
++++ b/installation/colabdesign-metal/README.md
+@@ -0,0 +1,28 @@
++# Apple Silicon chunking policy
++
++ColabDesign normally uses sub-batches of four for memory-intensive Evoformer
++operations when the target plus binder exceeds 384 residues. This policy saves
++memory on CUDA/NVIDIA, but its many small GPU operations cause severe slowdowns
++with MetalJAX on Apple Silicon.
++
++The Apple installer disables chunking by default and prepares both forward and
++gradient functions with the same configuration. Removing chunking made complete
++AlphaFold recycles **about 3× faster** in our 406-residue M5 Max test, at the cost
++of higher memory use. CPU/CUDA behavior is unchanged.
++
++| Test job | Total residues | Default (unchunked) | Original policy |
++| --- | ---: | ---: | ---: |
++| Ubiquitin (76) + 70-aa binder | 146 | ~6.9 GiB | ~6.9 GiB; already unchunked |
++| CA2 (256) + 150-aa binder | 406 | ~27.5 GiB | ~18 GiB with chunking |
++
++These are measured peak process footprints; leave additional memory for macOS,
++other applications and downstream processing. Memory checks remain enabled.
++
++When memory savings matter more than speed, restore the original chunking policy:
++
++```bash
++FREEBINDCRAFT_METAL_CHUNKING=1 ./run_apple_silicon.sh --interactive
++```
++
++The same environment variable works with your usual job arguments. It enables
++four-residue sub-batches above 384 total residues; smaller jobs remain unchunked.
+diff --git a/installation/colabdesign-metal/manifest.json b/installation/colabdesign-metal/manifest.json
+new file mode 100644
+index 0000000..80d171a
+--- /dev/null
++++ b/installation/colabdesign-metal/manifest.json
+@@ -0,0 +1,17 @@
++{
++  "repository": "https://github.com/sokrypton/ColabDesign.git",
++  "source_commit": "8fd167defd1b0f98e29f00584ff4f3987e6935dc",
++  "patch": "unchunked-preparation.patch",
++  "patch_sha256": "0fa06a1be89bc2c1dec337d7e397b26d0816ec496dbf72f439fcde37cc2e6d3c",
++  "files": {
++    "af/prep.py": {
++      "before": "b2ebf1ccb2c8f8fd0cb65871fbc307f65fc32d582ffe2547f118c1102de6df38",
++      "after": "99b63607fd5b3966a9be4897d5d4c42d17679eb60cd38ad8eb00b027d84a1cbf"
++    },
++    "af/metal_execution_policy.py": {
++      "before": null,
++      "after": "cabe1af51d75fbf5cba9a3f2949b74d258b830e01d27efad2a874e9a953d5676",
++      "payload": "metal_execution_policy.py"
++    }
++  }
++}
+diff --git a/installation/colabdesign-metal/metal_execution_policy.py b/installation/colabdesign-metal/metal_execution_policy.py
+new file mode 100644
+index 0000000..91f1a3a
+--- /dev/null
++++ b/installation/colabdesign-metal/metal_execution_policy.py
+@@ -0,0 +1,365 @@
++"""Metal execution selection and an observable, conservative memory preflight.
++
++Admission combines a necessary score-buffer bound and an empirical working-set
++estimate. The native runtime remains responsible for actual allocations and
++pressure handling; the estimate is not a guarantee.
++"""
++import os
++
++_GIB = 1024 ** 3
++
++
++def select_global_policy(global_config, total_residues, backend):
++    """Apply the global policy before creating the model's final callables."""
++    total_residues = int(total_residues)
++    if total_residues <= 0:
++        raise ValueError('The model must contain at least one residue')
++    chunking = backend != 'metal' or os.environ.get('FREEBINDCRAFT_METAL_CHUNKING') == '1'
++    desired = 4 if chunking and total_residues > 384 else None
++    changed = global_config.subbatch_size != desired
++    global_config.subbatch_size = desired
++    return changed, {
++        'backend': backend,
++        'total_residues': total_residues,
++        'global_subbatch_size': desired,
++    }
++
++
++def assess_metal_memory(total_residues, num_heads, element_bytes, *, total_bytes,
++                        available_bytes, process_bytes=None, device_limit_bytes=None,
++                        device_used_bytes=None, system_claimed_bytes=None,
++                        system_ceiling_bytes=None, process_ceiling_bytes=None,
++                        retained_model_bytes=None, nonreusable_process_bytes=None,
++                        reclaimable_process_cache_bytes=None,
++                        reclaimable_claimed_cache_bytes=None,
++                        reported_device_cache_bytes=None,
++                        rematerialization=True, recycles=None,
++                        recycle_mode='last', model_kind=None):
++    """Estimate incremental headroom without counting retained memory twice.
++
++    Process bytes are macOS physical footprint, not RSS. System claimed bytes
++    use the native governor's wired + internal - purgeable + compressed metric.
++    Retained and reclaimable arguments are *physical bytes already included* in
++    the corresponding measurement, not logical tensor sizes or cache estimates.
++    Unclassified process memory is never credited as reusable: if its unknown
++    ownership is the only reason a limit might be exceeded, the answer is
++    unknown and the live runtime governor makes the actual allocation decision.
++    """
++    total_residues, num_heads, element_bytes = map(int, (total_residues, num_heads, element_bytes))
++    if min(total_residues, num_heads, element_bytes) <= 0:
++        raise ValueError('Positive residue, head and element sizes are required')
++
++    def optional_bytes(value):
++        return max(0, int(value)) if value is not None else None
++
++    total_bytes, available_bytes, process_bytes = map(optional_bytes, (total_bytes, available_bytes, process_bytes))
++    device_limit_bytes, device_used_bytes = map(optional_bytes, (device_limit_bytes, device_used_bytes))
++    system_claimed_bytes, system_ceiling_bytes, process_ceiling_bytes = map(
++        optional_bytes, (system_claimed_bytes, system_ceiling_bytes, process_ceiling_bytes))
++    retained_model_bytes = optional_bytes(retained_model_bytes)
++    nonreusable_process_bytes = optional_bytes(nonreusable_process_bytes)
++    reclaimable_process_cache_bytes = optional_bytes(reclaimable_process_cache_bytes)
++    reclaimable_claimed_cache_bytes = optional_bytes(reclaimable_claimed_cache_bytes)
++    reported_device_cache_bytes = optional_bytes(reported_device_cache_bytes)
++    recycles = int(recycles) if recycles is not None else None
++    score_bytes = total_residues ** 3 * num_heads * element_bytes
++    ratio = total_residues / 406.0
++    scale = max(ratio ** 2, ratio ** 3)
++    dtype_heads = max(1.0, (element_bytes / 2.0) * (num_heads / 4.0))
++    calibrated = bool(rematerialization) and recycle_mode == 'last'
++    estimate = int((6 + 24 * scale * dtype_heads) * _GIB) if calibrated else None
++
++    # Do not invent ownership or exceed the footprint measurement. Only the
++    # supplied, physically verified subset is credited as retained model data.
++    retained = min(process_bytes, retained_model_bytes or 0) if process_bytes is not None else 0
++    remaining = max(0, process_bytes - retained) if process_bytes is not None else None
++    nonreusable = min(remaining, nonreusable_process_bytes or 0) if remaining is not None else 0
++    remaining_after_live = max(0, remaining - nonreusable) if remaining is not None else None
++    cache = min(remaining_after_live, reclaimable_process_cache_bytes or 0) if remaining_after_live is not None else 0
++    unclassified = remaining_after_live - cache if remaining_after_live is not None else None
++    claimed_cache = min(cache, reclaimable_claimed_cache_bytes or 0,
++                        system_claimed_bytes or 0)
++    reserve = max(2 * _GIB, min(8 * _GIB, total_bytes // 10)) if total_bytes else None
++    result = {
++        'status': 'unknown', 'score_tensor_bytes': score_bytes,
++        'total_bytes': total_bytes, 'available_bytes': available_bytes,
++        'process_footprint_bytes': process_bytes, 'system_claimed_bytes': system_claimed_bytes,
++        'retained_model_footprint_bytes': retained_model_bytes,
++        'credited_retained_model_bytes': retained,
++        'known_nonreusable_process_bytes': nonreusable_process_bytes,
++        'reclaimable_process_cache_bytes': reclaimable_process_cache_bytes,
++        'reclaimable_claimed_cache_bytes': reclaimable_claimed_cache_bytes,
++        'unclassified_process_footprint_bytes': unclassified,
++        'reported_device_cache_bytes': reported_device_cache_bytes,
++        'device_limit_bytes': device_limit_bytes, 'device_used_bytes': device_used_bytes,
++        'system_ceiling_bytes': system_ceiling_bytes,
++        'process_ceiling_bytes': process_ceiling_bytes,
++        'estimated_working_set_bytes': estimate,
++        'reserved_headroom_bytes': reserve,
++        'rematerialization': bool(rematerialization), 'recycles': recycles,
++        'recycle_mode': str(recycle_mode), 'model_kind': model_kind,
++        'measured_reference': {'residues': 406, 'peak_process_footprint_gib': 27.48,
++                               'runtime': 'metaljax 0.11.9+fbc3',
++                               'note': 'Two processes, one BF16 multimer fixture on M5; not a memory guarantee'},
++        'note': ('The estimate includes a safety margin and is not a guarantee; '
++                 'the native runtime guards remain authoritative.'),
++    }
++    if total_bytes and reserve is not None and score_bytes > max(0, total_bytes - reserve):
++        raise MemoryError(f'Unchunked Metal attention needs at least {score_bytes / _GIB:.2f} GiB '
++                          'for one score tensor, exceeding physical memory after system headroom; '
++                          'reduce the target size or use a larger-memory host.')
++    if device_limit_bytes and score_bytes > device_limit_bytes:
++        raise MemoryError(f'Unchunked Metal attention needs at least {score_bytes / _GIB:.2f} GiB '
++                          f'for one score tensor, exceeding the {device_limit_bytes / _GIB:.2f} GiB '
++                          'device limit; reduce the target size or use a larger-memory host.')
++    if process_ceiling_bytes and score_bytes > process_ceiling_bytes:
++        raise MemoryError('One unchunked Metal score tensor exceeds the configured process limit; '
++                          'reduce the target size or use a larger-memory host.')
++
++    # The total process estimate and per-device allocation limit are different
++    # metrics. Do not compare the former against device remaining capacity.
++    # A free-device comparison can be inconclusive when buffers may be reused.
++    uncertain = []
++    if device_limit_bytes and device_used_bytes is not None:
++        if score_bytes > max(0, device_limit_bytes - device_used_bytes):
++            uncertain.append('device buffers may already include reusable storage')
++    if estimate is None:
++        result['note'] = ('Whole-model peak is uncalibrated for this rematerialization '
++                          'or recycle mode; native runtime guards remain authoritative.')
++        result['uncertainty'] = uncertain
++        return result
++
++    # A known retained allocation overlaps the estimate; all other current
++    # footprint remains additive unless separately proven reclaimable. The
++    # optimistic bound below is used only to distinguish refusal from unknown,
++    # never to claim that unclassified memory will actually be available.
++    upper_extra = max(0, estimate - retained)
++    possible_overlap = min(upper_extra, unclassified) if unclassified is not None else upper_extra
++    constraints = []
++    if available_bytes is not None and reserve is not None:
++        constraints.append(('system headroom', available_bytes - reserve, 0, upper_extra, possible_overlap))
++    if system_ceiling_bytes:
++        if system_claimed_bytes is None:
++            uncertain.append('system claimed memory is unavailable')
++        else:
++            system_retained = min(retained, system_claimed_bytes)
++            system_extra = max(0, estimate - system_retained)
++            system_unknown = (min(unclassified, max(0, system_claimed_bytes - system_retained))
++                              if unclassified is not None else system_extra)
++            constraints.append(('system claimed-memory limit',
++                                system_ceiling_bytes - system_claimed_bytes, claimed_cache,
++                                system_extra, min(system_extra, system_unknown)))
++    if process_ceiling_bytes:
++        if process_bytes is None:
++            uncertain.append('process physical footprint is unavailable')
++        else:
++            constraints.append(('process physical-footprint limit',
++                                process_ceiling_bytes - process_bytes, cache, upper_extra, possible_overlap))
++    if not constraints:
++        uncertain.append('no comparable memory headroom is available')
++    headrooms = []
++    violations = []
++    for label, headroom, confirmed_cache, required, unknown_overlap in constraints:
++        extra = required - confirmed_cache
++        optimistic = extra - min(required, unknown_overlap)
++        headrooms.append(headroom)
++        if optimistic > headroom:
++            violations.append((label, optimistic, headroom))
++        elif extra > headroom:
++            uncertain.append(label + ' depends on unclassified live allocations or cache')
++    result['estimated_additional_bytes'] = upper_extra
++    result['possible_unclassified_overlap_bytes'] = possible_overlap
++    result['projected_process_footprint_bytes'] = (
++        process_bytes + upper_extra - cache if process_bytes is not None else None)
++    result['projected_system_claimed_bytes'] = (
++        system_claimed_bytes + max(0, estimate - min(retained, system_claimed_bytes)) - claimed_cache
++        if system_claimed_bytes is not None else None)
++    if headrooms:
++        result['usable_bytes'] = max(0, min(headrooms))
++    result['uncertainty'] = uncertain
++    if violations:
++        label, needed, headroom = violations[0]
++        raise MemoryError(f'The estimated unchunked Metal working set is {estimate / _GIB:.2f} GiB; '
++                          f'at least {max(0, needed) / _GIB:.2f} GiB of additional headroom is estimated '
++                          f'but {label} has {max(0, headroom) / _GIB:.2f} GiB. This estimate includes a '
++                          'safety margin and is not a guarantee; reduce the target size or use a '
++                          'larger-memory host.')
++    result['status'] = 'unknown' if uncertain else 'admitted'
++    return result
++
++
++def _process_physical_footprint():
++    """Return the same process physical-footprint metric used by MetalJAX."""
++    import ctypes
++    import sys
++    if sys.platform != 'darwin':
++        return None
++    class RusageInfoV4(ctypes.Structure):
++        _fields_ = [('ri_uuid', ctypes.c_uint8 * 16)] + [
++            ('ri_' + name, ctypes.c_uint64) for name in (
++                'user_time system_time pkg_idle_wkups interrupt_wkups pageins '
++                'wired_size resident_size phys_footprint proc_start_abstime proc_exit_abstime '
++                'child_user_time child_system_time child_pkg_idle_wkups child_interrupt_wkups '
++                'child_pageins child_elapsed_abstime diskio_bytesread diskio_byteswritten '
++                'cpu_time_qos_default cpu_time_qos_maintenance cpu_time_qos_background '
++                'cpu_time_qos_utility cpu_time_qos_legacy cpu_time_qos_user_initiated '
++                'cpu_time_qos_user_interactive billed_system_time serviced_system_time '
++                'logical_writes lifetime_max_phys_footprint instructions cycles billed_energy '
++                'serviced_energy interval_max_phys_footprint runnable_time').split()]
++    try:
++        lib = ctypes.CDLL('/usr/lib/libproc.dylib', use_errno=True)
++        lib.proc_pid_rusage.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_void_p]
++        lib.proc_pid_rusage.restype = ctypes.c_int
++        usage = RusageInfoV4()
++        if lib.proc_pid_rusage(os.getpid(), 4, ctypes.byref(usage)) == 0:
++            return int(usage.ri_phys_footprint)
++    except (OSError, AttributeError):
++        pass
++    return None
++
++
++def _system_claimed_memory():
++    """Read MetalJAX's host_statistics64 claimed formula via macOS vm_stat."""
++    import re
++    import subprocess
++    import sys
++    if sys.platform != 'darwin':
++        return None
++    try:
++        env = dict(os.environ, LC_ALL='C')
++        output = subprocess.run(['/usr/bin/vm_stat'], check=True, capture_output=True,
++                                text=True, timeout=3, env=env).stdout
++        match = re.search(r'page size of (\d+) bytes', output)
++        pages = {m.group(1): int(m.group(2)) for line in output.splitlines()
++                 if (m := re.match(r'^([^:]+):\s*(\d+)\.', line))}
++        names = ('Pages wired down', 'Anonymous pages', 'Pages purgeable',
++                 'Pages occupied by compressor')
++        if not match or not all(name in pages for name in names):
++            return None
++        return int(match.group(1)) * (pages[names[0]] + max(0, pages[names[1]] - pages[names[2]]) + pages[names[3]])
++    except (OSError, subprocess.SubprocessError, ValueError):
++        return None
++
++
++def _verified_retained_model_pages(model_params):
++    """Count only fully covered, resident, dirty anonymous model buffer pages.
++
++    Called only for an already prepared model. JAX's Metal external reference
++    may settle an array, so a first preparation never probes model buffers.
++    Overlapping ranges are merged; incomplete pages and any failed queries
++    receive no credit. This intentionally does not count a logical array size as
++    a resident allocation or claim unrelated process memory as reusable.
++    """
++    import ctypes
++    import sys
++    if model_params is None or sys.platform != 'darwin':
++        return None, {'source': 'unavailable or first preparation'}
++    try:
++        import jax
++        import numpy as np
++        page = int(os.sysconf('SC_PAGE_SIZE'))
++        lib = ctypes.CDLL(None, use_errno=True)
++        task = ctypes.c_uint.in_dll(lib, 'mach_task_self_').value
++        query = lib.mach_vm_page_range_query
++        query.argtypes = [ctypes.c_uint, ctypes.c_uint64, ctypes.c_uint64,
++                          ctypes.c_uint64, ctypes.POINTER(ctypes.c_uint64)]
++        query.restype = ctypes.c_int
++    except (ImportError, AttributeError, OSError, ValueError):
++        return None, {'source': 'resident-page query unavailable'}
++    stack, seen, ranges, failures = [model_params], set(), [], 0
++    checked = 0
++    while stack:
++        value = stack.pop()
++        if id(value) in seen:
++            continue
++        seen.add(id(value))
++        if isinstance(value, dict):
++            stack.extend(value.values())
++            continue
++        if isinstance(value, (list, tuple)):
++            stack.extend(value)
++            continue
++        try:
++            if isinstance(value, np.ndarray):
++                if not value.flags.owndata or not value.flags.c_contiguous or value.dtype.hasobject or isinstance(value, np.memmap):
++                    continue
++                ptr, size = int(value.ctypes.data), int(value.nbytes)
++            elif isinstance(value, jax.Array):
++                device = value.device
++                if callable(device):
++                    device = device()
++                if getattr(device, 'platform', None) != 'metal' or not value.is_fully_addressable:
++                    continue
++                ptr, size = int(value.unsafe_buffer_pointer()), int(value.nbytes)
++            else:
++                continue
++            checked += 1
++            start = ((ptr + page - 1) // page) * page
++            end = ((ptr + size) // page) * page
++            if start < end:
++                ranges.append((start, end))
++        except (AttributeError, RuntimeError, ValueError, TypeError):
++            failures += 1
++    merged = []
++    for start, end in sorted(ranges):
++        if merged and start <= merged[-1][1]:
++            merged[-1] = (merged[-1][0], max(end, merged[-1][1]))
++        else:
++            merged.append((start, end))
++    good_pages = queried_pages = 0
++    # Exclude pages that could belong to an external mapping or cache, or have
++    # been paged out; only resident dirty private-like model pages are counted.
++    excluded = 0x0002 | 0x0010 | 0x0020 | 0x0040 | 0x0080 | 0x0800
++    for start, end in merged:
++        while start < end:
++            count = min((end - start) // page, 16384)
++            flags = (ctypes.c_int * count)()
++            returned = ctypes.c_uint64(count)
++            if query(task, start, count * page, ctypes.addressof(flags), ctypes.byref(returned)) == 0:
++                n = min(count, int(returned.value))
++                queried_pages += n
++                good_pages += sum((f & 0x0009) == 0x0009 and not (f & excluded) for f in flags[:n])
++            else:
++                failures += 1
++            start += count * page
++    return good_pages * page, {
++        'source': 'resident dirty anonymous full pages of retained model buffers',
++        'buffers_checked': checked, 'pages_queried': queried_pages,
++        'pages_credited': good_pages, 'query_failures': failures,
++    }
++
++
++def current_metal_memory(total_residues, num_heads, element_bytes, *,
++                         device_limit_bytes=None, device_used_bytes=None,
++                         reported_device_cache_bytes=None, model_params=None,
++                         rematerialization=True, recycles=None, recycle_mode='last', model_kind=None):
++    # Probe retained pages before the memory samples, so any settling of model
++    # arrays is included in the footprint and available-memory measurements.
++    retained, evidence = _verified_retained_model_pages(model_params)
++    try:
++        import psutil
++        memory = psutil.virtual_memory()
++        total, available = memory.total, memory.available
++    except (ImportError, OSError, AttributeError):
++        total, available = None, None
++    process, claimed = _process_physical_footprint(), _system_claimed_memory()
++
++    def ceiling(name):
++        value = os.environ.get(name)
++        try:
++            mb = int(value) if value else 0
++        except ValueError:
++            return None
++        return mb * 1024 ** 2 if mb > 0 else None
++
++    result = assess_metal_memory(
++        total_residues, num_heads, element_bytes, total_bytes=total,
++        available_bytes=available, process_bytes=process, system_claimed_bytes=claimed,
++        retained_model_bytes=retained, reported_device_cache_bytes=reported_device_cache_bytes,
++        device_limit_bytes=device_limit_bytes, device_used_bytes=device_used_bytes,
++        system_ceiling_bytes=ceiling('METALJAX_MEM_SYS_MB'),
++        process_ceiling_bytes=ceiling('METALJAX_MEM_BUDGET_MB'),
++        rematerialization=rematerialization, recycles=recycles,
++        recycle_mode=recycle_mode, model_kind=model_kind)
++    result['retained_model_measurement'] = evidence
++    return result
+diff --git a/installation/colabdesign-metal/unchunked-preparation.patch b/installation/colabdesign-metal/unchunked-preparation.patch
+new file mode 100644
+index 0000000..3ebc43a
+--- /dev/null
++++ b/installation/colabdesign-metal/unchunked-preparation.patch
+@@ -0,0 +1,76 @@
++--- a/colabdesign/af/prep.py
+++++ b/colabdesign/af/prep.py
++@@ -23,16 +23,64 @@
++ class _af_prep:
++ 
++   def _prep_model(self, **kwargs):
++-    '''prep model'''
++-    if not hasattr(self,"_model") or self._cfg != self._model["runner"].config:
++-      self._cfg.model.global_config.subbatch_size = None
++-      self._model = self._get_model(self._cfg)
++-      if sum(self._lengths) > 384:
++-        self._cfg.model.global_config.subbatch_size = 4
++-        self._model["fn"] = self._get_model(self._cfg)["fn"]
++-
++-    self._opt = copy_dict(self.opt)  
+++    """Select the Metal chunking policy before tracing either callable."""
+++    backend = jax.default_backend()
+++    if backend == "metal":
+++      import copy
+++      from colabdesign.af.metal_execution_policy import select_global_policy, current_metal_memory
+++      # The runner may alias self._cfg. Commit a private configuration only
+++      # after memory admission and construction of both callables succeed.
+++      cfg = copy.deepcopy(self._cfg)
+++      global_config = cfg.model.global_config
+++      total_residues = sum(self._lengths)
+++      changed, policy = select_global_policy(global_config, total_residues, backend)
+++      if global_config.subbatch_size is None:
+++        heads = cfg.model.embeddings_and_evoformer.evoformer.triangle_attention_starting_node.num_head
+++        try:
+++          stats = jax.devices()[0].memory_stats() or {}
+++        except (AttributeError, NotImplementedError, RuntimeError):
+++          stats = {}
+++        memory = current_metal_memory(
+++            total_residues, heads, 2 if global_config.bfloat16 else 4,
+++            device_limit_bytes=stats.get("bytes_limit"),
+++            device_used_bytes=stats.get("bytes_in_use"),
+++            reported_device_cache_bytes=(max(0, stats["bytes_reserved"] - stats["bytes_in_use"])
+++                if stats.get("bytes_reserved") is not None and stats.get("bytes_in_use") is not None else None),
+++            model_params=(getattr(self, "_model_params", None)
+++                if getattr(self, "_execution_policy", None) is not None else None),
+++            rematerialization=global_config.get("use_remat", True),
+++            recycles=self.opt.get("num_recycles", cfg.model.num_recycle),
+++            recycle_mode=self._args.get("recycle_mode", "last"),
+++            model_kind="multimer" if self._args.get("use_multimer", False) else "monomer")
+++      else:
+++        # The unchunked working-set estimate does not apply to chunked jobs.
+++        memory = {"status": "native_guards_only"}
+++      current = getattr(self, "_model", None)
+++      if current is None or changed or cfg != current["runner"].config:
+++        prepared = self._get_model(cfg)
+++        if prepared["runner"].config.model.global_config.subbatch_size != policy["global_subbatch_size"]:
+++          raise RuntimeError("Prepared Metal model does not match the selected chunking policy")
+++        self._cfg, self._model = cfg, prepared
+++      self._execution_policy = dict(policy, memory=memory)
+++    else:
+++      # Preserve the pinned dependency's CPU/CUDA preparation behavior.
+++      if not hasattr(self,"_model") or self._cfg != self._model["runner"].config:
+++        self._cfg.model.global_config.subbatch_size = None
+++        self._model = self._get_model(self._cfg)
+++        if sum(self._lengths) > 384:
+++          self._cfg.model.global_config.subbatch_size = 4
+++          self._model["fn"] = self._get_model(self._cfg)["fn"]
+++      self._execution_policy = {
+++          "backend": backend, "total_residues": int(sum(self._lengths)),
+++          "global_subbatch_size": self._cfg.model.global_config.subbatch_size}
+++
+++    self._opt = copy_dict(self.opt)
++     self.restart(**kwargs)
+++
+++  def get_execution_policy(self):
+++    """Return a copy of the current preparation policy and memory estimate."""
+++    import copy
+++    return copy.deepcopy(self._execution_policy)
++ 
++   def _prep_features(self, num_res, num_seq=None, num_templates=1):
++     '''process features'''
+diff --git a/installation/install_apple_python.py b/installation/install_apple_python.py
+index 52b7225..6e37fe1 100644
+--- a/installation/install_apple_python.py
++++ b/installation/install_apple_python.py
+@@ -92,6 +92,7 @@ def main():
+     wanted = '0.11.9' if mode == 'stock' else release['version']
+     if mode != 'local override' and report['metaljax'] != wanted:
+         raise RuntimeError(f'Unexpected MetalJAX version after sync: {report}')
++    subprocess.run([str(python), str(root/'installation/apply_colabdesign_metal.py')], check=True)
+     print(f"Installed MetalJAX {report['metaljax']} ({mode}); JAX {report['jax']}, jaxlib {report['jaxlib']}", flush=True)
+ 
+ 
+diff --git a/tests/test_colabdesign_metal_installer.py b/tests/test_colabdesign_metal_installer.py
+new file mode 100644
+index 0000000..2d1b281
+--- /dev/null
++++ b/tests/test_colabdesign_metal_installer.py
+@@ -0,0 +1,91 @@
++"""Verify staged, repeatable patching without touching the installed package."""
++import difflib
++import importlib.util
++import json
++from pathlib import Path
++import tempfile
++import unittest
++
++path = Path(__file__).resolve().parents[1] / 'installation/apply_colabdesign_metal.py'
++spec = importlib.util.spec_from_file_location('apply_colabdesign_metal', path)
++installer = importlib.util.module_from_spec(spec)
++spec.loader.exec_module(installer)
++
++
++class InstallerTests(unittest.TestCase):
++    def setUp(self):
++        temporary = tempfile.TemporaryDirectory()
++        self.addCleanup(temporary.cleanup)
++        self.root = Path(temporary.name)
++        self.assets = self.root / 'assets'
++        self.assets.mkdir()
++        self.package = self.root / 'package'
++        (self.package / 'af').mkdir(parents=True)
++        self.prep = self.package / 'af/prep.py'
++        self.prep.write_text('original\n')
++        self.helper = self.package / 'af/metal_execution_policy.py'
++        payload = self.assets / 'metal_execution_policy.py'
++        payload.write_text('helper\n')
++        self.patch = self.assets / 'unchunked-preparation.patch'
++        self.patch.write_text(''.join(difflib.unified_diff(
++            ['original\n'], ['unchunked\n'],
++            fromfile='a/colabdesign/af/prep.py', tofile='b/colabdesign/af/prep.py')))
++        self.manifest = {
++            'patch': self.patch.name, 'patch_sha256': installer.sha(self.patch),
++            'files': {
++                'af/prep.py': {'before': installer.sha(self.prep),
++                              'after': installer.hashlib.sha256(b'unchunked\n').hexdigest()},
++                'af/metal_execution_policy.py': {'before': None, 'after': installer.sha(payload),
++                                                 'payload': payload.name},
++            },
++        }
++        self.save_manifest()
++
++    def save_manifest(self):
++        (self.assets / 'manifest.json').write_text(json.dumps(self.manifest))
++
++    def test_fresh_install_and_repeat(self):
++        self.assertEqual(installer.apply(self.package, self.assets)['status'], 'applied')
++        self.assertEqual(self.prep.read_text(), 'unchunked\n')
++        self.assertEqual(self.helper.read_text(), 'helper\n')
++        self.assertEqual(installer.apply(self.package, self.assets)['status'], 'already applied')
++
++    def test_local_edits_are_preserved(self):
++        self.prep.write_text('user edit\n')
++        with self.assertRaisesRegex(RuntimeError, 'exact pinned baseline'):
++            installer.apply(self.package, self.assets)
++        self.assertEqual(self.prep.read_text(), 'user edit\n')
++        self.assertFalse(self.helper.exists())
++
++    def test_corrupt_patch_is_rejected_before_writing(self):
++        self.patch.write_text(self.patch.read_text() + 'corrupt')
++        with self.assertRaisesRegex(RuntimeError, 'patch checksum mismatch'):
++            installer.apply(self.package, self.assets)
++        self.assertEqual(self.prep.read_text(), 'original\n')
++        self.assertFalse(self.helper.exists())
++
++    def test_corrupt_helper_is_rejected_before_writing(self):
++        (self.assets / 'metal_execution_policy.py').write_text('corrupt')
++        with self.assertRaisesRegex(RuntimeError, 'helper checksum mismatch'):
++            installer.apply(self.package, self.assets)
++        self.assertEqual(self.prep.read_text(), 'original\n')
++        self.assertFalse(self.helper.exists())
++
++    def test_wrong_final_hash_leaves_original_package_intact(self):
++        self.manifest['files']['af/prep.py']['after'] = '0' * 64
++        self.save_manifest()
++        with self.assertRaisesRegex(RuntimeError, 'Patched ColabDesign checksum mismatch'):
++            installer.apply(self.package, self.assets)
++        self.assertEqual(self.prep.read_text(), 'original\n')
++        self.assertFalse(self.helper.exists())
++
++    def test_modified_installed_helper_is_not_overwritten(self):
++        installer.apply(self.package, self.assets)
++        self.helper.write_text('user helper edit\n')
++        with self.assertRaisesRegex(RuntimeError, 'exact pinned baseline'):
++            installer.apply(self.package, self.assets)
++        self.assertEqual(self.helper.read_text(), 'user helper edit\n')
++
++
++if __name__ == '__main__':
++    unittest.main()
+diff --git a/tests/test_metal_execution_policy.py b/tests/test_metal_execution_policy.py
+new file mode 100644
+index 0000000..c41ccd3
+--- /dev/null
++++ b/tests/test_metal_execution_policy.py
+@@ -0,0 +1,211 @@
++"""Policy and memory decisions without a GPU or an installed dependency."""
++import importlib.util
++import hashlib
++import json
++import os
++import sys
++from pathlib import Path
++import unittest
++from unittest.mock import patch
++import numpy as np
++
++path = Path(__file__).resolve().parents[1] / 'installation/colabdesign-metal/metal_execution_policy.py'
++spec = importlib.util.spec_from_file_location('metal_execution_policy', path)
++policy = importlib.util.module_from_spec(spec)
++spec.loader.exec_module(policy)
++
++
++class Config(dict):
++    __getattr__ = dict.__getitem__
++    __setattr__ = dict.__setitem__
++
++
++class MetalExecutionPolicyTests(unittest.TestCase):
++    def setUp(self):
++        environment = patch.dict(os.environ, {'FREEBINDCRAFT_METAL_CHUNKING': '0'})
++        environment.start()
++        self.addCleanup(environment.stop)
++
++    def test_metal_is_unchunked_at_and_above_old_boundary(self):
++        for length in (128, 383, 384, 385, 406):
++            with self.subTest(length=length):
++                config = Config(subbatch_size=4)
++                changed, route = policy.select_global_policy(config, length, 'metal')
++                self.assertTrue(changed)
++                self.assertIsNone(config.subbatch_size)
++                self.assertEqual(route['total_residues'], length)
++                self.assertIsNone(route['global_subbatch_size'])
++
++    def test_other_backends_keep_length_cutoff(self):
++        for backend in ('cpu', 'gpu', 'cuda'):
++            for length, expected in ((384, None), (385, 4)):
++                with self.subTest(backend=backend, length=length):
++                    config = Config(subbatch_size=None)
++                    _, route = policy.select_global_policy(config, length, backend)
++                    self.assertEqual(config.subbatch_size, expected)
++                    self.assertEqual(route['global_subbatch_size'], expected)
++
++    def test_chunking_opt_in_restores_original_size_cutoff(self):
++        with patch.dict(os.environ, {'FREEBINDCRAFT_METAL_CHUNKING': '1'}):
++            for length, expected in ((146, None), (384, None), (385, 4), (406, 4)):
++                with self.subTest(length=length):
++                    config = Config(subbatch_size=None)
++                    _, route = policy.select_global_policy(config, length, 'metal')
++                    self.assertEqual(config.subbatch_size, expected)
++                    self.assertEqual(route['global_subbatch_size'], expected)
++
++    def test_reuse_detects_policy_changes_even_with_an_aliased_config(self):
++        config = Config(subbatch_size=None)
++        changed, _ = policy.select_global_policy(config, 384, 'cpu')
++        self.assertFalse(changed)
++        changed, _ = policy.select_global_policy(config, 385, 'cpu')
++        self.assertTrue(changed)
++        changed, _ = policy.select_global_policy(config, 384, 'cpu')
++        self.assertTrue(changed)
++        changed, route = policy.select_global_policy(config, 406, 'metal')
++        self.assertFalse(changed)
++        self.assertEqual(route['total_residues'], 406)
++
++    def test_memory_preflight_respects_headroom_and_limits(self):
++        g = 1024 ** 3
++        result = policy.assess_metal_memory(406, 4, 2, total_bytes=128*g,
++                                           available_bytes=80*g,
++                                           system_claimed_bytes=48*g,
++                                           process_bytes=0,
++                                           system_ceiling_bytes=104*g,
++                                           rematerialization=True, recycles=1)
++        self.assertEqual(result['status'], 'admitted')
++        self.assertEqual(result['score_tensor_bytes'], 406**3 * 4 * 2)
++        self.assertEqual(result['reserved_headroom_bytes'], 8*g)
++        self.assertEqual(result['usable_bytes'], 56*g)
++        self.assertEqual(result['recycles'], 1)
++        self.assertEqual(result['estimated_working_set_bytes'], 30*g)
++        self.assertIn('not a memory guarantee', result['measured_reference']['note'])
++        with self.assertRaisesRegex(MemoryError, 'reduce the target size'):
++            policy.assess_metal_memory(2048, 4, 2, total_bytes=16*g,
++                                       available_bytes=5*g)
++        with self.assertRaisesRegex(MemoryError, 'larger-memory host'):
++            policy.assess_metal_memory(406, 4, 2, total_bytes=128*g,
++                                       available_bytes=80*g,
++                                       device_limit_bytes=100*1024**2,
++                                       device_used_bytes=90*1024**2)
++
++    def test_unknown_memory_does_not_invent_a_budget(self):
++        result = policy.assess_metal_memory(406, 4, 2, total_bytes=None,
++                                           available_bytes=None)
++        self.assertEqual(result['status'], 'unknown')
++        self.assertIsNone(result['device_limit_bytes'])
++        self.assertNotIn('usable_bytes', result)
++        self.assertIsNone(result['process_footprint_bytes'])
++
++    def test_working_set_estimate_and_uncalibrated_modes(self):
++        g = 1024 ** 3
++        with self.assertRaisesRegex(MemoryError, 'estimated unchunked Metal working set'):
++            policy.assess_metal_memory(406, 4, 2, total_bytes=32*g,
++                                       available_bytes=20*g, process_bytes=0)
++        for options in ({'rematerialization': False}, {'recycle_mode': 'backprop'}):
++            with self.subTest(options=options):
++                result = policy.assess_metal_memory(406, 4, 2, total_bytes=128*g,
++                                                   available_bytes=80*g, **options)
++                self.assertEqual(result['status'], 'unknown')
++                self.assertIsNone(result['estimated_working_set_bytes'])
++
++    def test_warm_model_counts_only_proven_overlap(self):
++        g = 1024 ** 3
++        common = dict(total_bytes=128*g, available_bytes=80*g,
++                      system_claimed_bytes=50*g, system_ceiling_bytes=104*g,
++                      process_ceiling_bytes=40*g)
++        cold = policy.assess_metal_memory(406, 4, 2, process_bytes=5*g,
++                                          retained_model_bytes=5*g, **common)
++        warm = policy.assess_metal_memory(406, 4, 2, process_bytes=20*g,
++                                          retained_model_bytes=20*g, **common)
++        for result in (cold, warm):
++            self.assertEqual(result['status'], 'admitted')
++            self.assertEqual(result['projected_process_footprint_bytes'], 30*g)
++        self.assertEqual(warm['estimated_additional_bytes'], 10*g)
++        self.assertEqual(warm['projected_system_claimed_bytes'], 60*g)
++        self.assertEqual(warm['unclassified_process_footprint_bytes'], 0)
++        with self.assertRaisesRegex(MemoryError, 'process physical-footprint limit'):
++            policy.assess_metal_memory(406, 4, 2, process_bytes=20*g,
++                                       retained_model_bytes=0,
++                                       nonreusable_process_bytes=20*g, **common)
++        unknown = policy.assess_metal_memory(406, 4, 2, process_bytes=20*g,
++                                             retained_model_bytes=0, **common)
++        self.assertEqual(unknown['status'], 'unknown')
++        self.assertEqual(unknown['credited_retained_model_bytes'], 0)
++        self.assertEqual(unknown['projected_process_footprint_bytes'], 50*g)
++        self.assertEqual(unknown['unclassified_process_footprint_bytes'], 20*g)
++
++    def test_cache_and_device_bytes_are_not_silently_credited(self):
++        g = 1024 ** 3
++        common = dict(total_bytes=128*g, available_bytes=80*g,
++                      process_bytes=20*g, retained_model_bytes=10*g,
++                      process_ceiling_bytes=35*g, device_limit_bytes=1*g,
++                      device_used_bytes=900*1024**2)
++        result = policy.assess_metal_memory(406, 4, 2,
++                                           reported_device_cache_bytes=10*g, **common)
++        self.assertEqual(result['status'], 'unknown')
++        self.assertEqual(result['projected_process_footprint_bytes'], 40*g)
++        self.assertEqual(result['reported_device_cache_bytes'], 10*g)
++        self.assertTrue(any('device buffers' in text for text in result['uncertainty']))
++        result = policy.assess_metal_memory(
++            406, 4, 2, reclaimable_process_cache_bytes=10*g,
++            **{**common, 'device_used_bytes': 0})
++        self.assertEqual(result['status'], 'admitted')
++        self.assertEqual(result['projected_process_footprint_bytes'], 30*g)
++
++    def test_physical_footprint_and_claimed_limit_use_comparable_metrics(self):
++        g = 1024 ** 3
++        with self.assertRaisesRegex(MemoryError, 'system claimed-memory limit'):
++            policy.assess_metal_memory(406, 4, 2, total_bytes=128*g,
++                available_bytes=80*g, process_bytes=5*g, retained_model_bytes=5*g,
++                nonreusable_process_bytes=0, system_claimed_bytes=95*g,
++                system_ceiling_bytes=104*g)
++        unknown = policy.assess_metal_memory(406, 4, 2, total_bytes=128*g,
++            available_bytes=80*g, process_bytes=5*g, retained_model_bytes=5*g,
++            system_claimed_bytes=None, system_ceiling_bytes=104*g)
++        self.assertEqual(unknown['status'], 'unknown')
++        self.assertTrue(any('claimed memory is unavailable' in text
++                            for text in unknown['uncertainty']))
++        self.assertIsNone(unknown['system_claimed_bytes'])
++        # A limit below the current measured footprint is not admitted even
++        # when the retained model alone exceeds the empirical estimate.
++        with self.assertRaisesRegex(MemoryError, 'process physical-footprint limit'):
++            policy.assess_metal_memory(406, 4, 2, total_bytes=128*g,
++                available_bytes=80*g, process_bytes=45*g, retained_model_bytes=45*g,
++                process_ceiling_bytes=40*g)
++
++    @unittest.skipUnless(sys.platform == 'darwin', 'macOS resident-page query')
++    def test_retained_pages_deduplicate_aliases_and_ignore_views(self):
++        model_array = np.ones(8 * 1024 ** 2, dtype=np.uint8)
++        page = os.sysconf('SC_PAGE_SIZE')
++        retained, evidence = policy._verified_retained_model_pages(
++            {'weight': model_array, 'same_weight': model_array,
++             'view': model_array[100:]})
++        self.assertGreaterEqual(retained, model_array.nbytes - 2 * page)
++        self.assertLessEqual(retained, model_array.nbytes)
++        self.assertEqual(evidence['buffers_checked'], 1)
++        self.assertGreater(evidence['pages_queried'], 0)
++        self.assertIsInstance(policy._process_physical_footprint(), int)
++        self.assertGreater(policy._system_claimed_memory(), 0)
++
++    def test_numpy_shape_metadata_is_json_serializable(self):
++        config = Config(subbatch_size=4)
++        _, route = policy.select_global_policy(config, np.int64(406), 'metal')
++        route['memory'] = policy.assess_metal_memory(
++            np.int64(406), np.int64(4), np.int64(2), total_bytes=None,
++            available_bytes=None, recycles=np.int64(1))
++        self.assertEqual(json.loads(json.dumps(route))['total_residues'], 406)
++        self.assertEqual(route['memory']['recycles'], 1)
++
++    def test_policy_asset_matches_installer_manifest(self):
++        assets = path.parent
++        manifest = json.loads((assets / 'manifest.json').read_text())
++        self.assertEqual(hashlib.sha256(path.read_bytes()).hexdigest(),
++                         manifest['files']['af/metal_execution_policy.py']['after'])
++        self.assertEqual(hashlib.sha256((assets / manifest['patch']).read_bytes()).hexdigest(),
++                         manifest['patch_sha256'])
++
++
++if __name__ == '__main__':
++    unittest.main()
+diff --git a/tests/test_metal_prep_integration.py b/tests/test_metal_prep_integration.py
+new file mode 100644
+index 0000000..d9f4eab
+--- /dev/null
++++ b/tests/test_metal_prep_integration.py
+@@ -0,0 +1,191 @@
++"""Exercise a patched dependency copy with fake runners, without compiling AF2."""
++import ast
++import copy
++import importlib.util
++import os
++import json
++import shutil
++import tempfile
++from pathlib import Path
++import sys
++import types
++import unittest
++from unittest.mock import patch
++
++
++class Config(dict):
++    __getattr__ = dict.__getitem__
++    __setattr__ = dict.__setitem__
++
++    def __deepcopy__(self, memo):
++        return Config({key: copy.deepcopy(value, memo) for key, value in self.items()})
++
++
++class PrepIntegrationTests(unittest.TestCase):
++    def setUp(self):
++        environment = patch.dict(os.environ, {'FREEBINDCRAFT_METAL_CHUNKING': '0'})
++        environment.start()
++        self.addCleanup(environment.stop)
++        helper_path = Path(__file__).resolve().parents[1] / 'installation/colabdesign-metal/metal_execution_policy.py'
++        spec = importlib.util.spec_from_file_location('policy_under_test', helper_path)
++        self.helper = importlib.util.module_from_spec(spec)
++        spec.loader.exec_module(self.helper)
++        override = os.environ.get('FBC_TEST_COLABDESIGN_PREP')
++        if override:
++            source = Path(override)
++        else:
++            package = importlib.util.find_spec('colabdesign')
++            if package is None:
++                raise unittest.SkipTest('ColabDesign is not installed')
++            installed = Path(package.origin).parent
++            temporary = tempfile.TemporaryDirectory()
++            self.addCleanup(temporary.cleanup)
++            staged = Path(temporary.name) / 'colabdesign'
++            assets = helper_path.parent
++            manifest = json.loads((assets / 'manifest.json').read_text())
++            for name in manifest['files']:
++                if (installed / name).is_file():
++                    target = staged / name
++                    target.parent.mkdir(parents=True, exist_ok=True)
++                    shutil.copyfile(installed / name, target)
++            installer_path = assets.parent / 'apply_colabdesign_metal.py'
++            installer_spec = importlib.util.spec_from_file_location('prep_test_installer', installer_path)
++            installer = importlib.util.module_from_spec(installer_spec)
++            installer_spec.loader.exec_module(installer)
++            installer.apply(staged, assets)
++            source = staged / 'af/prep.py'
++        parsed = ast.parse(source.read_text())
++        owner = next(node for node in parsed.body if isinstance(node, ast.ClassDef) and node.name == '_af_prep')
++        methods = [node for node in owner.body if isinstance(node, ast.FunctionDef)
++                   and node.name in ('_prep_model', 'get_execution_policy')]
++        self.assertTrue(any(node.name == 'get_execution_policy' for node in methods),
++                        'Install the checked Metal preparation patch before running this test')
++        klass = ast.ClassDef(name='Prepared', bases=[], keywords=[], body=methods, decorator_list=[])
++        module = ast.fix_missing_locations(ast.Module(body=[klass], type_ignores=[]))
++        self.backend = types.SimpleNamespace(name='metal')
++        jax = types.SimpleNamespace(default_backend=lambda: self.backend.name,
++                                   devices=lambda: [types.SimpleNamespace(memory_stats=lambda: {})])
++        scope = {'jax': jax, 'copy_dict': copy.deepcopy}
++        exec(compile(module, str(source), 'exec'), scope)
++        self.model = scope['Prepared']()
++        global_config = Config(subbatch_size=4, bfloat16=True, use_remat=True)
++        self.model._cfg = Config(model=Config(global_config=global_config, num_recycle=1,
++            embeddings_and_evoformer=Config(evoformer=Config(
++                triangle_attention_starting_node=Config(num_head=4)))))
++        self.model._lengths = [256, 150]
++        self.model.opt = {'dropout': True, 'num_recycles': 1}
++        self.model._args = {'recycle_mode': 'last', 'use_multimer': True}
++        self.model._model_params = {'retained': object()}
++        self.model.restart = lambda **kwargs: None
++        self.build_sizes = []
++
++        def build(cfg):
++            size = cfg.model.global_config.subbatch_size
++            self.build_sizes.append(size)
++            return {'runner': types.SimpleNamespace(config=cfg), 'fn': ('forward', size), 'grad_fn': ('gradient', size)}
++
++        self.model._get_model = build
++        modules = patch.dict(sys.modules, {'colabdesign.af.metal_execution_policy': self.helper})
++        modules.start()
++        self.addCleanup(modules.stop)
++
++    def test_both_metal_callables_are_unchunked_across_boundary(self):
++        with patch.object(self.helper, 'current_metal_memory', return_value={'status': 'admitted'}):
++            for length in (383, 384, 385, 406, 146):
++                self.model._lengths = [length]
++                self.model._prep_model()
++                self.assertEqual(self.model._model['fn'], ('forward', None))
++                self.assertEqual(self.model._model['grad_fn'], ('gradient', None))
++                self.assertEqual(self.model.get_execution_policy()['total_residues'], length)
++            self.assertEqual(self.build_sizes, [None])
++
++    def test_refusal_and_failed_build_preserve_existing_config(self):
++        original = self.model._cfg
++        old_runner = {'runner': types.SimpleNamespace(config=original)}
++        self.model._model = old_runner
++        self.model._execution_policy = {'previous': True}
++        with patch.object(self.helper, 'current_metal_memory', side_effect=MemoryError('low headroom')):
++            with self.assertRaisesRegex(MemoryError, 'low headroom'):
++                self.model._prep_model()
++        self.assertIs(self.model._cfg, original)
++        self.assertEqual(original.model.global_config.subbatch_size, 4)
++        self.assertIs(self.model._model, old_runner)
++        with patch.object(self.helper, 'current_metal_memory', return_value={'status': 'admitted'}):
++            with patch.object(self.model, '_get_model', side_effect=RuntimeError('failed build')):
++                with self.assertRaisesRegex(RuntimeError, 'failed build'):
++                    self.model._prep_model()
++            self.assertIs(self.model._cfg, original)
++            self.assertEqual(original.model.global_config.subbatch_size, 4)
++            self.assertEqual(self.model.get_execution_policy(), {'previous': True})
++            self.model._prep_model()
++        self.assertIsNot(self.model._cfg, original)
++        self.assertIsNone(self.model._cfg.model.global_config.subbatch_size)
++        self.assertEqual(original.model.global_config.subbatch_size, 4)
++
++    def test_chunking_opt_in_updates_both_callables_and_can_be_disabled(self):
++        with patch.dict(os.environ, {'FREEBINDCRAFT_METAL_CHUNKING': '1'}), \
++             patch.object(self.helper, 'current_metal_memory', side_effect=AssertionError('Unchunked estimate must not reject chunked jobs')):
++            self.model._prep_model()
++            self.assertEqual(self.model._model['fn'], ('forward', 4))
++            self.assertEqual(self.model._model['grad_fn'], ('gradient', 4))
++            self.assertEqual(self.model.get_execution_policy()['memory']['status'], 'native_guards_only')
++        with patch.object(self.helper, 'current_metal_memory', return_value={'status': 'admitted'}):
++            self.model._prep_model()
++            self.assertEqual(self.model._model['fn'], ('forward', None))
++            self.assertEqual(self.model._model['grad_fn'], ('gradient', None))
++        self.assertEqual(self.build_sizes, [4, None])
++
++    def test_chunking_opt_in_keeps_small_jobs_unchunked_on_model_reuse(self):
++        with patch.dict(os.environ, {'FREEBINDCRAFT_METAL_CHUNKING': '1'}), \
++             patch.object(self.helper, 'current_metal_memory', return_value={'status': 'admitted'}) as memory:
++            for length, expected in ((384, None), (385, 4), (406, 4), (146, None)):
++                self.model._lengths = [length]
++                self.model._prep_model()
++                self.assertEqual(self.model._model['fn'], ('forward', expected))
++                self.assertEqual(self.model._model['grad_fn'], ('gradient', expected))
++            self.assertEqual(memory.call_count, 2)
++            self.assertEqual(self.build_sizes, [None, 4, None])
++
++    def test_nonmetal_preserves_pinned_callable_selection(self):
++        with patch.object(self.helper, 'current_metal_memory', side_effect=AssertionError('Metal-only preflight')):
++            for backend in ('cpu', 'gpu'):
++                for length in (384, 385):
++                    with self.subTest(backend=backend, length=length):
++                        self.backend.name = backend
++                        if hasattr(self.model, '_model'):
++                            del self.model._model
++                        self.build_sizes.clear()
++                        self.model._lengths = [length]
++                        self.model._prep_model()
++                        expected = 4 if length > 384 else None
++                        self.assertEqual(self.model._model['fn'], ('forward', expected))
++                        self.assertEqual(self.model._model['grad_fn'], ('gradient', None))
++                        self.assertEqual(self.build_sizes, [None, 4] if length > 384 else [None])
++
++    def test_warm_model_retained_bytes_are_not_counted_twice(self):
++        gib = 1024 ** 3
++        samples = {'warm': False, 'process': 5*gib}
++
++        def retained(params):
++            self.assertIs(params, self.model._model_params if samples['warm'] else None)
++            return (20*gib if samples['warm'] else None), {'source': 'test fixture'}
++
++        fake_psutil = types.SimpleNamespace(virtual_memory=lambda: types.SimpleNamespace(total=128*gib, available=80*gib))
++        with patch.dict(sys.modules, {'psutil': fake_psutil}), \
++             patch.dict(os.environ, {'METALJAX_MEM_SYS_MB': '106496', 'METALJAX_MEM_BUDGET_MB': '40960'}), \
++             patch.object(self.helper, '_verified_retained_model_pages', retained), \
++             patch.object(self.helper, '_system_claimed_memory', return_value=50*gib), \
++             patch.object(self.helper, '_process_physical_footprint', side_effect=lambda: samples['process']):
++            self.model._prep_model()
++            samples.update(warm=True, process=20*gib)
++            self.model._prep_model()
++            details = self.model.get_execution_policy()
++            self.assertEqual(details['memory']['status'], 'admitted')
++            self.assertEqual(details['memory']['projected_process_footprint_bytes'], 30*gib)
++            details['memory']['status'] = 'mutated outside the model'
++            self.assertEqual(self.model.get_execution_policy()['memory']['status'], 'admitted')
++            self.assertEqual(self.build_sizes, [None])
++
++
++if __name__ == '__main__':
++    unittest.main()

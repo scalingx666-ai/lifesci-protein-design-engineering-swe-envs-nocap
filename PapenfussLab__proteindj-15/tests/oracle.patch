@@ -1,0 +1,112 @@
+diff --git a/modules/bindcraft.nf b/modules/bindcraft.nf
+index 519df07..a467302 100644
+--- a/modules/bindcraft.nf
++++ b/modules/bindcraft.nf
+@@ -62,7 +62,10 @@ process PrepBC {
+     
+     # Parse hotspots - convert to comma-separated string for BindCraft
+     hotspots_param = "${params.hotspot_residues}".strip()
+-    hotspots = ",".join([h.strip() for h in hotspots_param.split(',') if h.strip()]) if hotspots_param else ""
++    if hotspots_param and hotspots_param != "null":
++        hotspots = ",".join([h.strip() for h in hotspots_param.split(',') if h.strip()])
++    else:
++        hotspots = ""
+     
+     # Parse lengths - handle single value or range, store as list for JSON array
+     length_str = "${params.design_length}".strip()
+@@ -99,10 +102,12 @@ process PrepBC {
+         advanced_settings = json.load(f)
+     
+     # Update amino acid types to avoid during design
+-    # BindCraft expects this as a comma-separated string
+     omit_AAs_param = "${params.bc_omit_AAs}".strip()
+-    omit_AAs = ",".join([aa.strip() for aa in omit_AAs_param.split(',') if aa.strip()]) if omit_AAs_param else ""
+-    advanced_settings["omit_AAs"] = omit_AAs  # String: "C,M"
++    if omit_AAs_param and omit_AAs_param != "null":
++        omit_AAs = ",".join([aa.strip() for aa in omit_AAs_param.split(',') if aa.strip()])
++    else:
++        omit_AAs = ""
++    advanced_settings["omit_AAs"] = omit_AAs
+     
+     # Disable BindCraft's internal MPNN routine as we will perform this in ProteinDJ
+     advanced_settings["enable_mpnn"] = False
+diff --git a/nextflow_schema.json b/nextflow_schema.json
+index 9644fd1..2c8f404 100644
+--- a/nextflow_schema.json
++++ b/nextflow_schema.json
+@@ -166,7 +166,6 @@
+                     "type": "string",
+                     "description": "Input PDB chains to target. Can be one or multiple, in a comma-separated format e.g. 'A,C'. Other chains will be ignored during design.",
+                     "pattern": "^[A-Z](,[A-Z])*$",
+-                    "default": "A",
+                     "hidden": true
+                 },
+                 "bc_design_protocol": {
+diff --git a/schemas/mode_parameters.csv b/schemas/mode_parameters.csv
+index e983ceb..62182fa 100644
+--- a/schemas/mode_parameters.csv
++++ b/schemas/mode_parameters.csv
+@@ -6,7 +6,7 @@ out_dir,${projectDir}/pdj_results,out_dir,${projectDir}/pdj_denovo,out_dir,${pro
+ design_length,null,design_length,60-80,,,,,,,design_length,60-100,design_length,60-80,,,,,,
+ input_pdb,null,,,,,input_pdb,${projectDir}/benchmarkdata/5o45_pd-l1.pdb,input_pdb,${projectDir}/benchmarkdata/5o45_pd-l1.pdb,input_pdb,${projectDir}/benchmarkdata/5o45_pd-l1.pdb,input_pdb,${projectDir}/benchmarkdata/5o45_pd-l1.pdb,input_pdb,${projectDir}/benchmarkdata/5o45_pd-l1.pdb,input_pdb,${projectDir}/lib/examplebinder.pdb,input_pdb,${projectDir}/lib/examplebinder.pdb
+ hotspot_residues,null,,,,,,,,,hotspot_residues,,hotspot_residues,"A56,A115,A123",hotspot_residues,"A56,A115,A123",,,,
+-rfd_contigs,null,rfd_contigs,,,,rfd_contigs,[A17-43/9-15/A53-117/3-6/A121-131],rfd_contigs,[A17-111/20],,,rfd_contigs,,,,rfd_contigs,[5-10/A1-88/10-20/0 B89-203],rfd_contigs,[88-88/0 B89-203]
++rfd_contigs,null,rfd_contigs,,,,rfd_contigs,[A17-43/9-15/A53-117/3-6/A121-131],rfd_contigs,,,,rfd_contigs,,,,rfd_contigs,[5-10/A1-88/10-20/0 B89-203],rfd_contigs,
+ rfd_scaffold_dir,null,,,rfd_scaffold_dir,${projectDir}/binderscaffolds/scaffolds_assorted,,,,,,,,,rfd_scaffold_dir,${projectDir}/binderscaffolds/scaffolds_assorted,,,,
+ rfd_mask_loops,TRUE,,,rfd_mask_loops,,,,,,,,,,rfd_mask_loops,FALSE,,,,
+ rfd_inpaint_seq,null,,,,,rfd_inpaint_seq,[A17-19/A129-131],,,,,,,,,rfd_inpaint_seq,,,
+diff --git a/schemas/nextflow_schema_bindcraft.json b/schemas/nextflow_schema_bindcraft.json
+index 322bbbb..4baae1d 100644
+--- a/schemas/nextflow_schema_bindcraft.json
++++ b/schemas/nextflow_schema_bindcraft.json
+@@ -141,7 +141,6 @@
+           "type": "string",
+           "description": "Input PDB chains to target. Can be one or multiple, in a comma-separated format e.g. 'A,C'. Other chains will be ignored during design.",
+           "pattern": "^[A-Z](,[A-Z])*$",
+-          "default": "A",
+           "hidden": true
+         },
+         "bc_design_protocol": {
+diff --git a/schemas/nextflow_schema_binder_partialdiff.json b/schemas/nextflow_schema_binder_partialdiff.json
+index 3303182..0fc6755 100644
+--- a/schemas/nextflow_schema_binder_partialdiff.json
++++ b/schemas/nextflow_schema_binder_partialdiff.json
+@@ -59,8 +59,7 @@
+         "rfd_contigs": {
+           "type": "string",
+           "description": "Contigs specification strings for residues to include from input PDB and/or design length, e.g. `[A17-145/0 50-100]`. See docs for examples. Optional for multiple modes, required by `binder_motifscaff` and `monomer_motifscaff`. If null, contigs will be auto generated from input PDB (all residues) and/or `design_length`.",
+-          "pattern": "^\\[[A-Z0-9\\-\\/ \\[\\]]+\\]$",
+-          "default": "[88-88/0 B89-203]"
++          "pattern": "^\\[[A-Z0-9\\-\\/ \\[\\]]+\\]$"
+         },
+         "rfd_partial_diffusion_timesteps": {
+           "type": "integer",
+diff --git a/schemas/nextflow_schema_custom.json b/schemas/nextflow_schema_custom.json
+index 836fcee..e1cae20 100644
+--- a/schemas/nextflow_schema_custom.json
++++ b/schemas/nextflow_schema_custom.json
+@@ -190,8 +190,8 @@
+           "type": "string",
+           "description": "Input PDB chains to target. Can be one or multiple, in a comma-separated format e.g. 'A,C'. Other chains will be ignored during design.",
+           "pattern": "^[A-Z](,[A-Z])*$",
+-          "default": null,
+-          "hidden": true
++          "hidden": true,
++          "default": null
+         },
+         "bc_design_protocol": {
+           "type": "string",
+diff --git a/schemas/nextflow_schema_monomer_partialdiff.json b/schemas/nextflow_schema_monomer_partialdiff.json
+index 2eff7b7..c18a81d 100644
+--- a/schemas/nextflow_schema_monomer_partialdiff.json
++++ b/schemas/nextflow_schema_monomer_partialdiff.json
+@@ -59,8 +59,7 @@
+         "rfd_contigs": {
+           "type": "string",
+           "description": "Contigs specification strings for residues to include from input PDB and/or design length, e.g. `[A17-145/0 50-100]`. See docs for examples. Optional for multiple modes, required by `binder_motifscaff` and `monomer_motifscaff`. If null, contigs will be auto generated from input PDB (all residues) and/or `design_length`.",
+-          "pattern": "^\\[[A-Z0-9\\-\\/ \\[\\]]+\\]$",
+-          "default": "[A17-111/20]"
++          "pattern": "^\\[[A-Z0-9\\-\\/ \\[\\]]+\\]$"
+         },
+         "rfd_partial_diffusion_timesteps": {
+           "type": "integer",

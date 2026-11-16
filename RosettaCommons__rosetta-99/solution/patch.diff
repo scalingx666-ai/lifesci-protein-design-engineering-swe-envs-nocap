@@ -1,0 +1,57 @@
+diff --git a/source/src/core/scoring/hbonds/graph/HBondGraph.cc b/source/src/core/scoring/hbonds/graph/HBondGraph.cc
+index 2b41bbe1c25..18a1089a672 100644
+--- a/source/src/core/scoring/hbonds/graph/HBondGraph.cc
++++ b/source/src/core/scoring/hbonds/graph/HBondGraph.cc
+@@ -15,6 +15,7 @@
+ 
+ #include <basic/Tracer.hh>
+ #include <core/types.hh>
++#include <utility/exit.hh>
+ 
+ 
+ static basic::Tracer TR( "core.scoring.hbonds.graph.HBondGraph" );
+@@ -195,6 +196,28 @@ HBondGraph::HBondGraph( Size num_nodes ):
+ HBondGraph::~HBondGraph()
+ {}
+ 
++HBondNode &
++HBondGraph::HBondNode_from_LowMemNode( utility::graph::LowMemNode & node ) {
++	for ( core::Size ii = 1; ii <= num_nodes(); ++ii ) {
++		HBondNode * hbnode = get_node( ii );
++		if ( &node == static_cast< utility::graph::LowMemNode * >( hbnode ) ) {
++			return *hbnode;
++		}
++	}
++	utility_exit_with_message( "Attempted to convert a LowMemNode to an HBondNode through an HBondGraph which doesn't contain the node." );
++}
++
++HBondEdge &
++HBondGraph::HBondEdge_from_LowMemEdge( utility::graph::LowMemEdge & edge ) {
++	for ( auto iter = edge_list_begin(), end = edge_list_end(); iter != end; ++iter ) {
++		HBondEdge * hbedge = static_cast< HBondEdge * >( *iter );
++		if ( &edge == static_cast< utility::graph::LowMemEdge * >( hbedge ) ) {
++			return *hbedge;
++		}
++	}
++	utility_exit_with_message( "Attempted to convert a LowMemEdge to an HBondEdge through an HBondGraph which doesn't contain the edge." );
++}
++
+ 
+ Size
+ HBondGraph::count_static_memory() const
+diff --git a/source/src/core/scoring/hbonds/graph/HBondGraph.hh b/source/src/core/scoring/hbonds/graph/HBondGraph.hh
+index 21ecc70db38..506c4f389ed 100644
+--- a/source/src/core/scoring/hbonds/graph/HBondGraph.hh
++++ b/source/src/core/scoring/hbonds/graph/HBondGraph.hh
+@@ -293,6 +293,11 @@ public:
+ public://old methods & methods used for unit tests
+ 	HBondEdge * register_hbond( Size rotamerA, Size rotamerB, Real score );
+ 
++	// For pyrosetta: safely convert a LowMemNode/LowMemEdge to the derived type,
++	// verifying it belongs to this graph.
++	HBondNode & HBondNode_from_LowMemNode( utility::graph::LowMemNode & node );
++	HBondEdge & HBondEdge_from_LowMemEdge( utility::graph::LowMemEdge & edge );
++
+ };
+ 
+ 

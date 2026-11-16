@@ -1,0 +1,13 @@
+diff --git a/Makefile b/Makefile
+index 1ac0d82d..14a9ccc7 100644
+--- a/Makefile
++++ b/Makefile
+@@ -164,7 +164,7 @@ lint:
+ ## Internal targets
+ 
+ target_folders:
+-	@mkdir $(PREFIX)/{bin,lib,include} -p
++	@mkdir -p $(PREFIX)/bin $(PREFIX)/lib $(PREFIX)/include
+ 
+ build_directories:
+ 	@mkdir -p $(objdirs) ./lib ./bin ./log ./tests/tmp

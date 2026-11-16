@@ -1,0 +1,338 @@
+diff --git a/source/src/apps/public/comparative_modeling/cluster_alns.cc b/source/src/apps/public/comparative_modeling/cluster_alns.cc
+index 1d8387fd157..56eb870a1b5 100644
+--- a/source/src/apps/public/comparative_modeling/cluster_alns.cc
++++ b/source/src/apps/public/comparative_modeling/cluster_alns.cc
+@@ -25,7 +25,7 @@ int main( int argc, char * argv [] ) {
+ 
+ 		using namespace protocols::comparative_modeling;
+ 		devel::init(argc, argv);
+-		AlignmentClusteringOP cluster( new AlignmentClustering() );
++		AlignmentClustering cluster; // Constructor will run protocol.
+ 	} catch (utility::excn::Exception const & e ) {
+ 		e.display();
+ 		return -1;
+diff --git a/source/src/apps/public/struc_set_fragment_picker.cc b/source/src/apps/public/struc_set_fragment_picker.cc
+index 63a41f3d5e5..eaa2680c99e 100644
+--- a/source/src/apps/public/struc_set_fragment_picker.cc
++++ b/source/src/apps/public/struc_set_fragment_picker.cc
+@@ -114,8 +114,7 @@ run()
+ 	}
+ 
+ 	utility::io::ozstream dump_frag( option[ OptionKeys::struc_set_fragment_picker::frag_name ]() );
+-	Size ct( 1 );
+-	for ( ConstFrameIterator it=fragset->begin(), eit=fragset->end(); it!=eit; ++it, ++ct ) {
++	for ( ConstFrameIterator it=fragset->begin(), eit=fragset->end(); it!=eit; ++it ) {
+ 		(*it)->show( dump_frag );
+ 	}
+ }
+diff --git a/source/src/core/scoring/constraints/SequenceProfileConstraint.cc b/source/src/core/scoring/constraints/SequenceProfileConstraint.cc
+index f0e137d09a9..eea84657331 100644
+--- a/source/src/core/scoring/constraints/SequenceProfileConstraint.cc
++++ b/source/src/core/scoring/constraints/SequenceProfileConstraint.cc
+@@ -35,8 +35,6 @@
+ #include <core/scoring/func/XYZ_Func.hh>
+ #include <utility/vector1.hh>
+ 
+-#include <boost/lexical_cast.hpp>
+-
+ 
+ #ifdef SERIALIZATION
+ // Utility serialization headers
+@@ -154,7 +152,7 @@ SequenceProfileConstraint::read_def(
+ 		seqpos_ = residue_index;
+ 		const_cast<SequenceProfile * >(sequence_profile_.get())->prof_row( aa_scores, residue_index );
+ 	} else {
+-		auto residue_index(boost::lexical_cast<Size>(version));
++		Size residue_index( version );
+ 		std::string profile_filename;
+ 
+ 		is >> profile_filename;
+diff --git a/source/src/core/scoring/lkball/LK_DomeEnergy.cc b/source/src/core/scoring/lkball/LK_DomeEnergy.cc
+index 9ffb2cfb6e1..40702dff157 100644
+--- a/source/src/core/scoring/lkball/LK_DomeEnergy.cc
++++ b/source/src/core/scoring/lkball/LK_DomeEnergy.cc
+@@ -1033,16 +1033,15 @@ cubed_root( Real val ) {
+ 
+ 
+ 
+-DerivativeFinderWadj::DerivativeFinderWadj( Vector const & base, Vector const & water, Real w_dist, Real water_adjust )
+-: x(14)
++DerivativeFinderWadj::DerivativeFinderWadj( Vector const & base, Vector const & water, Real w_dist, Real water_adjust ):
++	B(base),
++	W(water),
++	B_to_W(W - B),
++	wadj(water_adjust),
++	w_dist_(w_dist),
++	x(14)
+ {
+ 
+-	w_dist_ = w_dist;
+-	wadj = water_adjust;
+-
+-	B = base;
+-	W = water;
+-	B_to_W = W - B;
+ 	B_to_W_norm = B_to_W.norm();
+ 	B_to_W_norm2 = B_to_W_norm*B_to_W_norm;
+ 	B_to_W_norm3 = B_to_W_norm2*B_to_W_norm;
+@@ -1098,21 +1097,19 @@ DerivativeFinderWadj::dWadj_dWater() {
+ 
+ DerivativeFinder::DerivativeFinder( Vector const & base, Vector const & water, Vector const & other,
+ 	Real min_cose, Real min_sine, Real max_cose, Real max_sine, Real w_dist, Real water_adjust ) :
++	B(base),
++	W(water),
++	Ot(other),
++	W_to_Ot(Ot - W),
++	B_to_W(W - B),
++	w_dist_(w_dist),
++	wadj(water_adjust),
+ 	x(175)
+ {
+-	w_dist_ = w_dist;
+-	wadj = water_adjust;
+-
+-	B = base;
+-	W = water;
+-	Ot = other;
+-
+-	W_to_Ot = Ot - W;
+ 	W_to_Ot_norm = W_to_Ot.norm();
+ 	W_to_Ot_norm2 = W_to_Ot_norm*W_to_Ot_norm;
+ 	W_to_Ot_norm3 = W_to_Ot_norm*W_to_Ot_norm2;
+ 
+-	B_to_W = W - B;
+ 	B_to_W_norm = B_to_W.norm();
+ 	B_to_W_norm2 = B_to_W_norm*B_to_W_norm;
+ 	B_to_W_norm3 = B_to_W_norm2*B_to_W_norm;
+diff --git a/source/src/protocols/forge/remodel/RemodelGlobalFrame.cc b/source/src/protocols/forge/remodel/RemodelGlobalFrame.cc
+index 47a5a49d8fb..88da8704ec5 100644
+--- a/source/src/protocols/forge/remodel/RemodelGlobalFrame.cc
++++ b/source/src/protocols/forge/remodel/RemodelGlobalFrame.cc
+@@ -209,7 +209,7 @@ void RemodelGlobalFrame::get_helical_params( core::pose::Pose & pose ) {
+ 	Matrix3f I = Matrix3f::Identity();
+ 	Matrix3f N = 0.5*(H+H.transpose()) - cos(omega)*I;
+ 
+-	Vector3f hN;
++	Vector3f hN(0,0,0); // To suppress compiler errors -- will always be overwritten
+ 	Real scalar = 0;
+ 	Real max_scalar = -10000000;
+ 	for ( core::Size i = 0; i<=2; i++ ) {
+diff --git a/source/src/utility/exit.cc b/source/src/utility/exit.cc
+index e2b606800c3..10fa4d40a62 100644
+--- a/source/src/utility/exit.cc
++++ b/source/src/utility/exit.cc
+@@ -50,14 +50,9 @@ struct UtilityExitException : excn::Exception //noboday should be allowed to thr
+ 	{}
+ };
+ 
+-
+-
+-/// Place holder for 'end-action' of utility::exit(…)
+-static void (*main_exit_callback)(void) = nullptr;
+-
+-void set_main_exit_callback( UtilityExitCallBack my_callback )
++void set_main_exit_callback( UtilityExitCallBack )
+ {
+-	main_exit_callback = my_callback;
++	// No-Op. (Setting is not used for anything)
+ }
+ 
+ /// Array to hold all additional exit-callbacks
+diff --git a/source/src/utility/exit.hh b/source/src/utility/exit.hh
+index 178b82a9cdb..f9a687eccca 100644
+--- a/source/src/utility/exit.hh
++++ b/source/src/utility/exit.hh
+@@ -196,13 +196,11 @@ exit(
+ 
+ typedef void (* UtilityExitCallBack)();
+ 
+-/// @brief Set call back funtion that will be called on utility::exit.
+-///        Use this function to overload default behavior of sys.exit to more appropriate to your application
+-///        Defaut value for callback function is nullptr, whicth mean no sys exit is called.
++/// @brief This is a no-op maintained purely for backward compatibility.
++///        utility::exit() will now always throw an exception, so this setting is never consulted.
+ void set_main_exit_callback( UtilityExitCallBack = nullptr );
+ 
+ /// @brief Add additional callback function that will be called *before* standard exit(…) is executed.
+-///        [Note: do not confuse this function with 'set_main_exit_callback' which is replacing the end behavior of exit(…)]
+ void add_exit_callback( UtilityExitCallBack );
+ 
+ /// @brief Remove additional callback function that was previously added by using add_exit_callback.
+diff --git a/source/src/utility/small_vector1.hh b/source/src/utility/small_vector1.hh
+index e2f4c6cd124..126792f6a50 100644
+--- a/source/src/utility/small_vector1.hh
++++ b/source/src/utility/small_vector1.hh
+@@ -30,10 +30,10 @@ namespace utility {
+ 
+ template< typename T, std::size_t BUFFER_SIZE >
+ using small_vector0 = utility::vector0< T >;
+-	
++
+ template< typename T, std::size_t BUFFER_SIZE >
+ using small_vector1 = utility::vector1< T >;
+-	
++
+ } //namespace utility
+ 
+ #endif
+@@ -45,7 +45,7 @@ namespace utility {
+ 
+ template< typename T, std::size_t L, std::size_t BUFFER_SIZE >
+ class small_vectorL :
+-    public boost::container::small_vector< T, BUFFER_SIZE >
++	public boost::container::small_vector< T, BUFFER_SIZE >
+ {
+ public:
+ 	using boost::container::small_vector< T, BUFFER_SIZE >::small_vector;
+@@ -55,7 +55,20 @@ public:
+ 
+ 	using boost::container::small_vector< T, BUFFER_SIZE >::operator=;
+ 	small_vectorL & operator=( small_vectorL< T, L, BUFFER_SIZE > const & ) = default;
+-	    
++
++	// Not sure why, but GCC 16.2 results in a warning-as-error about overflowing the destination
++	// when used implicitly from the base class.
++	// Googling indicates this is an optimization-related false positive
++	// We make the constructor explicit and turn off diagnostics to get around that.
++#if defined(__GNUC__) && !defined(__clang__) && (__GNUC__ >= 11)
++#pragma GCC diagnostic push
++#pragma GCC diagnostic ignored "-Wstringop-overflow="
++	small_vectorL( std::size_t count, const T& value = T() ):
++		boost::container::small_vector< T, BUFFER_SIZE >(count, value)
++	{}
++#pragma GCC diagnostic pop
++#endif
++
+ 	T & operator[]( std::size_t const i ){
+ 		debug_assert( i >= L );
+ 		debug_assert( i - L < size() );
+@@ -67,7 +80,7 @@ public:
+ 		debug_assert( i - L < size() );
+ 		return boost::container::small_vector< T, BUFFER_SIZE >::operator[]( i-L );
+ 	}
+-	    
++
+ 	T & at( std::size_t const i ){
+ 		debug_assert( i >= L );
+ 		debug_assert( i - L < size() );
+@@ -83,7 +96,7 @@ public:
+ 
+ template< typename T, std::size_t BUFFER_SIZE >
+ using small_vector0 = small_vectorL< T, 0, BUFFER_SIZE >;
+-	
++
+ template< typename T, std::size_t BUFFER_SIZE >
+ using small_vector1 = small_vectorL< T, 1, BUFFER_SIZE >;
+ 
+diff --git a/source/test/core/fragment/ConstantLengthFragments.cxxtest.hh b/source/test/core/fragment/ConstantLengthFragments.cxxtest.hh
+index e37dfcc982f..81c6ffa91b4 100644
+--- a/source/test/core/fragment/ConstantLengthFragments.cxxtest.hh
++++ b/source/test/core/fragment/ConstantLengthFragments.cxxtest.hh
+@@ -267,11 +267,11 @@ void FragmentConstantLengthTest::test_frag_iterator() {
+ 			FrameList frames;
+ 			if ( fragset.region( movemap, pos, pos, len, len, frames ) ) {
+ 				Frame const& frame ( * ( frames[ 1 ] ) );
+-				Size val;
++				Size val = 12345;
+ 				TS_ASSERT( silly_cache.retrieve(frame, 1, val) ); //there should be a value ( return true )
+ 				TS_ASSERT_EQUALS( val , pos );
+ 
+-				Size val2;
++				Size val2 = 98765;
+ 				TS_ASSERT( it != eit );
+ 				TS_ASSERT( silly_cache.retrieve( **it , 1, val2) ); //there should be a value ( return true )
+ 				TS_ASSERT_EQUALS( val2 , val );
+@@ -285,7 +285,7 @@ void FragmentConstantLengthTest::test_frag_iterator() {
+ 			ConstFrameIterator it = bfragset.begin();
+ 			ConstFrameIterator eit= bfragset.end();
+ 			for ( Size pos=1 ; it!=eit; ++it ) {
+-				Size val;
++				Size val = 24680;
+ 				silly_cache.retrieve( **it, 1, val);
+ 				TS_ASSERT_EQUALS( val, pos );
+ 				++pos;
+@@ -296,7 +296,7 @@ void FragmentConstantLengthTest::test_frag_iterator() {
+ 			FragID_Iterator it = bfragset.begin();
+ 			FragID_Iterator eit= bfragset.end();
+ 			for ( Size pos=1 ; it!=eit; ++it ) {
+-				Size val = 0; //gcc7.2
++				Size val = 13579;
+ 				silly_cache.retrieve( *it, val);
+ 				TS_ASSERT_EQUALS( val, pos );
+ 				++pos;
+diff --git a/source/test/utility/UTools.cxxtest.hh b/source/test/utility/UTools.cxxtest.hh
+index 4b517114694..85ce199f79d 100644
+--- a/source/test/utility/UTools.cxxtest.hh
++++ b/source/test/utility/UTools.cxxtest.hh
+@@ -133,8 +133,8 @@ public:
+ 	// ------------------------------------------ //
+ 	/// @brief test isMarkup function
+ 	void test_isMarkup() {
+-		double num;
+-		unsigned int end_pos;
++		double num = 987e-2;
++		unsigned int end_pos = 6574;
+ 		bool res;
+ 
+ 		res = test::utools::isMarkup("something(1.23)", 0, num, end_pos, "MARKUP(");
+diff --git a/source/test/utility/deep_copy_vector1.cxxtest.hh b/source/test/utility/deep_copy_vector1.cxxtest.hh
+index a1c7b31fc2d..68c343b6fbe 100644
+--- a/source/test/utility/deep_copy_vector1.cxxtest.hh
++++ b/source/test/utility/deep_copy_vector1.cxxtest.hh
+@@ -57,7 +57,7 @@ class HolderClass {
+ public:
+ 	HolderClass() = default;
+ 	HolderClass( core::Size size ) :
+-		items(size)
++		items(size, nullptr)
+ 	{}
+ 
+ 	utility::deep_copy_vector1< ClonableBaseOP > items;
+@@ -114,8 +114,20 @@ public:
+ 		HolderClass copy;
+ 		copy.items.push_back( utility::pointer::make_shared< ClonableBase >(4) );
+ 
++#ifndef __clang__ // Clang apparently looks at a directive directed at GCC and assumes it also applies to it.
++// It then loudly complains that it doesn't understand what you're talking about.
++#pragma GCC diagnostic push
++#pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
++#endif
++
++		// Not sure why, but this is triggering a warning on GCC 16.2, for deleting the contents of copy.items
+ 		copy = source;
+ 
++#ifndef __clang__
++#pragma GCC diagnostic pop
++#endif
++
++
+ 		TS_ASSERT_EQUALS( source.items.size(), 3 );
+ 		TS_ASSERT_EQUALS( copy.items.size(), 3 );
+ 
+diff --git a/source/tools/build/basic.settings b/source/tools/build/basic.settings
+index 29f1e3d6d01..1d7a9762b8e 100644
+--- a/source/tools/build/basic.settings
++++ b/source/tools/build/basic.settings
+@@ -2198,12 +2198,21 @@ settings = {
+         },
+     },
+ 
++    "clang, |cxx_ver:>=17,<20.0|" : {
++        "appends" : {
++            "flags" : {
++                "warn" : [
++		    "Wno-error=enum-constexpr-conversion", # Made default in Clang 20
++                ],
++            },
++        },
++    },
++
+     "clang, |cxx_ver:>=17|" : {
+         "appends" : {
+             "flags" : {
+                 "warn" : [
+                     "Wno-error=deprecated-declarations",
+-		    "Wno-error=enum-constexpr-conversion",
+                 ],
+             },
+         },

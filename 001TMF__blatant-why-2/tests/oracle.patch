@@ -1,0 +1,34 @@
+diff --git a/src/proteus_cli/campaign/active_learning.py b/src/proteus_cli/campaign/active_learning.py
+index 1fc6d22..aef6dd3 100644
+--- a/src/proteus_cli/campaign/active_learning.py
++++ b/src/proteus_cli/campaign/active_learning.py
+@@ -138,7 +138,6 @@ def suggest_from_campaign(campaign_dir: str, min_designs: int = 10) -> Optimizat
+ # most score dicts -- net_charge and hydrophobic_fraction are kept for
+ # extraction but excluded from the RF because they are rarely populated).
+ _RF_FEATURE_NAMES = [
+-    "ipsae",
+     "iptm",
+     "plddt",
+     "rmsd",
+@@ -196,7 +195,7 @@ def _ml_suggest(designs: list[dict]) -> OptimizationResult:
+             zip(_RF_FEATURE_NAMES, rf.feature_importances_)
+         ):
+             if imp > 0.1:  # only features with significant importance
+-                if feat in ("ipsae", "iptm", "plddt"):
++                if feat in ("iptm", "plddt"):
+                     recommendations[f"min_{feat}"] = round(
+                         float(good_means[i] * 0.9), 3
+                     )
+diff --git a/templates/.claude/mcp_servers/campaign/server.py b/templates/.claude/mcp_servers/campaign/server.py
+index 0a5a8c6..0e8b1aa 100644
+--- a/templates/.claude/mcp_servers/campaign/server.py
++++ b/templates/.claude/mcp_servers/campaign/server.py
+@@ -598,7 +598,7 @@ def _suggest_from_campaign(
+         import numpy as np
+ 
+         # Build feature matrix from scores
+-        feature_keys = [k for k in ("ipsae", "ipsae_min", "iptm", "plddt", "rmsd", "liabilities")
++        feature_keys = [k for k in ("iptm", "plddt", "rmsd", "liabilities")
+                         if any(isinstance(s.get(k), (int, float)) for s in scores)]
+         if len(feature_keys) >= 2:
+             X = []

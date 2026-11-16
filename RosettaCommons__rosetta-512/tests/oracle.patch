@@ -1,0 +1,111 @@
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/__init__.py b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/__init__.py
+index 1b8cbc9de3c..e40f2eedab3 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/__init__.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/__init__.py
+@@ -49,7 +49,7 @@
+     "run",
+     "update_scores",
+ ]
+-__version__: str = "2.1.0"
++__version__: str = "2.1.1"
+ 
+ _print_conda_warnings()
+ 
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/core.py b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/core.py
+index f6755976538..83184ee440b 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/core.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/core.py
+@@ -227,6 +227,10 @@
+     dry_run: A `bool` object specifying whether or not to save '.pdb' files to
+         disk. If `True`, then do not write '.pdb' or '.pdb.bz2' files to disk.
+         Default: False
++    cooldown_time: A `float` or `int` object specifying how many seconds to sleep after the
++        simulation is complete to allow loggers to flush. For very slow network filesystems,
++        2.0 or more seconds may be reasonable.
++        Default: 0.5
+ 
+ Returns:
+     A PyRosettaCluster instance.
+@@ -604,6 +608,12 @@ class PyRosettaCluster(IO[G], LoggingSupport[G], SchedulerManager[G], TaskBase[G
+         validator=attr.validators.instance_of(bool),
+         converter=_parse_yield_results,
+     )
++    cooldown_time = attr.ib(
++        type=float,
++        default=0.5,
++        validator=[_validate_float, attr.validators.instance_of((float, int))],
++        converter=attr.converters.default_if_none(default=0.5),
++    )
+     protocols_key = attr.ib(
+         type=str,
+         default="PyRosettaCluster_protocols_container",
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/logging_support.py b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/logging_support.py
+index a88b6f0b21a..5be7faf5d87 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/logging_support.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/logging_support.py
+@@ -25,6 +25,7 @@
+ 
+ import logging
+ import os
++import time
+ import warnings
+ 
+ from contextlib import suppress
+@@ -108,6 +109,7 @@ def _close_logger(self) -> None:
+         for handler in logger.handlers[:]:
+             logger.removeHandler(handler)
+             with suppress(Exception):
++                handler.flush()
+                 handler.close()
+         logging.shutdown()
+ 
+@@ -153,8 +155,9 @@ def _close_socket_listener(self, clients: Dict[int, Client]) -> None:
+         self._close_socket_logger_plugins(clients)
+         self.socket_listener.stop()
+         handler = self.socket_listener.handler
+-        handler.flush()
+         with suppress(Exception):
++            handler.flush()
++            self._cooldown()
+             handler.close()
+ 
+     def _close_socket_logger_plugins(self, clients: Dict[int, Client]) -> None:
+@@ -175,6 +178,9 @@ def _close_socket_logger_plugins(self, clients: Dict[int, Client]) -> None:
+                         f"Logger was not closed cleanly on dask worker ({worker_address}) - {result}"
+                     )
+ 
++    def _cooldown(self) -> None:
++        time.sleep(self.cooldown_time)
++
+ 
+ def purge_socket_logger_plugin_address(
+     socket_listener_address: Tuple[str, int],
+diff --git a/source/src/python/PyRosetta/src/test/T900_distributed.py b/source/src/python/PyRosetta/src/test/T900_distributed.py
+index af68f0b7ee1..1f089aede34 100644
+--- a/source/src/python/PyRosetta/src/test/T900_distributed.py
++++ b/source/src/python/PyRosetta/src/test/T900_distributed.py
+@@ -53,10 +53,10 @@
+         print("Printing pip environment failed with return code: {0}.".format(ex.returncode))
+ 
+ 
+-def e(cmd, sleep=1):
+-    """Run command getting return code and output with subsequent sleep step to provide extra time to flush loggers."""
++def e(cmd):
++    """Run command getting return code and output."""
+     print("Executing:\n{0}".format(cmd))
+-    status, output = subprocess.getstatusoutput("{0} && sleep {1}".format(cmd, sleep))
++    status, output = subprocess.getstatusoutput(cmd)
+     print("Output:\n{0}".format(output))
+     if status != 0:
+         print(
+@@ -106,9 +106,8 @@ def e(cmd, sleep=1):
+ tests = distributed_cluster_test_cases + distributed_test_suites
+ 
+ for test in tests:
+-    sleep = 5 if test in distributed_cluster_test_cases else 1
+     t0 = time.time()
+-    e("{python} -m unittest {test}".format(python=sys.executable, test=test), sleep=sleep)
++    e("{python} -m unittest {test}".format(python=sys.executable, test=test))
+     t1 = time.time()
+     dt = t1 - t0
+     print("Finished running test in {0} seconds: {1}\n".format(round(dt, 6), test))

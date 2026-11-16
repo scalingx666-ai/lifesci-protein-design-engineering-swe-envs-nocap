@@ -1,0 +1,62 @@
+version = "1.0"
+
+[task]
+name = "default/PapenfussLab__proteindj-26"
+description = "Fix case for beta-sheet design protocol"
+
+[metadata]
+difficulty = "easy"
+category = "bugfix"
+keywords = [
+    "proteindj",
+    "pr_diff",
+]
+
+[metadata.repo2env]
+pipeline = "pr_diff"
+pipeline_version = "0.3.0"
+repo = "PapenfussLab/proteindj"
+ref = "e6577926b0ab9068e77c862b0899dd04907ff975"
+reference = "https://github.com/PapenfussLab/proteindj/pull/26"
+source_access = "auto"
+built_at = "2026-11-16T03:26:50.758059+00:00"
+reward_kinds = [
+    "diff_similarity",
+]
+spec_version = "0.2.0"
+content_hash = "sha256:eeb039fb1e446da25e80027908c26647c0fa10d3861cb1f0e32a0821a9292f53"
+
+[metadata.repo2env.pr_diff]
+pr_merged_at = "2025-12-03T06:36:08Z"
+diff_format = "unified"
+context_files = [
+    "main.nf",
+]
+
+[metadata.repo2env.reward_calibration]
+baseline_reward = 0.0
+loc_changed = 4
+difficulty = "trivial"
+
+[metadata.repo2env.evaluation]
+schema_version = "1"
+status = "unverified"
+stage = "generation"
+reason_codes = [
+    "validation_not_run",
+]
+detail = "Generated task; validation has not been established."
+provenance = "unknown"
+evidence = []
+
+[metadata.repo2env.reproducibility]
+mode = "local_only"
+image_ref = "python:3.12-slim"
+image_tag = "python:3.12-slim"
+image_visibility = "private"
+
+[agent]
+timeout_sec = 1800.0
+
+[verifier]
+timeout_sec = 300.0

@@ -1,0 +1,7 @@
+diff --git a/PyRosetta.notebooks b/PyRosetta.notebooks
+index 352ca726cc6..ff11ea0590e 160000
+--- a/PyRosetta.notebooks
++++ b/PyRosetta.notebooks
+@@ -1 +1 @@
+-Subproject commit 352ca726cc68b58645f0b4926aa79adb025c4e9f
++Subproject commit ff11ea0590e40960c0c8f244fc8ab202aae9fdc8

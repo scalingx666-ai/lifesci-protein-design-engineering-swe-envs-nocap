@@ -1,0 +1,126 @@
+diff --git a/source/src/utility/keys/VariantKey.hh b/source/src/utility/keys/VariantKey.hh
+index 1f5c1196db4..829ddaae964 100644
+--- a/source/src/utility/keys/VariantKey.hh
++++ b/source/src/utility/keys/VariantKey.hh
+@@ -21,6 +21,7 @@
+ 
+ // C++ headers
+ #include <utility/assert.hh>
++#include <memory>
+ #include <string>
+ 
+ 
+@@ -52,7 +53,7 @@ public: // Creation
+ 	/// @brief Default constructor
+ 	inline
+ 	VariantKey() :
+-		key_p_( 0 )
++		key_p_()
+ 	{}
+ 
+ 
+@@ -70,14 +71,6 @@ public: // Creation
+ 	{}
+ 
+ 
+-	/// @brief Destructor
+-	inline
+-	~VariantKey() throw() // throw() needed for ICC
+-	{
+-		delete key_p_;
+-	}
+-
+-
+ public: // Assignment
+ 
+ 
+@@ -87,7 +80,7 @@ public: // Assignment
+ 	operator =( VariantKey const & var )
+ 	{
+ 		if ( this != &var ) {
+-			delete key_p_; key_p_ = ( var.key_p_ ? var.key_p_->clone() : 0 );
++			key_p_.reset( var.key_p_ ? var.key_p_->clone() : nullptr );
+ 		}
+ 		return *this;
+ 	}
+@@ -292,7 +285,7 @@ private: // Fields
+ 
+ 
+ 	/// @brief Pointer to key
+-	Key * key_p_;
++	std::unique_ptr< Key > key_p_;
+ 
+ 
+ }; // VariantKey
+diff --git a/source/src/utility/options/VariantOption.hh b/source/src/utility/options/VariantOption.hh
+index 6008ecbea71..8f518f2d42a 100644
+--- a/source/src/utility/options/VariantOption.hh
++++ b/source/src/utility/options/VariantOption.hh
+@@ -22,6 +22,7 @@
+ 
+ // C++ headers
+ #include <cstddef>
++#include <memory>
+ #include <string>
+ 
+ 
+@@ -55,7 +56,7 @@ public: // Creation
+ 	/// @brief Default constructor
+ 	inline
+ 	VariantOption() :
+-		option_p_( 0 )
++		option_p_()
+ 	{}
+ 
+ 
+@@ -73,14 +74,6 @@ public: // Creation
+ 	{}
+ 
+ 
+-	/// @brief Destructor
+-	inline
+-	~VariantOption() throw() // throw() is needed for ICC
+-	{
+-		delete option_p_;
+-	}
+-
+-
+ public: // Assignment
+ 
+ 
+@@ -90,7 +83,7 @@ public: // Assignment
+ 	operator =( VariantOption const & var )
+ 	{
+ 		if ( this != &var ) {
+-			delete option_p_; option_p_ = ( var.option_p_ ? var.option_p_->clone() : nullptr );
++			option_p_.reset( var.option_p_ ? var.option_p_->clone() : nullptr );
+ 		}
+ 		return *this;
+ 	}
+@@ -121,7 +114,7 @@ public: // Conversion
+ 	operator Option const *() const
+ 	{
+ 		runtime_assert( option_p_ );
+-		return option_p_;
++		return option_p_.get();
+ 	}
+ 
+ 
+@@ -130,7 +123,7 @@ public: // Conversion
+ 	operator Option *()
+ 	{
+ 		runtime_assert( option_p_ );
+-		return option_p_;
++		return option_p_.get();
+ 	}
+ 
+ 
+@@ -343,7 +336,7 @@ private: // Fields
+ 
+ 
+ 	/// @brief Pointer to option
+-	Option * option_p_;
++	std::unique_ptr< Option > option_p_;
+ 
+ 
+ }; // VariantOption

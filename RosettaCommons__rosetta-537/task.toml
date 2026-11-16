@@ -1,0 +1,67 @@
+version = "1.0"
+
+[task]
+name = "default/RosettaCommons__rosetta-537"
+description = "Defining a PyRosetta build signature specifying extras"
+
+[metadata]
+difficulty = "medium"
+category = "bugfix"
+keywords = [
+    "rosetta",
+    "pr_diff",
+]
+
+[metadata.repo2env]
+pipeline = "pr_diff"
+pipeline_version = "0.3.0"
+repo = "RosettaCommons/rosetta"
+ref = "de3cc17d509259e29147a2ed8f2a726d644e7e34"
+reference = "https://github.com/RosettaCommons/rosetta/pull/537"
+source_access = "auto"
+built_at = "2026-11-15T22:36:26.189751+00:00"
+reward_kinds = [
+    "diff_similarity",
+]
+spec_version = "0.2.0"
+content_hash = "sha256:ed27073f5125a32dc0ad51c0c1e550572df812826d60e569247611254be3673e"
+
+[metadata.repo2env.pr_diff]
+pr_merged_at = "2025-10-07T23:38:48Z"
+diff_format = "unified"
+context_files = [
+    "source/src/python/PyRosetta/src/pyrosetta/__init__.py",
+    "source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/__init__.py",
+    "source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/converters.py",
+    "source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/core.py",
+    "source/src/python/PyRosetta/src/pyrosetta/tests/distributed/cluster/test_smoke.py",
+    "source/src/python/PyRosetta/src/pyrosetta/utility/initialization.py",
+]
+
+[metadata.repo2env.reward_calibration]
+baseline_reward = 0.0
+loc_changed = 34
+difficulty = "medium"
+
+[metadata.repo2env.evaluation]
+schema_version = "1"
+status = "unverified"
+stage = "generation"
+reason_codes = [
+    "validation_not_run",
+]
+detail = "Generated task; validation has not been established."
+provenance = "unknown"
+evidence = []
+
+[metadata.repo2env.reproducibility]
+mode = "local_only"
+image_ref = "python:3.12-slim"
+image_tag = "python:3.12-slim"
+image_visibility = "private"
+
+[agent]
+timeout_sec = 1800.0
+
+[verifier]
+timeout_sec = 300.0

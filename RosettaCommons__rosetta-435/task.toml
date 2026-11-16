@@ -1,0 +1,65 @@
+version = "1.0"
+
+[task]
+name = "default/RosettaCommons__rosetta-435"
+description = "Update XSD documentation script to output Chemistry object documentation"
+
+[metadata]
+difficulty = "small"
+category = "bugfix"
+keywords = [
+    "rosetta",
+    "pr_diff",
+]
+
+[metadata.repo2env]
+pipeline = "pr_diff"
+pipeline_version = "0.3.0"
+repo = "RosettaCommons/rosetta"
+ref = "8e1e5e54f047b0833dcf760a5cd5d3ce94d63938"
+reference = "https://github.com/RosettaCommons/rosetta/pull/435"
+source_access = "auto"
+built_at = "2026-11-15T22:37:07.073258+00:00"
+reward_kinds = [
+    "diff_similarity",
+]
+spec_version = "0.2.0"
+content_hash = "sha256:0b4fb47ca29f1b91d8c330de041864e3262cdf9199fead0ae0cb2257b5a15fc5"
+
+[metadata.repo2env.pr_diff]
+pr_merged_at = "2025-07-09T19:36:17Z"
+diff_format = "unified"
+context_files = [
+    "documentation",
+    "source/src/protocols/chemistries/ChemistryFactory.cc",
+    "tests/benchmark/tests/maintenance.py",
+    "tools",
+]
+
+[metadata.repo2env.reward_calibration]
+baseline_reward = 0.0
+loc_changed = 10
+difficulty = "small"
+
+[metadata.repo2env.evaluation]
+schema_version = "1"
+status = "unverified"
+stage = "generation"
+reason_codes = [
+    "validation_not_run",
+]
+detail = "Generated task; validation has not been established."
+provenance = "unknown"
+evidence = []
+
+[metadata.repo2env.reproducibility]
+mode = "local_only"
+image_ref = "python:3.12-slim"
+image_tag = "python:3.12-slim"
+image_visibility = "private"
+
+[agent]
+timeout_sec = 1800.0
+
+[verifier]
+timeout_sec = 300.0

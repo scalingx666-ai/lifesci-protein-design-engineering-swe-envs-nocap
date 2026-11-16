@@ -1,0 +1,1007 @@
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/config.py b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/config.py
+index 6ec0e08e761..c496606e66c 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/config.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/config.py
+@@ -42,14 +42,8 @@ class EnvironmentConfig(Generic[G]):
+     _ENV_EXPORT_CMDS: Dict[str, str] = {
+         "pixi": "pixi workspace export conda-environment",
+         "uv": "uv export --format requirements-txt --frozen",
+-        "mamba": "mamba env export --prefix {0}".format(sys.prefix),
+-        "conda": "conda env export --prefix {0}".format(sys.prefix),
+-    }
+-    _ENV_LIST_CMDS: Dict[str, Optional[str]] = {
+-        "pixi": None,
+-        "uv": None,
+-        "mamba": "mamba env list",
+-        "conda": "conda env list",
++        "mamba": f"mamba env export --prefix '{sys.prefix}'",
++        "conda": f"conda env export --prefix '{sys.prefix}'",
+     }
+ 
+     def __init__(self) -> None:
+@@ -88,31 +82,37 @@ def __init__(self) -> None:
+     def env_export_cmd(self) -> str:
+         return self._ENV_EXPORT_CMDS[self.environment_manager]
+ 
+-    @property
+-    def env_list_cmd(self) -> Optional[str]:
+-        return self._ENV_LIST_CMDS[self.environment_manager]
+-
+     def env_create_cmd(
+-        self, environment_name: str, raw_spec: str, tmp_dir: str
++        self, environment_name: str, raw_spec: str, tmp_dir: str, base_dir: str
+     ) -> Union[str, NoReturn]:
++        # Create a project directory for uv/pixi, or prefix directory for conda/mamba
++        project_dir = os.path.join(base_dir, environment_name)
++        # Raise exception if the project directory exists
++        if os.path.isdir(project_dir):
++            if self.environment_manager in ("conda", "mamba"):
++                _err_msg = f"The {self.environment_manager} environment prefix directory already exists: '{project_dir}'"
++            elif self.environment_manager in ("uv", "pixi"):
++                _err_msg = f"The {self.environment_manager} project directory already exists: '{project_dir}'"
++            else:
++                raise RuntimeError(f"Unsupported environment manager: '{self.environment_manager}'")
++            raise IsADirectoryError(_err_msg)
++        os.makedirs(project_dir, exist_ok=False)
++
+         if self.environment_manager in ("conda", "mamba", "pixi"):
+             yml_file = os.path.join(tmp_dir, f"{environment_name}.yml")
+             with open(yml_file, "w") as f:
+                 f.write(raw_spec)
+ 
+             if self.environment_manager == "conda":
+-                return f"conda env create -f {yml_file} -n {environment_name}"
++                return f"conda env create -f '{yml_file}' -p '{project_dir}'"
+ 
+             elif self.environment_manager == "mamba":
+-                return f"mamba env create -f {yml_file} -n {environment_name}"
++                return f"mamba env create -f '{yml_file}' -p '{project_dir}'"
+ 
+             elif self.environment_manager == "pixi":
+-                # Create a pixi project in the current working directory
+-                project_dir = os.path.join(os.getcwd(), environment_name)
+-                os.makedirs(project_dir, exist_ok=False)  # Raise exception if the project directory exists
+                 return (
+-                    f"pixi init --import {yml_file} {project_dir} && "
+-                    f"pixi install --manifest-path {project_dir}"
++                    f"pixi init --import '{yml_file}' '{project_dir}' && "
++                    f"pixi install --manifest-path '{project_dir}'"
+                 )
+ 
+         elif self.environment_manager == "uv":
+@@ -120,12 +120,9 @@ def env_create_cmd(
+             req_file = os.path.join(tmp_dir, f"{environment_name}.txt")
+             with open(req_file, "w") as f:
+                 f.write(raw_spec)
+-            # Create a uv project in the current working directory
+-            env_dir = os.path.join(os.getcwd(), environment_name)
+-            os.makedirs(env_dir, exist_ok=False)  # Raise exception if the project directory exists
+             return (
+-                f"uv venv create {env_dir} && "
+-                f"uv pip sync -r {req_file} --venv {env_dir}"
++                f"uv venv '{project_dir}' && "
++                f"uv pip sync -r '{req_file}' --venv '{project_dir}'"
+             )
+ 
+         raise RuntimeError(f"Unsupported environment manager: '{self.environment_manager}'")
+@@ -149,7 +146,7 @@ def get_environment_cmd() -> str:
+ 
+ def get_environment_var() -> str:
+     """Get the PyRosettaCluster operating system environment variable name."""
+-    return get_environment_config()._ENV_VAR
++    return EnvironmentConfig._ENV_VAR
+ 
+ 
+ source_domains: List[str] = [
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/security.py b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/security.py
+index e58db1dc5f2..754fbb510f9 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/security.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/security.py
+@@ -49,7 +49,7 @@
+ 
+ class SecurityIO(Generic[G]):
+     def _setup_task_security_plugin(self, clients: Dict[int, Client]) -> None:
+-        """Setup tast security worker plugin(s)."""
++        """Setup task security worker plugin(s)."""
+         prk = MaskedBytes(derive_task_key(os.urandom(32), self.instance_id))
+         self._register_task_security_plugin(clients, prk)
+         self.serializer.prk = prk
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/tools.py b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/tools.py
+index 0a1e785e0a0..4f3019dd6d0 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/tools.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/tools.py
+@@ -33,7 +33,7 @@
+ 
+ from datetime import datetime
+ from functools import wraps
+-from pyrosetta.distributed.cluster.config import get_environment_config
++from pyrosetta.distributed.cluster.config import get_environment_config, get_environment_var
+ from pyrosetta.distributed.cluster.converters import _parse_protocols
+ from pyrosetta.distributed.cluster.converter_tasks import (
+     is_dict,
+@@ -315,6 +315,7 @@ def recreate_environment(
+     scorefile: Optional[str] = None,
+     decoy_name: Optional[str] = None,
+     timeout: Optional[int] = None,
++    base_dir: Optional[str] = None,
+ ) -> Optional[NoReturn]:
+     """
+     Given an input file that was written by PyRosettaCluster, or a scorefile
+@@ -329,9 +330,9 @@ def recreate_environment(
+ 
+     Args:
+         environment_name: A `str` object specifying the new name of the environment
+-            to recreate. If using 'conda' and 'mamba', this is the environment name.
+-            If using 'uv' or 'pixi', this is the local project directory name that will
+-            be created in the current working directory.
++            to recreate. If using 'conda' and 'mamba', this is the prefix directory that will
++            be created in the 'base_dir' directory. If using 'uv' or 'pixi', this is the
++            local project directory name that will be created in the 'base_dir' directory.
+             Default: 'PyRosettaCluster_' + datetime.now().strftime("%Y.%m.%d.%H.%M.%S.%f")
+         input_file: A `str` object specifying the path to the '.pdb', '.pdb.bz2', '.pkl_pose',
+             '.pkl_pose.bz2', '.b64_pose', or '.b64_pose.bz2' file, or a `Pose` or `PackedPose`
+@@ -352,6 +353,9 @@ def recreate_environment(
+         timeout: An `int` object specifying the timeout in seconds before any
+             subprocesses are terminated.
+             Default: None
++        base_dir: A `str` object specifying the base directory in which to create
++            the environment.
++            Default: `.`
+ 
+     Returns:
+         None
+@@ -364,6 +368,7 @@ def _run_subprocess(cmd) -> str:
+                 stderr=subprocess.STDOUT,
+                 timeout=timeout,
+                 text=True,
++                executable="/bin/bash", # Ensure `&&` works properly
+             )
+         except subprocess.CalledProcessError as ex:
+             raise RuntimeError(
+@@ -373,41 +378,27 @@ def _run_subprocess(cmd) -> str:
+             ) from ex
+ 
+     if not environment_name:
+-        environment_name = "PyRosettaCluster_" + datetime.now().strftime(
+-            "%Y.%m.%d.%H.%M.%S.%f"
++        environment_name = "PyRosettaCluster_" + datetime.now().strftime("%Y.%m.%d.%H.%M.%S.%f")
++    elif not isinstance(environment_name, str):
++        raise TypeError(
++            f"The 'environment_name' keyword argument parameter must be of type `str`. Received: {type(environment_name)}"
+         )
+ 
+-    _env_config = get_environment_config()
+-    environment_manager = _env_config.environment_manager
+-    env_list_cmd = _env_config.env_list_cmd
+-
+-    # Test if environment name already exists
+-    if environment_manager in ("conda", "mamba"):
+-        env_list_cmd = _env_config.env_list_cmd
+-        envs_out = _run_subprocess(env_list_cmd)
+-        envs_all = [
+-            line.split()[0]
+-            for line in envs_out.splitlines()
+-            if line and not line.startswith("#")
+-        ]
+-    elif environment_manager in ("uv", "pixi"):
+-        # Only consider local uv or pixi projects created in the current working directory
+-        if environment_manager == "uv":
+-            _filenames = ("uv.lock", "pyproject.toml",)
+-        elif environment_manager == "pixi":
+-            _filenames = ("pixi.toml",)
+-        cwd = os.getcwd()
+-        envs_all = [
+-            d for d in os.listdir(cwd)
+-            if os.path.isdir(d) and any(os.path.isfile(os.path.join(cwd, d, f)) for f in _filenames)
+-        ]
++    if not base_dir:
++        base_dir = os.path.abspath(os.curdir)
++    elif not isinstance(base_dir, str):
++        raise TypeError(f"The 'base_dir' keyword argument parameter must be of type `str`. Received: {type(base_dir)}")
+     else:
+-        raise RuntimeError(f"Unsupported environment manager: '{environment_manager}'")
+-    if environment_name in envs_all:
+-        raise RuntimeError(
+-            f"The environment name '{environment_name}' already exists under {environment_manager}."
++        base_dir = os.path.abspath(os.path.expanduser(base_dir))
++    if not os.path.isdir(base_dir):
++        raise NotADirectoryError(
++            f"The 'base_dir' keyword argument parameter must be an existing directory. Received: '{base_dir}'"
+         )
+ 
++    _env_config = get_environment_config()
++    environment_manager = _env_config.environment_manager
++    environment_var = get_environment_var()
++
+     # Extract environment spec from record
+     _instance_kwargs = get_instance_kwargs(
+         input_file=input_file,
+@@ -428,7 +419,7 @@ def _run_subprocess(cmd) -> str:
+         )
+     # Get original environment manager
+     for line in raw_spec.splitlines():
+-        if line.startswith(f"# {_env_config._ENV_VAR}"):
++        if line.startswith(f"# {environment_var}"):
+             original_environment_manager = line.split("=")[-1].strip()
+             break
+     else:
+@@ -442,7 +433,7 @@ def _run_subprocess(cmd) -> str:
+             + f"'{environment_manager}' as an environment manager! The environment specification "
+             + f"is saved in a 'requirements.txt' format, and therefore requires '{original_environment_manager}' "
+             + f"to recreate the environment. Please ensure '{original_environment_manager}' is installed "
+-            + f"and run `export {_env_config._ENV_VAR}={original_environment_manager}` to properly configure "
++            + f"and run `export {environment_var}={original_environment_manager}` to properly configure "
+             + f"the '{original_environment_manager}' environment manager, then try again. For installation "
+             + "instructions, please visit:\n"
+             + "https://docs.astral.sh/uv/guides/install-python\n"
+@@ -455,9 +446,9 @@ def _run_subprocess(cmd) -> str:
+             + "is saved in a YAML file format, and therefore requires 'conda', 'mamba', or 'pixi' to "
+             + "recreate the environment. Please ensure that 'conda', 'mamba', or 'pixi' is installed, then "
+             + "configure the environment manager by running one of the following commands, then try again:\n"
+-            + f"To configure 'conda', run: `export {_env_config._ENV_VAR}=conda`\n"
+-            + f"To configure 'mamba', run: `export {_env_config._ENV_VAR}=mamba`\n"
+-            + f"To configure 'pixi', run:  `export {_env_config._ENV_VAR}=pixi`\n"
++            + f"To configure 'conda', run: `export {environment_var}=conda`\n"
++            + f"To configure 'mamba', run: `export {environment_var}=mamba`\n"
++            + f"To configure 'pixi', run:  `export {environment_var}=pixi`\n"
+             + "For installation instructions, please visit:\n"
+             + "https://docs.anaconda.com/anaconda/install\n"
+             + "https://github.com/conda-forge/miniforge\n"
+@@ -476,11 +467,11 @@ def _run_subprocess(cmd) -> str:
+ 
+     # Recreate the environment
+     with tempfile.TemporaryDirectory() as tmp_dir:
+-        env_create_cmd = _env_config.env_create_cmd(environment_name, raw_spec, tmp_dir)
++        env_create_cmd = _env_config.env_create_cmd(environment_name, raw_spec, tmp_dir, base_dir)
+         output = _run_subprocess(env_create_cmd)
+-        sys.stdout.write(
+-            f"\nEnvironment successfully created using {environment_manager}: '{environment_name}'\n"
+-            f"Output:\n{output}\n"
++        print(
++            f"\nEnvironment successfully created using {environment_manager}: '{environment_name}'\nOutput:\n{output}\n",
++            flush=True,
+         )
+ 
+ 
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/tests/distributed/cluster/recreate_environment_test_runs.py b/source/src/python/PyRosetta/src/pyrosetta/tests/distributed/cluster/recreate_environment_test_runs.py
+index a910373a507..ceea3cdb0a8 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/tests/distributed/cluster/recreate_environment_test_runs.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/tests/distributed/cluster/recreate_environment_test_runs.py
+@@ -14,7 +14,7 @@
+ import tempfile
+ 
+ from pyrosetta.distributed.cluster import reproduce, run
+-from pyrosetta.distributed.cluster.config import EnvironmentConfig
++from pyrosetta.distributed.cluster.config import get_environment_var
+ 
+ 
+ def create_tasks():
+@@ -55,7 +55,7 @@ def run_original_simulation(
+     scorefile_name,
+ ):
+     # Set environment manager
+-    os.environ[EnvironmentConfig._ENV_VAR] = env_manager
++    os.environ[get_environment_var()] = env_manager
+     with tempfile.TemporaryDirectory() as tmp_dir:
+         # Setup simulation
+         scratch_dir = os.path.join(tmp_dir, "scratch")
+@@ -119,7 +119,7 @@ def run_reproduce_simulation(
+     original_decoy_name,
+ ):
+     # Set environment manager
+-    os.environ[EnvironmentConfig._ENV_VAR] = env_manager
++    os.environ[get_environment_var()] = env_manager
+     with tempfile.TemporaryDirectory() as tmp_dir:
+         # Setup simulation
+         scratch_dir = os.path.join(tmp_dir, "scratch")
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/tests/distributed/cluster/setup_envs.py b/source/src/python/PyRosetta/src/pyrosetta/tests/distributed/cluster/setup_envs.py
+new file mode 100644
+index 00000000000..434259b53aa
+--- /dev/null
++++ b/source/src/python/PyRosetta/src/pyrosetta/tests/distributed/cluster/setup_envs.py
+@@ -0,0 +1,219 @@
++# :noTabs=true:
++# (c) Copyright Rosetta Commons Member Institutions.
++# (c) This file is part of the Rosetta software suite and is made available under license.
++# (c) The Rosetta software is developed by the contributing members of the Rosetta Commons.
++# (c) For more information, see http://www.rosettacommons.org. Questions about this can be
++# (c) addressed to University of Washington CoMotion, email: license@uw.edu.
++
++
++__author__ = "Jason C. Klima"
++
++
++import argparse
++import os
++import platform
++import subprocess
++import sys
++import textwrap
++
++from pathlib import Path
++
++
++ROSETTACOMMONS_CONDA_CHANNEL = "https://conda.rosettacommons.org"
++
++
++def detect_platform():
++    """Detect system platform string used by GitHub Actions."""
++    system = platform.system().lower()
++    machine = platform.machine().lower()
++
++    if system == "linux":
++        plat = "linux-64" if "64" in machine else "linux-32"
++    elif system == "darwin":
++        plat = "osx-arm64" if "arm" in machine else "osx-64"
++    elif system == "windows":
++        plat = "win-64"
++    else:
++        raise RuntimeError(f"Unsupported platform: {system} ({machine})")
++
++    return plat
++
++
++def setup_pixi_environment(env_dir):
++    """
++    Create a fresh pixi environment containing 'pyrosetta' and 'pyrosetta-distributed' packages.
++
++    Note: this requires that `pixi` is an executable installed and on `${PATH}`. This function:
++    - detects the current Python version
++    - detects the current platform (linux/mac/windows)
++    - writes a compatible 'pixi.toml' file
++    - runs `pixi install` to build a new pixi environment
++    """
++    # Detect Python version
++    py_version = f"{sys.version_info.major}.{sys.version_info.minor}"
++    py_feature = f"py{sys.version_info.major}{sys.version_info.minor}"
++
++    # Detect platform
++    plat = detect_platform()
++
++    # Build 'pixi.toml' file dynamically
++    pixi_toml = textwrap.dedent(f"""
++    [workspace]
++    channels = ["{ROSETTACOMMONS_CONDA_CHANNEL}", "conda-forge"]
++    name = "pyrosetta-pixi"
++    platforms = ["{plat}"]
++    version = "1.0.0"
++
++    [dependencies]
++    pyrosetta = "*"
++
++    [pypi-dependencies]
++    pyrosetta-distributed = "*"
++
++    [feature.{py_feature}.dependencies]
++    python = "{py_version}.*"
++
++    [environments]
++    {py_feature} = ["{py_feature}"]
++    """)
++
++    # Create environment directory
++    env_path = Path(env_dir)
++    env_path.mkdir(parents=True, exist_ok=False)
++    toml_path = env_path / "pixi.toml"
++    toml_path.write_text(pixi_toml.strip() + "\n")
++    print(f"Created '{toml_path}' file for platform '{plat}' and Python-{py_version}")
++
++    # Install pixi environment
++    print("Running `pixi install`...")
++    subprocess.run(["pixi", "install"], cwd=env_path, check=True)
++
++    print(f"Pixi environment setup complete in directory: '{env_path}'.")
++
++
++def setup_uv_environment(env_dir):
++    """
++    Create a fresh uv environment using the 'pyrosetta-installer' package.
++
++    Note: this requires that `uv` is an executable installed and on `${PATH}`. This function:
++    - detects the current Python version
++    - adds 'pyrosetta-installer' via `uv add ...`
++    - runs the PyRosetta installer using `uv run python -c ...`
++    """
++    env_path = Path(env_dir)
++    if env_path.exists():
++        raise FileExistsError(f"The specified uv environment path already exists: '{env_path}'.")
++
++    # Detect Python version
++    py_version = f"{sys.version_info.major}.{sys.version_info.minor}"
++
++    # Create uv environment using the current Python
++    print(f"Creating uv environment at '{env_path}'...")
++    subprocess.run(
++        ["uv", "venv", str(env_path), "--python", py_version],
++        check=True,
++    )
++
++    # Install pyrosetta-installer
++    print("Adding 'pyrosetta-installer' to uv environment...")
++    subprocess.run(
++        ["uv", "add", "-p", str(env_path), "pyrosetta-installer"],
++        check=True,
++    )
++
++    # Run PyRosetta installer with mirror fallback
++    print("Running PyRosetta installer in uv environment...")
++    install_script = textwrap.dedent("""
++        import pyrosetta_installer
++        try:
++            pyrosetta_installer.install_pyrosetta(
++                distributed=True,
++                serialization=True,
++                skip_if_installed=True,
++                mirror=0
++            )
++        except Exception as e:
++            print(f"PyRosetta installation with 'mirror=0' failed: {e}. Retrying with 'mirror=1'.")
++            pyrosetta_installer.install_pyrosetta(
++                distributed=True,
++                serialization=True,
++                skip_if_installed=True,
++                mirror=1
++            )
++    """)
++    subprocess.run(
++        ["uv", "run", "-p", str(env_path), "python", "-c", install_script],
++        check=True,
++    )
++
++    print(f"Uv environment setup complete in directory: '{env_path}'.")
++
++
++def setup_conda_environment(env_dir, env_manager="conda"):
++    """
++    Create a fresh conda/mamba environment containing 'pyrosetta' and 'pyrosetta-distributed' packages.
++
++    Note: this requires that `conda` or `mamba` is an executable installed and on `${PATH}`. This function:
++    - detects the current Python version
++    - detects the current platform (linux/mac/windows)
++    - writes a temporary 'environment.yml' file
++    - runs `{env_manager} env create -f environment.yml ...` to build a new environment
++    """
++
++    # Validate environment manager
++    if env_manager not in ("conda", "mamba"):
++        raise ValueError("The 'env_manager' keyword argument parameter must be either 'conda' or 'mamba'.")
++
++    # Detect Python version
++    py_version = f"{sys.version_info.major}.{sys.version_info.minor}"
++
++    # Detect platform
++    plat = detect_platform()
++
++    # Build the conda environment file dynamically
++    name = os.path.basename(env_dir)
++    env_yaml = textwrap.dedent(f"""
++    name: {name}
++    channels:
++      - {ROSETTACOMMONS_CONDA_CHANNEL}
++      - conda-forge
++    dependencies:
++      - python={py_version}.*
++      - pyrosetta
++      - pip
++      - pip:
++        - pyrosetta-distributed
++    """)
++
++    # Create environment directory
++    env_path = Path(env_dir)
++    env_path.mkdir(parents=True, exist_ok=False)
++    env_file = env_path / "environment.yml"
++    env_file.write_text(env_yaml.strip() + "\n")
++    print(f"Created '{env_file}' for platform '{plat}' and Python-{py_version}")
++
++    # Run conda/mamba to build the environment
++    print(f"Running `{env_manager} env create -f {env_file} -p {env_path}`...")
++    subprocess.run(
++        [env_manager, "env", "create", "-f", str(env_file), "-p", str(env_path)],
++        cwd=env_path,
++        check=True,
++    )
++
++    print(f"{env_manager.title()} environment setup complete in directory: '{env_path}'.")
++
++
++if __name__ == "__main__":
++    print("Running: {0}".format(__file__))
++    parser = argparse.ArgumentParser()
++    parser.add_argument('--env_manager', type=str)
++    parser.add_argument('--env_dir', type=str)
++    args = parser.parse_args()
++    if args.env_manager == "pixi":
++        setup_pixi_environment(args.env_dir)
++    elif args.env_manager == "uv":
++        setup_uv_environment(args.env_dir)
++    elif args.env_manager in ("conda", "mamba"):
++        setup_conda_environment(args.env_dir, env_manager=args.env_manager)
++    else:
++        raise NotImplementedError(args.env_manager)
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/tests/distributed/cluster/setup_pixi_env.py b/source/src/python/PyRosetta/src/pyrosetta/tests/distributed/cluster/setup_pixi_env.py
+deleted file mode 100644
+index ccef7202166..00000000000
+--- a/source/src/python/PyRosetta/src/pyrosetta/tests/distributed/cluster/setup_pixi_env.py
++++ /dev/null
+@@ -1,88 +0,0 @@
+-# :noTabs=true:
+-# (c) Copyright Rosetta Commons Member Institutions.
+-# (c) This file is part of the Rosetta software suite and is made available under license.
+-# (c) The Rosetta software is developed by the contributing members of the Rosetta Commons.
+-# (c) For more information, see http://www.rosettacommons.org. Questions about this can be
+-# (c) addressed to University of Washington CoMotion, email: license@uw.edu.
+-
+-
+-__author__ = "Jason C. Klima"
+-
+-
+-import argparse
+-import platform
+-import subprocess
+-import sys
+-import textwrap
+-
+-from pathlib import Path
+-
+-
+-def setup_pixi_environment(env_dir):
+-    """
+-    Create a fresh pixi environment containing 'pyrosetta' and 'pyrosetta-distributed' packages.
+-
+-    Note: this requires that `pixi` is an executable installed and on `${PATH}`. This function:
+-    - detects the current Python version
+-    - detects the current platform (linux/mac/windows)
+-    - writes a compatible 'pixi.toml' file
+-    - runs `pixi install` to build a new pixi environment
+-    """
+-    # Detect Python version
+-    py_version = f"{sys.version_info.major}.{sys.version_info.minor}"
+-    py_feature = f"py{sys.version_info.major}{sys.version_info.minor}"
+-
+-    # Detect platform string used by GitHub Actions
+-    system = platform.system().lower()
+-    machine = platform.machine().lower()
+-
+-    if system == "linux":
+-        plat = "linux-64" if "64" in machine else "linux-32"
+-    elif system == "darwin":
+-        plat = "osx-arm64" if "arm" in machine else "osx-64"
+-    elif system == "windows":
+-        plat = "win-64"
+-    else:
+-        raise RuntimeError(f"Unsupported platform: {system} ({machine})")
+-
+-    # Build 'pixi.toml' file dynamically
+-    pixi_toml = textwrap.dedent(f"""
+-    [workspace]
+-    channels = ["conda-forge", "https://conda.rosettacommons.org"]
+-    name = "pyrosetta-pixi"
+-    platforms = ["{plat}"]
+-    version = "1.0.0"
+-
+-    [dependencies]
+-    pyrosetta = "*"
+-
+-    [pypi-dependencies]
+-    pyrosetta-distributed = "*"
+-
+-    [feature.{py_feature}.dependencies]
+-    python = "{py_version}.*"
+-
+-    [environments]
+-    {py_feature} = ["{py_feature}"]
+-    """)
+-
+-    # Create environment directory
+-    env_path = Path(env_dir)
+-    env_path.mkdir(parents=True, exist_ok=False)
+-    toml_path = env_path / "pixi.toml"
+-    toml_path.write_text(pixi_toml.strip() + "\n")
+-    print(f"Created '{toml_path}' file for platform '{plat}' and Python-{py_version}")
+-
+-    # Install pixi environment
+-    print("Running `pixi install`...")
+-    subprocess.run(["pixi", "install"], cwd=env_path, check=True)
+-
+-    print(f"Pixi environment setup complete in directory: '{env_path}'.")
+-
+-
+-if __name__ == "__main__":
+-    print("Running: {0}".format(__file__))
+-    parser = argparse.ArgumentParser()
+-    parser.add_argument('--env_dir', type=str)
+-    args = parser.parse_args()
+-    setup_pixi_environment(args.env_dir)
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/tests/distributed/cluster/test_reproducibility.py b/source/src/python/PyRosetta/src/pyrosetta/tests/distributed/cluster/test_reproducibility.py
+index 4e74564eeb1..f099afd120b 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/tests/distributed/cluster/test_reproducibility.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/tests/distributed/cluster/test_reproducibility.py
+@@ -24,8 +24,10 @@
+ import subprocess
+ import sys
+ import tempfile
++import textwrap
+ import time
+ import unittest
++import uuid
+ 
+ from contextlib import contextmanager
+ from pathlib import Path
+@@ -38,7 +40,7 @@
+     reserve_scores,
+     reproduce,
+ )
+-from pyrosetta.distributed.cluster.config import EnvironmentConfig
++from pyrosetta.distributed.cluster.config import get_environment_var
+ from pyrosetta.distributed.cluster.io import secure_read_pickle
+ from pyrosetta.tests.distributed.cluster.setup_inputs import get_test_params_file, get_test_pdb_file
+ 
+@@ -1655,10 +1657,15 @@ def setUpClass(cls):
+             set_logging_handler="logging",
+         )
+         cls.workdir = tempfile.TemporaryDirectory()
++        cls.run_tag = uuid.uuid4().hex[:12]
+ 
+     @classmethod
+     def tearDownClass(cls):
+-        cls.workdir.cleanup()
++        try:
++            cls.workdir.cleanup()
++        except Exception as ex:
++            print(f"Warning: failed to cleanup temporary directory: {ex}... Continuing.")
++        os.environ.pop(get_environment_var(), None)
+ 
+     def assert_atom_coordinates(self, pose1, pose2):
+         self.assertEqual(pose1.size(), pose2.size())
+@@ -1680,153 +1687,228 @@ def run_subprocess(cmd, module_dir=None, cwd=None):
+         print("Running command:", cmd)
+         if module_dir:
+             env = os.environ.copy()
+-            env["PYTHONPATH"] = f"{module_dir}{os.pathsep}{os.environ.get('PYTHONPATH', '')}"
++            pythonpath = os.environ.get("PYTHONPATH")
++            env["PYTHONPATH"] = f"{module_dir}{os.pathsep + pythonpath if pythonpath else ''}"
+         else:
+             env = None
+-        p = subprocess.run(shlex.split(cmd), cwd=cwd, env=env, check=True, shell=False, stderr=subprocess.PIPE)
++        try:
++            p = subprocess.run(
++                shlex.split(cmd),
++                cwd=cwd,
++                env=env,
++                check=True,
++                shell=False,
++                stdout=subprocess.PIPE,
++                stderr=subprocess.PIPE,
++                text=True,
++            )
++        except subprocess.CalledProcessError as ex:
++            print(f"Subprocess command failed (return code: {ex.returncode}): {cmd}\nStdout:\n{ex.stdout}\nStderr:\n{ex.stderr}")
++            raise
++
+         print("Return code: {0}".format(p.returncode))
+ 
+         return p.returncode
+ 
+-    @contextmanager
+-    def working_directory(self, path):
+-        """Temporarily switch to the provided path within a context."""
+-        path = Path(path).expanduser().resolve()
+-        prev_cwd = Path.cwd()
+-        try:
+-            os.chdir(path)
+-            yield path
+-        finally:
+-            os.chdir(prev_cwd)
+-
+     def recreate_environment_test(self, environment_manager="conda"):
+         """Test for PyRosettaCluster decoy reproducibility in a recreated virtual environment."""
++        self.assertIn(environment_manager, ("conda", "mamba", "uv", "pixi"))
+ 
+         test_script = os.path.join(os.path.dirname(__file__), "recreate_environment_test_runs.py")
+ 
+-        if environment_manager == "pixi":
+-            # Create pixi environment
+-            original_env_name = f"{environment_manager}_env"
+-            original_env_dir = os.path.join(self.workdir.name, original_env_name)
+-            setup_env_script = os.path.join(os.path.dirname(__file__), "setup_pixi_env.py")
+-            module = os.path.splitext(os.path.basename(setup_env_script))[0]
+-            cmd = "{0} -m {1} --env_dir '{2}'".format(
+-                sys.executable,
+-                module,
+-                original_env_dir,
+-            )
+-            returncode = TestEnvironmentReproducibility.run_subprocess(
+-                cmd,
+-                module_dir=os.path.dirname(setup_env_script),
+-                cwd=None,
+-            )
+-            self.assertEqual(returncode, 0, msg=f"Subprocess command failed: {cmd}")
++        # Create new environment
++        original_env_name = f"{environment_manager}_env_{self.run_tag}"
++        original_env_dir = os.path.join(self.workdir.name, original_env_name)
++        setup_env_script = os.path.join(os.path.dirname(__file__), "setup_envs.py")
++        module = os.path.splitext(os.path.basename(setup_env_script))[0]
++        cmd = "{0} -m {1} --env_manager '{2}' --env_dir '{3}'".format(
++            sys.executable,
++            module,
++            environment_manager,
++            original_env_dir,
++        )
++        returncode = TestEnvironmentReproducibility.run_subprocess(
++            cmd,
++            module_dir=os.path.dirname(setup_env_script),
++            cwd=None,
++        )
++        self.assertEqual(returncode, 0, msg=f"Subprocess command failed: {cmd}")
+ 
+-            # Run original simulation inside pixi environment
+-            original_output_path = os.path.join(original_env_dir, "original_outputs")
+-            original_scorefile_name = "test_scores.json"
++        # Run original simulation inside new environment
++        original_output_path = os.path.join(original_env_dir, f"{environment_manager}_original_outputs")
++        original_scorefile_name = "test_scores.json"
++        if environment_manager == "pixi":
+             cmd = "pixi run python {0} --env_manager '{1}' --output_path '{2}' --scorefile_name '{3}'".format(
+                 test_script,
+                 environment_manager,
+                 original_output_path,
+                 original_scorefile_name,
+             )
+-            returncode = TestEnvironmentReproducibility.run_subprocess(
+-                cmd,
+-                module_dir=None,
+-                cwd=original_env_dir, # Activate the original pixi environment context
+-            )
+-            self.assertEqual(returncode, 0, msg=f"Subprocess command failed: {cmd}")
+-
+-            # Recreate pixi environment from output scorefile
+-            original_scorefile_path = os.path.join(original_output_path, original_scorefile_name)
+-            with open(original_scorefile_path, "r") as f:
+-                original_data = [json.loads(line) for line in f]
+-            self.assertEqual(len(original_data), 1)
+-            original_record = original_data[0]
+-            self.assertIn("environment_manager", original_record["metadata"])
+-            self.assertEqual(original_record["metadata"]["environment_manager"], environment_manager)
+-            self.assertIn("decoy_name", original_record["metadata"])
+-            original_decoy_name = original_record["metadata"]["decoy_name"]
+-            # Set environment manager
+-            os.environ[EnvironmentConfig._ENV_VAR] = environment_manager
+-            # Recreate environment
+-            reproduce_env_name = f"{original_env_name}_reproduce",
+-            with self.working_directory(self.workdir.name):
+-                recreate_environment(
+-                    environment_name=reproduce_env_name,
+-                    input_file=None,
+-                    scorefile=original_scorefile_path,
+-                    decoy_name=original_decoy_name,
+-                    timeout=999,
+-                )
+-            reproduce_env_dir = os.path.join(self.workdir.name, reproduce_env_name)
+-            self.assertTrue(
+-                os.path.isdir(reproduce_env_dir),
+-                f"Reproduced '{environment_manager}' environment directory was not created: '{reproduce_env_dir}'",
++        elif environment_manager == "uv":
++            cmd = "uv run -p {0} python {1} --env_manager '{2}' --output_path '{3}' --scorefile_name '{4}'".format(
++                original_env_dir,
++                test_script,
++                environment_manager,
++                original_output_path,
++                original_scorefile_name,
+             )
+-
+-            # Run reproduction simulation inside recreated pixi environment
+-            reproduce_output_path = os.path.join(reproduce_env_dir, "reproduce_outputs")
+-            reproduce_scorefile_name = "test_scores.json"
+-            cmd = "pixi run python {0} --env_manager '{1}' --output_path '{2}' --scorefile_name '{3}' --original_scorefile '{4}' --original_decoy_name '{5}' --reproduce".format(
++        elif environment_manager in ("conda", "mamba"):
++            cmd = "conda run -p {0} python {1} --env_manager '{2}' --output_path '{3}' --scorefile_name '{4}'".format(
++                original_env_dir,
+                 test_script,
+                 environment_manager,
+-                reproduce_output_path,
+-                reproduce_scorefile_name,
+-                original_scorefile_path,
+-                original_decoy_name,
++                original_output_path,
++                original_scorefile_name,
+             )
+-            returncode = TestEnvironmentReproducibility.run_subprocess(
+-                cmd,
+-                module_dir=None,
+-                cwd=reproduce_env_dir, # Activate the recreated pixi environment context
++        returncode = TestEnvironmentReproducibility.run_subprocess(
++            cmd,
++            module_dir=None,
++            # For pixi, activate the original pixi environment context
++            # For conda/mamba/uv, run from environment directory for consistency with pixi workflow
++            cwd=original_env_dir,
++        )
++        self.assertEqual(returncode, 0, msg=f"Subprocess command failed: {cmd}")
++
++        # Recreate new environment from output scorefile
++        original_scorefile_path = os.path.join(original_output_path, original_scorefile_name)
++        self.assertTrue(os.path.isfile(original_scorefile_path), msg=f"Missing original output scorefile: {original_scorefile_path}")
++        with open(original_scorefile_path, "r") as f:
++            original_data = [json.loads(line) for line in f]
++        self.assertEqual(len(original_data), 1)
++        original_record = original_data[0]
++        self.assertIn("environment_manager", original_record["metadata"])
++        self.assertEqual(original_record["metadata"]["environment_manager"], environment_manager)
++        self.assertIn("decoy_name", original_record["metadata"])
++        original_decoy_name = original_record["metadata"]["decoy_name"]
++        # Set environment manager
++        os.environ[get_environment_var()] = environment_manager
++        # Recreate environment
++        reproduce_env_name = f"{original_env_name}_reproduce"
++        recreate_environment(
++            environment_name=reproduce_env_name,
++            input_file=None,
++            scorefile=original_scorefile_path,
++            decoy_name=original_decoy_name,
++            timeout=999,
++            base_dir=self.workdir.name,
++        )
++        reproduce_env_dir = os.path.join(self.workdir.name, reproduce_env_name)
++        self.assertTrue(
++            os.path.isdir(reproduce_env_dir),
++            f"Reproduced '{environment_manager}' environment directory was not created: '{reproduce_env_dir}'",
++        )
++        if environment_manager == "uv":
++            # The recreated uv environment uses the PyPI 'pyrosetta-installer' package, which does not allow specifying PyRosetta version.
++            # Therefore, installing the correct PyRosetta version in the recreated uv environment depends fortuitously on a prompt
++            # uv environment recreation after the original uv environment creation.
++            print("Running PyRosetta installer in recreated uv environment...")
++            # Run PyRosetta installer with mirror fallback
++            install_script = textwrap.dedent("""
++                import pyrosetta_installer
++                try:
++                    pyrosetta_installer.install_pyrosetta(
++                        distributed=False,
++                        serialization=True,
++                        skip_if_installed=True,
++                        mirror=0
++                    )
++                except Exception as e:
++                    print(f"Recreated PyRosetta installation with 'mirror=0' failed: {e}. Retrying with 'mirror=1'.")
++                    pyrosetta_installer.install_pyrosetta(
++                        distributed=False,
++                        serialization=True,
++                        skip_if_installed=True,
++                        mirror=1
++                    )
++            """)
++            subprocess.run(
++                ["uv", "run", "-p", str(reproduce_env_dir), "python", "-c", install_script],
++                check=True,
+             )
+-            self.assertEqual(returncode, 0, msg=f"Subprocess command failed: {cmd}")
+-
+-            # Validate reproduced decoy is identical to original decoy
+-            reproduce_scorefile_path = os.path.join(reproduce_output_path, reproduce_scorefile_name)
+-            with open(reproduce_scorefile_path, "r") as f:
+-                reproduce_data = [json.loads(line) for line in f]
+-            self.assertEqual(len(reproduce_data), 1)
+-            reproduce_record = reproduce_data[0]
+-            self.assertIn("environment_manager", reproduce_record["metadata"])
+-            self.assertEqual(reproduce_record["metadata"]["environment_manager"], environment_manager)
+ 
+-            self.assertEqual(
+-                original_record["scores"]["SEQUENCE"],
+-                reproduce_record["scores"]["SEQUENCE"],
+-            )
+-            self.assertEqual(
+-                original_record["scores"]["VALUE"],
+-                reproduce_record["scores"]["VALUE"],
+-            )
+-            self.assertEqual(
+-                original_record["scores"]["total_score"],
+-                reproduce_record["scores"]["total_score"],
+-            )
+-            self.assertListEqual(
+-                original_record["instance"]["seeds"],
+-                reproduce_record["instance"]["seeds"],
+-            )
+-            self.assertListEqual(
+-                original_record["instance"]["decoy_ids"],
+-                reproduce_record["instance"]["decoy_ids"],
+-            )
+-            self.assertNotEqual(
+-                original_record["metadata"]["author"],
+-                reproduce_record["metadata"]["author"],
+-            )
+-            self.assertNotEqual(
+-                original_record["metadata"]["decoy_name"],
+-                reproduce_record["metadata"]["decoy_name"],
+-            )
+-            original_pose = io.pose_from_file(original_record["metadata"]["output_file"])
+-            reproduce_pose = io.pose_from_file(reproduce_record["metadata"]["output_file"])
+-            self.assert_atom_coordinates(original_pose, reproduce_pose)
++        # Run reproduction simulation inside recreated environment
++        reproduce_output_path = os.path.join(reproduce_env_dir, f"{environment_manager}_reproduce_outputs")
++        reproduce_scorefile_name = "test_scores.json"
++        if environment_manager == "pixi":
++            cmd = (
++                f"pixi run python {test_script} "
++                f"--env_manager '{environment_manager}' "
++                f"--output_path '{reproduce_output_path}' "
++                f"--scorefile_name '{reproduce_scorefile_name}' "
++                f"--original_scorefile '{original_scorefile_path}' "
++                f"--original_decoy_name '{original_decoy_name}' "
++                "--reproduce"
++            )
++        elif environment_manager == "uv":
++            cmd = (
++                f"uv run -p {reproduce_env_dir} python {test_script} "
++                f"--env_manager '{environment_manager}' "
++                f"--output_path '{reproduce_output_path}' "
++                f"--scorefile_name '{reproduce_scorefile_name}' "
++                f"--original_scorefile '{original_scorefile_path}' "
++                f"--original_decoy_name '{original_decoy_name}' "
++                "--reproduce"
++            )
++        elif environment_manager in ("conda", "mamba"):
++            cmd = (
++                f"conda run -p {reproduce_env_dir} python {test_script} "
++                f"--env_manager '{environment_manager}' "
++                f"--output_path '{reproduce_output_path}' "
++                f"--scorefile_name '{reproduce_scorefile_name}' "
++                f"--original_scorefile '{original_scorefile_path}' "
++                f"--original_decoy_name '{original_decoy_name}' "
++                "--reproduce"
++            )
++        returncode = TestEnvironmentReproducibility.run_subprocess(
++            cmd,
++            module_dir=None,
++            # For pixi, activate the recreated pixi environment context
++            # For conda/mamba/uv, run from recreated environment directory for consistency with pixi workflow
++            cwd=reproduce_env_dir,
++        )
++        self.assertEqual(returncode, 0, msg=f"Subprocess command failed: {cmd}")
++
++        # Validate reproduced decoy is identical to original decoy
++        reproduce_scorefile_path = os.path.join(reproduce_output_path, reproduce_scorefile_name)
++        self.assertTrue(os.path.isfile(reproduce_scorefile_path), msg=f"Missing reproduced output scorefile: {reproduce_scorefile_path}")
++        with open(reproduce_scorefile_path, "r") as f:
++            reproduce_data = [json.loads(line) for line in f]
++        self.assertEqual(len(reproduce_data), 1)
++        reproduce_record = reproduce_data[0]
++        self.assertIn("environment_manager", reproduce_record["metadata"])
++        self.assertEqual(reproduce_record["metadata"]["environment_manager"], environment_manager)
+ 
+-        else:
+-            raise NotImplementedError(f"Unit test not implemented for '{environment_manager}' environment manager!")
++        self.assertEqual(
++            original_record["scores"]["SEQUENCE"],
++            reproduce_record["scores"]["SEQUENCE"],
++        )
++        self.assertEqual(
++            original_record["scores"]["VALUE"],
++            reproduce_record["scores"]["VALUE"],
++        )
++        self.assertEqual(
++            original_record["scores"]["total_score"],
++            reproduce_record["scores"]["total_score"],
++        )
++        self.assertListEqual(
++            original_record["instance"]["seeds"],
++            reproduce_record["instance"]["seeds"],
++        )
++        self.assertListEqual(
++            original_record["instance"]["decoy_ids"],
++            reproduce_record["instance"]["decoy_ids"],
++        )
++        self.assertNotEqual(
++            original_record["metadata"]["author"],
++            reproduce_record["metadata"]["author"],
++        )
++        self.assertNotEqual(
++            original_record["metadata"]["decoy_name"],
++            reproduce_record["metadata"]["decoy_name"],
++        )
++        original_pose = io.pose_from_file(original_record["metadata"]["output_file"])
++        reproduce_pose = io.pose_from_file(reproduce_record["metadata"]["output_file"])
++        self.assert_atom_coordinates(original_pose, reproduce_pose)
+ 
+     @unittest.skipIf(shutil.which("conda") is None, "The executable 'conda' is not available.")
+     def test_recreate_environment_conda(self):

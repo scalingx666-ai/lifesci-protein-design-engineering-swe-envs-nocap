@@ -1,0 +1,196 @@
+diff --git a/source/src/protocols/antibody/residue_selector/CDRResidueSelector.cc b/source/src/protocols/antibody/residue_selector/CDRResidueSelector.cc
+index 592c94a7f96..993c1a0db71 100644
+--- a/source/src/protocols/antibody/residue_selector/CDRResidueSelector.cc
++++ b/source/src/protocols/antibody/residue_selector/CDRResidueSelector.cc
+@@ -130,7 +130,7 @@ void
+ CDRResidueSelector::set_cdrs( utility::vector1< CDRNameEnum > cdrs ){
+ 	cdrs_.clear();
+ 	cdrs_.resize(8, false);
+-	for ( core::Size i = 1; i < cdrs.size(); ++i ) {
++	for ( core::Size i = 1; i <= cdrs.size(); ++i ) {
+ 		cdrs_[ cdrs[ i ] ] = true;
+ 	}
+ }
+diff --git a/source/src/protocols/cartesian/md.cc b/source/src/protocols/cartesian/md.cc
+index fd6fb901ce6..34ea520ace3 100644
+--- a/source/src/protocols/cartesian/md.cc
++++ b/source/src/protocols/cartesian/md.cc
+@@ -1275,7 +1275,7 @@ void MolecularDynamics::applyForces_ConjugateGradient(
+ 
+ 		}
+ 	} else { // this block is for Step == 0 - its just a standard SD Step
+-		for ( core::Size i = 1; i < cartom.size(); i++ ) {
++		for ( core::Size i = 1; i <= cartom.size(); i++ ) {
+ 			cartom[i].old_position    =  cartom[i].position; // save position (old position = current position)
+ 			cartom[i].old_force       =  cartom[i].force * forcemul; // save old forces
+ 			cartom[i].old_velocity    =  -cartom[i].force * forcemul; // save old directions, equal to old force
+@@ -1483,7 +1483,7 @@ void MolecularDynamics::testCartesianDerivatives( core::scoring::ScoreFunction c
+ 	}
+ 
+ 
+-	for ( core::Size i = 1; i < cartom.size(); i++ ) {
++	for ( core::Size i = 1; i <= cartom.size(); i++ ) {
+ 
+ 		if (  ( fabs( cartom[i].force.x()  -  numeriv[i].x()     ) > 0.1 ) ||
+ 				( fabs( cartom[i].force.y()  -  numeriv[i].y()     ) > 0.1 ) ||
+diff --git a/source/src/protocols/cutoutdomain/CutOutDomain.cc b/source/src/protocols/cutoutdomain/CutOutDomain.cc
+index 8508ae45ec4..e8c951c8644 100644
+--- a/source/src/protocols/cutoutdomain/CutOutDomain.cc
++++ b/source/src/protocols/cutoutdomain/CutOutDomain.cc
+@@ -90,7 +90,7 @@ core::Size
+ CutOutDomain::find_nearest_res( core::pose::Pose const & source, core::pose::Pose const & target, core::Size const res, core::Size const chain/*=0*/ ){
+ 	core::Real min_dist( 100000 ); core::Size nearest_res( 0 );
+ 	core::Size i;
+-	for ( i = 1; i < target.size(); ++i ) {
++	for ( i = 1; i <= target.size(); ++i ) {
+ 		if ( target.residue( i ).is_ligand() ) continue;
+ 		if ( chain && target.residue( i ).chain() != chain ) continue;
+ 		// TR<<"the residue examnied is:"<<i<<target.residue(i).name1()<<std::endl;
+diff --git a/source/src/protocols/docking/DockingEnsemblePrepackProtocol.cc b/source/src/protocols/docking/DockingEnsemblePrepackProtocol.cc
+index d90b12b8fee..153fcde7074 100644
+--- a/source/src/protocols/docking/DockingEnsemblePrepackProtocol.cc
++++ b/source/src/protocols/docking/DockingEnsemblePrepackProtocol.cc
+@@ -304,7 +304,7 @@ void DockingEnsemblePrepackProtocol::check_ensemble_member_compatibility() {
+ 
+ 			// if the chain identities are not equivalent, error!
+ 			// assuming ensemble 1 chains are first reported in parterns flag
+-			for ( core::Size k=1; k<chains.size(); ++k ) {
++			for ( core::Size k=1; k<=chains.size(); ++k ) {
+ 				if ( chains[k] != partners.partner1[k] ) {
+ 					std::string exit_message = "Ensemble 1 member differs in chain identity from partners flag!\n";
+ 					exit_message = exit_message + "Member " + std::to_string(i) + ": " + chains[k] + " vs. " + partners.partner1[k] + "\n";
+@@ -328,7 +328,7 @@ void DockingEnsemblePrepackProtocol::check_ensemble_member_compatibility() {
+ 
+ 			// if the chain identities are not equivalent, error!
+ 			// assuming ensemble 2 chains are second reported in parterns flag
+-			for ( core::Size k=1; k<chains.size(); ++k ) {
++			for ( core::Size k=1; k<=chains.size(); ++k ) {
+ 				if ( chains[k] != partners.partner2[k] ) {
+ 					std::string exit_message = "Ensemble 2 member differs in chain identity from partners flag!\n";
+ 					exit_message = exit_message + "Member " + std::to_string(i) + ": " + chains[k] + " vs. " + partners.partner2[k] + "\n";
+diff --git a/source/src/protocols/docking/metrics.cc b/source/src/protocols/docking/metrics.cc
+index ff014473df5..49cd7b26383 100644
+--- a/source/src/protocols/docking/metrics.cc
++++ b/source/src/protocols/docking/metrics.cc
+@@ -521,7 +521,7 @@ calc_Fnonnat( const core::pose::Pose & pose, const core::pose::Pose & native_pos
+ 
+ 		//generate list of interface residues for partner 1 and partner 2
+ 		core::Size cutpoint = 0;
+-		for ( core::Size i = 1; i < pose.size(); i++ ) {
++		for ( core::Size i = 1; i <= pose.size(); i++ ) {
+ 			if ( !temp_part( i ) ) {
+ 				cutpoint = i;
+ 				break;
+@@ -596,7 +596,7 @@ calc_Fnonnat( const core::pose::Pose & pose, std::string const& list_file, DockJ
+ 		ObjexxFCL::FArray1D_bool temp_part ( pose.size(), false );
+ 		pose.fold_tree().partition_by_jump( rb_jump, temp_part );
+ 		core::Size cutpoint = 0;
+-		for ( core::Size i = 1; i < pose.size(); i++ ) {
++		for ( core::Size i = 1; i <= pose.size(); i++ ) {
+ 			if ( !temp_part( i ) ) {
+ 				cutpoint = i;
+ 				break;
+diff --git a/source/src/protocols/enzdes/EnzRepackMinimize.cc b/source/src/protocols/enzdes/EnzRepackMinimize.cc
+index 15cb73761da..bff6270c354 100644
+--- a/source/src/protocols/enzdes/EnzRepackMinimize.cc
++++ b/source/src/protocols/enzdes/EnzRepackMinimize.cc
+@@ -134,7 +134,7 @@ EnzRepackMinimize::apply( pose::Pose & pose )
+ 			core::kinematics::MoveMapOP movemap = enzprot->create_enzdes_movemap( pose, task_, minimize_prot_jumps_  );
+ 			core::scoring::ScoreFunctionCOP br_scorefxn = scorefxn_minimize_;
+ 			utility::vector1<core::Size> residues;
+-			for ( core::Size i =1; i<pose.size(); ++i ) {
++			for ( core::Size i =1; i<=pose.size(); ++i ) {
+ 				if ( movemap->get_bb(i) ) residues.push_back(i);
+ 			}
+ 			TR<<"Now Backrub minimizing:  min_sc "<<min_sc_<<" min_bb "<< min_bb_<<std::endl;
+diff --git a/source/src/protocols/loops/util.cc b/source/src/protocols/loops/util.cc
+index 4d0595057bb..e5ba8d144b3 100644
+--- a/source/src/protocols/loops/util.cc
++++ b/source/src/protocols/loops/util.cc
+@@ -224,7 +224,7 @@ void addScoresForLoopParts(
+ 
+ 	core::Size nres = pose.size();
+ 	utility::vector1< core::Size > all_loop_list;
+-	for ( core::Size i = 1; i < nres; i ++ ) {
++	for ( core::Size i = 1; i <= nres; i ++ ) {
+ 		if ( loops.is_loop_residue(i) ) all_loop_list.push_back( i );
+ 	}
+ 	scorefxn(pose);
+@@ -241,7 +241,7 @@ void addScoresForLoopParts(
+ 		}
+ 		utility::vector1< core::Size > loop_list;
+ 		utility::vector1< core::Size > non_loop_list;
+-		for ( core::Size i = 1; i < nres; i ++ ) {
++		for ( core::Size i = 1; i <= nres; i ++ ) {
+ 			if ( ( i < loops[l].start() ) || ( i > loops[l].stop() ) ) {
+ 				loop_list.push_back( i );
+ 			} else {
+@@ -544,7 +544,7 @@ protocols::loops::Loops find_non_protein_chunks(core::pose::Pose const & pose) {
+ 	Loop new_loop;
+ 	bool chunk_started = false;
+ 
+-	for ( core::Size ires = 1; ires < pose.size(); ++ires ) {
++	for ( core::Size ires = 1; ires <= pose.size(); ++ires ) {
+ 		if ( pose.residue_type(ires).is_protein() ) continue;
+ 		if ( !chunk_started ) {
+ 			new_loop.set_start(ires);
+diff --git a/source/src/protocols/match/output/UpstreamDownstreamCollisionFilter.cc b/source/src/protocols/match/output/UpstreamDownstreamCollisionFilter.cc
+index 9783c17fe7b..79c376025eb 100644
+--- a/source/src/protocols/match/output/UpstreamDownstreamCollisionFilter.cc
++++ b/source/src/protocols/match/output/UpstreamDownstreamCollisionFilter.cc
+@@ -158,7 +158,7 @@ bool UpstreamDownstreamCollisionFilter::passes_etable_filter( match_dspos1 const
+ 
+ 	using namespace core::scoring;
+ 	EnergyMap emap;
+-	for ( core::Size ii = 1; ii < m.upstream_hits.size(); ++ii ) {
++	for ( core::Size ii = 1; ii <= m.upstream_hits.size(); ++ii ) {
+ 		if ( ii == m.originating_geom_cst_for_dspos ) continue; // don't collision check since we've presumably done so already
+ 		if ( us_ds_chemical_bond_[ ii ] ) continue;
+ 		for ( core::Size jj = 1; jj <= downstream_pose_->size(); ++jj ) {
+diff --git a/source/src/protocols/membrane/MPLipidAccessibility.cc b/source/src/protocols/membrane/MPLipidAccessibility.cc
+index 9fb21cc5bd1..941e3462e01 100644
+--- a/source/src/protocols/membrane/MPLipidAccessibility.cc
++++ b/source/src/protocols/membrane/MPLipidAccessibility.cc
+@@ -227,7 +227,7 @@ void MPLipidAccessibility::apply( core::pose::Pose & pose ){
+ 	}
+ 
+ 	// go through slices
+-	for ( core::Size s = 1; s < slice_zmin_.size(); ++s ) {
++	for ( core::Size s = 1; s <= slice_zmin_.size(); ++s ) {
+ 
+ 		// go through residues
+ 		for ( core::Size r = 1; r <= resi_[ s ].size(); ++r ) {
+@@ -502,7 +502,7 @@ void MPLipidAccessibility::fill_up_slices( core::pose::Pose & pose ) {
+ void MPLipidAccessibility::compute_slice_com(){
+ 
+ 	// go through slices and compute COMs
+-	for ( core::Size s = 1; s < slice_zmin_.size(); ++s ) {
++	for ( core::Size s = 1; s <= slice_zmin_.size(); ++s ) {
+ 
+ 		core::Vector com( 0, 0, 0 );
+ 
+diff --git a/source/src/protocols/membrane/util.cc b/source/src/protocols/membrane/util.cc
+index 161d18333cb..a67bcf60b10 100644
+--- a/source/src/protocols/membrane/util.cc
++++ b/source/src/protocols/membrane/util.cc
+@@ -616,6 +616,7 @@ core::Size create_membrane_foldtree_anchor_com( core::pose::Pose & pose ) {
+ 	utility::vector1< core::Size > anchors;
+ 
+ 	// get residues closest to COMs for all chains which will be new jump anchor residues
++	// needs to < chains.size() because the MEM is an additional chain
+ 	for ( core::Size i = 1; i < chains.size(); ++i ) {
+ 		core::Size anchor = rsd_closest_to_chain_com( pose, chains[ i ] );
+ 		anchors.push_back( anchor );
+diff --git a/source/src/protocols/moves/PyMOLMover.cc b/source/src/protocols/moves/PyMOLMover.cc
+index 0412bf35ce2..fa0f0a44d3e 100644
+--- a/source/src/protocols/moves/PyMOLMover.cc
++++ b/source/src/protocols/moves/PyMOLMover.cc
+@@ -548,7 +548,7 @@ void PyMOLMover::send_membrane_planes( Pose const & pose ) {
+ 	// Compute radius of gyration of the pose
+ 	utility::vector1< bool > relevant_residues;
+ 	relevant_residues.resize( pose.size() );
+-	for ( core::Size i = 1; i < relevant_residues.size(); ++i ) {
++	for ( core::Size i = 1; i <= relevant_residues.size(); ++i ) {
+ 		relevant_residues[i] = true;
+ 	}
+ 

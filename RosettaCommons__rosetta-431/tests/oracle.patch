@@ -1,0 +1,1260 @@
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/__init__.py b/source/src/python/PyRosetta/src/pyrosetta/__init__.py
+index 6aa8f2d01fc..4df459cb9e1 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/__init__.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/__init__.py
+@@ -41,18 +41,32 @@
+ # PyRosetta-3 comapatability
+ # WARNING WARNING WARNING: do not add anything extra imports/names here! If you feel strongly that something needs to be added please contact author first!
+ from pyrosetta.rosetta.core.kinematics import FoldTree, MoveMap
+-from pyrosetta.rosetta.core.io.pdb import dump_pdb
+ from pyrosetta.rosetta.core.id import AtomID
+ from pyrosetta.rosetta.core.scoring import ScoreFunction
+ 
+ from pyrosetta.rosetta.protocols.moves import PyMOLMover, SequenceMover, RepeatMover, TrialMover, MonteCarlo
+ from pyrosetta.rosetta.protocols.simple_moves import SwitchResidueTypeSetMover
+-from pyrosetta.rosetta.protocols.loops import get_fa_scorefxn
+ 
+-from pyrosetta.io import pose_from_pdb, pose_from_file, poses_from_files, pose_from_sequence, poses_from_sequences, poses_from_silent, poses_to_silent, Pose
+-
+-from pyrosetta.rosetta.core.scoring import get_score_function
+-create_score_function = pyrosetta.rosetta.core.scoring.ScoreFunctionFactory.create_score_function
++from pyrosetta.io import (
++    pose_from_pdb,
++    pose_from_file,
++    poses_from_files,
++    pose_from_sequence,
++    poses_from_sequences,
++    poses_from_silent,
++    poses_from_multimodel_pdb,
++    poses_to_silent,
++    dump_file,
++    dump_scored_pdb,
++    dump_pdb,
++    dump_multimodel_pdb,
++    dump_cif,
++    dump_mmtf,
++    create_score_function,
++    get_fa_scorefxn,
++    get_score_function,
++    Pose,
++)
+ 
+ ###############################################################################
+ # Exception handling.
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/distributed/io.py b/source/src/python/PyRosetta/src/pyrosetta/distributed/io.py
+index 61ef446809b..c6bdc26b3a5 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/distributed/io.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/distributed/io.py
+@@ -1,45 +1,182 @@
+ """IO routines operating on PackedPose representations."""
++import bz2
+ import functools
++import gzip
++import os
++import sys
++import warnings
+ 
+ import pyrosetta.io
+ import pyrosetta.rosetta.utility as utility
+ import pyrosetta.rosetta.core.pose as pose
+ import pyrosetta.rosetta.core.import_pose as import_pose
++import pyrosetta.rosetta.core.scoring as scoring
++import pyrosetta.distributed.tasks.score as score
+ 
+ from pyrosetta.distributed import requires_init
+ from pyrosetta.distributed.packed_pose import (
+-    pack_result, to_pose, to_packed, to_dict, register_container_traversal
++    pack_result, pose_result, to_pose, to_packed, to_dict, to_base64, to_pickle, register_container_traversal
+ )
+ 
++try:
++    import lzma as xz
++except ImportError:
++    pass
++
++
+ __all__ = [
++    "pack_result",
++    "pose_result",
+     "pose_from_file",
+     "pose_from_sequence",
+-    "poses_from_silent",
+     "pose_from_pdbstring",
++    "pose_from_pdb",
++    "pose_from_base64",
++    "pose_from_pickle",
++    "poses_from_files",
++    "poses_from_sequences",
++    "poses_from_multimodel_pdb",
++    "poses_from_silent",
++    "to_base64",
++    "to_pickle",
+     "to_silent",
+     "to_pdbstring",
+     "to_output_record"
++    "dump_file",
++    "dump_pdb",
++    "dump_scored_pdb",
++    "dump_multimodel_pdb",
++    "dump_cif",
++    "dump_mmtf",
++    "dump_base64",
++    "dump_pickle",
++    "create_score_function",
++    "get_fa_scorefxn",
++    "get_score_function",
+ ]
+ 
+ # Input functions
+ 
+-pose_from_file = requires_init(pack_result(
+-    pyrosetta.io.pose_from_file))
++@requires_init
++@pack_result
++def pose_from_file(*args, **kwargs):
++    """
++    Uses the input filename from `*args` or `**kwargs` and returns a `PackedPose` object from it,
++    deserializing:
++        - bz2-encoded files ending with file extensions: (".pdb.bz2", ".bz2")
++        - gzip-encoded files ending with file extensions: (".pdb.gz", ".gz")
++        - xz-encoded files ending with file extensions: (".pdb.xz", ".xz")
++        - base64-encoded files ending with file extensions: (".base64", ".b64", ".B64", ".pose")
++        - pickle-encoded files ending with file extensions: (".pickle", ".pickled_pose")
++    Otherwise, implements `io.to_packed(pyrosetta.io.pose_from_file(*args, **kwargs))`.
++
++    @klimaj
++    """
++    try:
++        filename = kwargs.get("filename", False) \
++            or next(iter(filter(lambda arg: isinstance(arg, str) and os.path.isfile, args)))
++    except:
++        raise FileNotFoundError(
++            f"Could not find filename in arguments '{args}' or keyword arguments '{kwargs}'."
++        )
++
++    if filename.endswith((".base64", ".b64", ".B64", ".pose")):
++        pack_or_pose = pose_from_base64(filename)  # returns `PackedPose` object
++    elif filename.endswith((".pickle", ".pickled_pose")):
++        pack_or_pose = pose_from_pickle(filename)  # returns `PackedPose` object
++    else:
++        pack_or_pose = pyrosetta.io.pose_from_file(*args, **kwargs)  # returns `Pose` object
++
++    return pack_or_pose
++
++
+ pose_from_sequence = requires_init(pack_result(
+     pyrosetta.io.pose_from_sequence))
++poses_from_files = requires_init(pack_result(
++    pyrosetta.io.poses_from_files))
++poses_from_sequences = requires_init(pack_result(
++    pyrosetta.io.poses_from_sequences))
+ poses_from_silent = requires_init(pack_result(
+     pyrosetta.io.poses_from_silent))
++poses_from_multimodel_pdb = requires_init(pack_result(
++    pyrosetta.io.poses_from_multimodel_pdb))
+ 
+ 
+-@functools.wraps(import_pose.pose_from_pdbstring)
+ @requires_init
+ @pack_result
++@functools.wraps(pyrosetta.io.pose_from_pdbstring)
+ def pose_from_pdbstring(*args, **kwargs):
+-    result = pose.Pose()
+-    import_pose.pose_from_pdbstring(result, *args, **kwargs)
+-    return result
++    return pyrosetta.io.pose_from_pdbstring(*args, **kwargs)
+ 
+ 
++@functools.singledispatch
++@requires_init
++@pack_result
++@functools.wraps(pose_from_file)
++def pose_from_pdb(*args, **kwargs):
++    return pose_from_file(*args, **kwargs)
++
++@pose_from_pdb.register(type(None))
++def _pose_from_none(none):
++    return None
++
++
++@functools.singledispatch
++def pose_from_base64(filename):
++    """
++    Load a `PackedPose` object from a base64-encoded file.
++
++    To load a `PackedPose` object from an input base64-encoded string,
++    use `io.to_packed(string)` or `io.to_packed(io.to_pose(string))`.
++
++    @klimaj
++    """
++    raise FileNotFoundError(
++        f"The input filename must be an instance of `str`. Recieved: {type(filename)}"
++    )
++
++@pose_from_base64.register(type(None))
++def _pose_from_none(none):
++    return None
++
++@pose_from_base64.register(str)
++@requires_init
++@pack_result
++@pose_result
++def _pose_from_str(filename):
++    with open(filename, "r") as f:
++        return f.read()
++
++
++@functools.singledispatch
++def pose_from_pickle(filename):
++    """
++    Load a `PackedPose` object from a pickle-encoded binary file.
++
++    To load a `PackedPose` object from an input pickle-encoded bytestring,
++    use `io.to_packed(bytestring)` or `io.to_packed(io.to_pose(bytestring))`.
++
++    @klimaj
++    """
++    raise FileNotFoundError(
++        f"The input filename must be an instance of `str`. Recieved: {type(filename)}"
++    )
++
++@pose_from_pickle.register(type(None))
++def _pose_from_none(none):
++    return None
++
++@pose_from_pickle.register(str)
++@requires_init
++@pack_result
++@pose_result
++def _pose_from_str(filename):
++    with open(filename, "rb") as f:
++        return f.read()
++
++
++# Output functions
++
+ @functools.singledispatch
+ @requires_init
+ def to_silent(inp, output_filename):
+@@ -74,18 +211,7 @@ def to_silent(inp, output_filename):
+ def to_pdbstring(inp):
+     """Convert to pdb-formatted string with score and energy data.
+     """
+-    from pyrosetta.rosetta.core.io.pdb import dump_pdb
+-    from pyrosetta.rosetta.core.io import StructFileRepOptions
+-    from pyrosetta.rosetta.std import ostringstream
+-
+-    sfro = StructFileRepOptions()
+-    sfro.set_output_pose_cache_data(True)
+-    sfro.set_output_pose_energies_table(True)
+-
+-    oss = ostringstream()
+-    dump_pdb(to_pose(inp), oss, sfro)
+-
+-    return oss.bytes().decode()
++    return pyrosetta.io.to_pdbstring(to_pose(inp))
+ 
+ 
+ register_container_traversal(to_pdbstring, lambda d: to_pdbstring(to_packed(d)))
+@@ -104,3 +230,147 @@ def to_output_record(inp):
+ 
+ 
+ register_container_traversal(to_output_record, lambda d: to_output_record(to_packed(d)))
++
++
++@requires_init
++def dump_file(inp, output_filename):
++    """Dump a file from a `PackedPose` or `Pose` object and output filename.
++
++    @klimaj
++    """
++    return pyrosetta.io.dump_file(to_pose(inp), output_filename)
++
++
++@requires_init
++def dump_pdb(inp, output_filename):
++    """Dump a PDB file from a `PackedPose` or `Pose` object and output filename.
++
++    @klimaj
++    """
++    return pyrosetta.io.dump_pdb(to_pose(inp), output_filename)
++
++
++@requires_init
++def dump_scored_pdb(inp, output_filename, scorefxn):
++    """
++    Dump a scored PDB file from a `PackedPose` or `Pose` object, output filename
++    and score function. The score function may be a `str` object representing the
++    weights passed to `ScorePoseTask`, a `ScorePoseTask` instance, or a
++    `ScoreFunction` instance.
++
++    @klimaj
++    """
++    if isinstance(scorefxn, str):
++        scorefxn = score.ScorePoseTask(weights=scorefxn, patch=None)
++    if isinstance(scorefxn, score.ScorePoseTask):
++        return pyrosetta.io.dump_pdb(scorefxn(inp).pose, output_filename)
++    elif isinstance(scorefxn, scoring.ScoreFunction):
++        return pyrosetta.io.dump_scored_pdb(to_pose(inp), output_filename, scorefxn)
++    else:
++        raise ValueError(f"Unsupported argument parameter type for 'scorefxn': {type(scorefxn)}")
++
++
++@requires_init
++def dump_multimodel_pdb(inp, output_filename):
++    """
++    Dump a multimodel PDB file from a `list`, `tuple`, or `set` of `PackedPose`
++    or `Pose` objects, and an output filename.
++
++    @klimaj
++    """
++    if isinstance(inp, (list, tuple, set)):
++        poses = [to_pose(p) for p in inp]
++    else:
++        poses = to_pose(inp)
++    return pyrosetta.io.dump_multimodel_pdb(poses, output_filename)
++
++
++@requires_init
++def dump_cif(inp, output_filename):
++    """Dump a CIF file from a `PackedPose` or `Pose` object and output filename.
++
++    @klimaj
++    """
++    if not output_filename.endswith((".cif", ".mmcif")):
++        warnings.warn(
++            "Output filename does not end with '.cif' or '.mmcif', "
++            + "which `pyrosetta.distributed.io.pose_from_file` expects."
++        )
++    return pyrosetta.io.dump_cif(to_pose(inp), output_filename)
++
++
++@requires_init
++def dump_mmtf(inp, output_filename):
++    """Dump a MMTF file from a `PackedPose` or `Pose` object and output filename.
++
++    @klimaj
++    """
++    if not output_filename.endswith(".mmtf"):
++        warnings.warn(
++            "Output filename does not end with '.mmtf', "
++            + "which `pyrosetta.distributed.io.pose_from_file` expects."
++        )
++    return pyrosetta.io.dump_mmtf(to_pose(inp), output_filename)
++
++
++@requires_init
++def dump_base64(inp, output_filename):
++    """Dump a base64-encoded file from a `PackedPose` or `Pose` object and output filename.
++
++    @klimaj
++    """
++    if not output_filename.endswith((".base64", ".b64", ".B64", ".pose")):
++        warnings.warn(
++            "Output filename does not end with '.base64', '.b64', '.B64', or '.pose', "
++            + "which `pyrosetta.distributed.io.pose_from_file` expects."
++        )
++    with open(output_filename, "w") as f:
++        f.write(to_base64(inp))
++    return True
++
++
++@requires_init
++def dump_pickle(inp, output_filename):
++    """Dump a pickle-encoded file from a `PackedPose` or `Pose` object and output filename.
++
++    @klimaj
++    """
++    if not output_filename.endswith((".pickle", ".pickled_pose")):
++        warnings.warn(
++            "Output filename does not end with '.pickle' or '.pickled_pose', "
++            + "which `pyrosetta.distributed.io.pose_from_file` expects."
++        )
++    with open(output_filename, "wb") as f:
++        f.write(to_pickle(inp))
++    return True
++
++
++def create_score_function(*args, **kwargs):
++    """
++    Returns a `ScorePoseTask` instance.
++    Input `*args` and `**kwargs` are passed to `ScorePoseTask`.
++
++    @klimaj
++    """
++    return score.ScorePoseTask(*args, **kwargs)
++
++
++def get_fa_scorefxn():
++    """
++    Returns a `ScorePoseTask` instance with `weights`
++    from `pyrosetta.rosetta.protocols.loops.get_fa_scorefxn()`.
++
++    @klimaj
++    """
++    weights = pyrosetta.io.get_fa_scorefxn().get_name()
++    return score.ScorePoseTask(weights=weights, patch=None)
++
++
++def get_score_function():
++    """
++    Returns a `ScorePoseTask` instance with `weights` and `patch`
++    from `pyrosetta.rosetta.core.scoring.get_score_function()`.
++
++    @klimaj
++    """
++    return score.ScorePoseTask(weights=None, patch=None)
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/distributed/packed_pose/__init__.py b/source/src/python/PyRosetta/src/pyrosetta/distributed/packed_pose/__init__.py
+index b2291dd315e..c5d796ccbfb 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/distributed/packed_pose/__init__.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/distributed/packed_pose/__init__.py
+@@ -3,9 +3,12 @@
+     dict_to_pose,
+     dict_to_packed,
+     pack_result,
++    pose_result,
+     to_packed,
+     to_pose,
+     to_dict,
++    to_base64,
++    to_pickle,
+     PackedPose,
+ )
+ 
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/distributed/packed_pose/core.py b/source/src/python/PyRosetta/src/pyrosetta/distributed/packed_pose/core.py
+index f7f8f460198..fc7242dd77d 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/distributed/packed_pose/core.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/distributed/packed_pose/core.py
+@@ -13,7 +13,7 @@
+ import pyrosetta.rosetta.core.pose as pose
+ import pyrosetta.distributed
+ 
+-__all__ = ["pack_result", "to_packed", "to_pose", "to_dict", "PackedPose"]
++__all__ = ["pack_result", "pose_result", "to_packed", "to_pose", "to_dict", "to_base64", "to_pickle", "PackedPose"]
+ 
+ 
+ class PackedPose:
+@@ -69,6 +69,11 @@ def update_scores(self, *score_dicts, **score_kwargs):
+ 
+         return PackedPose(work_pose)
+ 
++    def clone(self):
++        result = PackedPose(self.pose)
++        result.scores = pickle.loads(pickle.dumps(self.scores))
++        return result
++
+ 
+ def pack_result(func):
+     @functools.wraps(func)
+@@ -78,6 +83,14 @@ def wrap(*args, **kwargs):
+     return wrap
+ 
+ 
++def pose_result(func):
++    @functools.wraps(func)
++    def wrap(*args, **kwargs):
++        return to_pose(func(*args, **kwargs))
++
++    return wrap
++
++
+ @singledispatch
+ def to_packed(pose_or_pack):
+     return PackedPose(pose_or_pack)
+@@ -142,6 +155,28 @@ def none_to_dict(none):
+     return None
+ 
+ 
++@singledispatch
++def to_base64(inp):
++    """Takes a `Pose` or `PackedPose` object and returns a base64-encoded string.
++    """
++    return to_dict(inp)["pickled_pose"]
++
++@to_base64.register(type(None))
++def none_to_base64(none):
++    return None
++
++
++@singledispatch
++def to_pickle(inp):
++    """Takes a `Pose` or `PackedPose` object and returns a pickle-encoded bytestring.
++    """
++    return to_packed(inp).pickled_pose
++
++@to_pickle.register(type(None))
++def none_to_pickle(none):
++    return None
++
++
+ def register_builtin_container_traversal(generic_func, dict_func):
+     @generic_func.register(dict)
+     def dict_traversal(maybe_packed_dict):
+@@ -153,7 +188,7 @@ def dict_traversal(maybe_packed_dict):
+     @generic_func.register(list)
+     @generic_func.register(tuple)
+     @generic_func.register(set)
+-    def container_traveral(container):
++    def container_traversal(container):
+         return container.__class__(map(generic_func, container))
+ 
+     if sys.version_info.major >= 3:
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/io/__init__.py b/source/src/python/PyRosetta/src/pyrosetta/io/__init__.py
+index 4397c4d53e5..1e13bca2521 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/io/__init__.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/io/__init__.py
+@@ -6,18 +6,96 @@
+ # (c) For more information, see http://www.rosettacommons.org.
+ # (c) Questions about this can be addressed to University of Washington CoMotion, email: license@uw.edu.
+ 
++import bz2
++import functools
++import gzip
++import os
+ import pyrosetta.rosetta as rosetta
+ import sys
++import warnings
+ 
+-from pyrosetta.rosetta.core.import_pose import pose_from_file
++from pyrosetta.rosetta.core.io.mmcif import dump_cif
++from pyrosetta.rosetta.core.io.mmtf import dump_mmtf
+ from pyrosetta.rosetta.core.pose import make_pose_from_sequence, Pose
++from pyrosetta.rosetta.core.scoring import get_score_function
++from pyrosetta.rosetta.protocols.loops import get_fa_scorefxn
+ from pyrosetta.io.silent_file_map import SilentFileMap
+ 
+-# for backward-compatibility
+-# This needs to be here because of all the people using the Workshops and
+-# because otherwise, it wrecks a lot of people's scripts.  ~Labonte
+-def pose_from_pdb(filename):
+-    return pose_from_file(filename)
++try:
++    import lzma as xz
++except ImportError:
++    pass
++
++
++create_score_function = rosetta.core.scoring.ScoreFunctionFactory.create_score_function
++
++
++def pose_from_file(*args, **kwargs):
++    """
++    Uses the input filename from `*args` or `**kwargs` and returns a `Pose` object from it,
++    deserializing:
++        - bz2-encoded files ending with file extensions: (".pdb.bz2", ".bz2")
++        - gzip-encoded files ending with file extensions: (".pdb.gz", ".gz")
++        - xz-encoded files ending with file extensions: (".pdb.xz", ".xz")
++    Otherwise, implements `pyrosetta.rosetta.core.import_pose.pose_from_file(*args, **kwargs))`.
++
++    @klimaj
++    """
++    try:
++        filename = kwargs.get("filename", False) \
++            or next(iter(filter(lambda arg: isinstance(arg, str) and os.path.isfile, args)))
++    except:
++        raise FileNotFoundError(
++            f"Could not find filename in arguments '{args}' or keyword arguments '{kwargs}'."
++        )
++
++    if filename.endswith((".pdb.bz2", ".bz2", ".pdb.gz", ".gz", ".pdb.xz", ".xz")):
++        if filename.endswith((".pdb.bz2", ".bz2")):
++            with open(filename, "rb") as f:
++                pdbstring = bz2.decompress(f.read()).decode()
++        elif filename.endswith((".pdb.gz", ".gz")):
++            with gzip.open(filename, "rb") as gz:
++                pdbstring = gz.read()
++        elif filename.endswith((".pdb.xz", ".xz")):
++            if "lzma" not in sys.modules:
++                raise ImportError(
++                    (
++                        "Using 'xz' for decompression requires installing the 'xz' package into your python environment. "
++                        + "For installation instructions, visit:\n"
++                        + "https://anaconda.org/anaconda/xz\n"
++                    )
++                )
++            with open(filename, "rb") as f:
++                pdbstring = xz.decompress(f.read()).decode()
++        return pose_from_pdbstring(pdbstring)
++    else:
++        return rosetta.core.import_pose.pose_from_file(*args, **kwargs)
++
++
++@functools.wraps(pose_from_file)
++def pose_from_pdb(*args, **kwargs):
++    return pose_from_file(*args, **kwargs)
++
++
++def pose_from_pdbstring(*args, **kwargs):
++    """Instantiate a `Pose` object from a PDB string. If a `Pose` object is provided,
++    it is passed to `pyrosetta.rosetta.core.import_pose.pose_from_pdbstring`,
++    otherwise a new `Pose` object is instantiated.
++
++    @klimaj
++    """
++    try:
++        pose = kwargs.pop("pose")
++    except KeyError:
++        args = list(args)
++        for index in range(len(args)):
++            if isinstance(args[index], Pose):
++                pose = args.pop(index)
++                break
++        else:
++            pose = Pose()
++    rosetta.core.import_pose.pose_from_pdbstring(pose, *args, **kwargs)
++    return pose
+ 
+ 
+ def pose_from_sequence(seq, res_type="fa_standard", auto_termini=True):
+@@ -95,6 +173,41 @@ def poses_from_silent(silent_filename):
+         yield pose
+ 
+ 
++def poses_from_multimodel_pdb(filename, *args, **kwargs):
++    """Returns an Iterator object which is composed of Pose objects from an input
++    multimodel PDB file. Poses are generated in the order in which they appear in
++    the input multimodel PDB file. Any models without lines are skipped with a warning.
++    Additional input `*args` and `**kwargs` are passed to `pose_from_pdbstring`.
++
++    Example:
++    poses = pyrosetta.io.poses_from_multimodel_pdb(filename)
++    for pose in poses:
++        name = pose.pdb_info().name()
++
++    @klimaj
++    """
++    with open(filename, "r") as f:
++        found_model = False
++        for line in f:
++            if line.startswith("MODEL"):
++                found_model = True
++                model_lines = []
++                model_number = line.split()[-1]
++            elif line.startswith("ENDMDL"):
++                if not found_model:
++                    raise ValueError(f"Multimodel PDB file is not formatted correctly: {filename}")
++                if model_lines:
++                    pdbstring = "".join(model_lines)
++                    pose = pose_from_pdbstring(pdbstring, *args, **kwargs)
++                    pose.pdb_info().name(f"{filename} MODEL {model_number}")
++                    yield pose
++                else: # Otherwise raises: "ERROR: Assertion `! lines.empty()` failed."
++                    warnings.warn(f"Skipping empty model {model_number} in multimodel PDB file: {filename}")
++                found_model = False
++            elif found_model:
++                model_lines.append(line)
++
++
+ def poses_to_silent(poses, output_filename):
+     """Takes a Pose or list of poses and outputs them as a binary silent file.
+     This method requires a Pose object.
+@@ -130,3 +243,113 @@ def output_silent(pose):
+             output_silent(pose=pose)
+     else:
+         output_silent(pose=poses)
++
++
++def to_pdbstring(pose):
++    """Convert to pdb-formatted string with score and energy data.
++    """
++    from pyrosetta.rosetta.core.io import StructFileRepOptions
++    from pyrosetta.rosetta.core.io.pdb import dump_pdb as _dump_pdb
++    from pyrosetta.rosetta.std import ostringstream
++
++    sfro = StructFileRepOptions()
++    sfro.set_output_pose_cache_data(True)
++    sfro.set_output_pose_energies_table(True)
++
++    oss = ostringstream()
++    _dump_pdb(pose, oss, sfro)
++
++    return oss.bytes().decode()
++
++
++def dump_pdb(pose, output_filename):
++    """
++    Dump a PDB file from a `Pose` object and output filename.
++    If the output filename ends with ".pdb.bz2" or ".bz2", then dump a bz2-encoded PDB file.
++    If the output filename ends with ".pdb.gz" or ".gz", then dump a gzip-encoded PDB file.
++    If the output filename ends with ".pdb.xz" or ".xz", then dump a xz-encoded PDB file.
++
++    @klimaj
++    """
++    from pyrosetta.rosetta.core.io.pdb import dump_pdb as _dump_pdb
++
++    if not output_filename.endswith((".pdb", ".pdb.bz2", ".bz2", ".pdb.gz", ".gz", ".pdb.xz", ".xz")):
++        warnings.warn(
++            "Output filename does not end with '.pdb', '.pdb.bz2', '.bz2', '.pdb.gz', '.gz', '.pdb.xz', or '.xz', "
++            + "which `pyrosetta.io.pose_from_file` expects."
++        )
++
++    if output_filename.endswith((".pdb.bz2", ".bz2")):
++        with open(output_filename, "wb") as f:
++            f.write(bz2.compress(str.encode(to_pdbstring(pose))))
++    elif output_filename.endswith((".pdb.gz", ".gz")):
++        with gzip.open(output_filename, mode="wt", compresslevel=9) as gz:
++            gz.write(to_pdbstring(pose))
++    elif output_filename.endswith((".pdb.xz", ".xz")):
++        if "lzma" not in sys.modules:
++            raise ImportError(
++                (
++                    "Using 'xz' for compression requires installing the 'xz' package into your python environment. "
++                    + "For installation instructions, visit:\n"
++                    + "https://anaconda.org/anaconda/xz\n"
++                )
++            )
++        with open(output_filename, "wb") as f:
++            f.write(xz.compress(str.encode(to_pdbstring(pose))))
++    else:
++        return _dump_pdb(pose, output_filename)
++
++    return True
++
++
++def dump_multimodel_pdb(poses, output_filename):
++    """
++    Dump a multimodel PDB file from a `list`, `tuple`, or `set` of `Pose` objects,
++    and an output filename.
++
++    Inputs:
++    poses: `Pose` or iterable of `Pose` objects. This function automatically detects which one.
++    output_filename: The desired name of the output PDB file.
++
++    Example:
++    dump_multimodel_pdb(poses, "designs.pdb")
++
++    @klimaj
++    """
++    if not output_filename.endswith(".pdb"):
++        warnings.warn("Output filename does not end with '.pdb'.")
++    v1 = rosetta.utility.vector1_std_shared_ptr_const_core_pose_Pose_t()
++    if isinstance(poses, (list, tuple, set)):
++        for p in poses:
++            v1.append(p)
++    else:
++        v1.append(poses)
++
++    return rosetta.core.io.pdb.dump_multimodel_pdb(v1, output_filename)
++
++
++@functools.wraps(Pose.dump_file)
++def dump_file(pose, output_filename):
++    return pose.dump_file(output_filename)
++
++
++def dump_scored_pdb(pose, output_filename, scorefxn):
++    """
++    Dump a scored PDB file from a `Pose` object, output filename, and score function.
++    If the output filename ends with ".pdb.bz2" or ".bz2", then dump a bz2-encoded PDB file.
++    If the output filename ends with ".pdb.gz" or ".gz", then dump a gzip-encoded PDB file.
++    If the output filename ends with ".pdb.xz" or ".xz", then dump a xz-encoded PDB file.
++    Otherwise, implement the `Pose.dump_scored_pdb` method.
++
++    @klimaj
++    """
++    if output_filename.endswith((".pdb.bz2", ".bz2", ".pdb.gz", ".gz", ".pdb.xz", ".xz")):
++        scorefxn(pose)
++        return dump_pdb(pose, output_filename)
++    else:
++        if not output_filename.endswith(".pdb"):
++            warnings.warn(
++                "Output filename does not end with '.pdb', "
++                + "which `pyrosetta.io.pose_from_file` expects."
++            )
++        return pose.dump_scored_pdb(output_filename, scorefxn)
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/tests/bindings/core/test_pose.py b/source/src/python/PyRosetta/src/pyrosetta/tests/bindings/core/test_pose.py
+index 28da33e8cab..907b15181ca 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/tests/bindings/core/test_pose.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/tests/bindings/core/test_pose.py
+@@ -223,6 +223,121 @@ def test_pose_io(self):
+                 msg="Sequences diverge with IO.",
+             )
+ 
++    def test_cif_io(self):
++        with tempfile.TemporaryDirectory() as workdir:
++            in_pose = pyrosetta.io.pose_from_sequence("TEST/CIF")
++            cif_file = os.path.join(workdir, "tmp.cif")
++            pyrosetta.io.dump_cif(in_pose, cif_file)
++            out_pose = pyrosetta.io.pose_from_file(cif_file)
++            self.assertEqual(
++                in_pose.annotated_sequence(),
++                out_pose.annotated_sequence(),
++                msg="Sequence recovery failed."
++            )
++            for res in range(1, in_pose.size() + 1):
++                for atom in range(1, in_pose.residue(res).natoms() + 1):
++                    atom_input = in_pose.residue(res).xyz(atom)
++                    atom_output = out_pose.residue(res).xyz(atom)
++                    for axis in "xyz":
++                        self.assertAlmostEqual(
++                            getattr(atom_input, axis),
++                            getattr(atom_output, axis),
++                            places=4,
++                            msg="Coordinate recovery failed."
++                        )
++
++    def test_mmtf_io(self):
++        with tempfile.TemporaryDirectory() as workdir:
++            in_pose = pyrosetta.io.pose_from_sequence("TEST/MMTF")
++            mmtf_file = os.path.join(workdir, "tmp.mmtf")
++            pyrosetta.io.dump_mmtf(in_pose, mmtf_file)
++            out_pose = pyrosetta.io.pose_from_file(mmtf_file)
++            self.assertEqual(
++                in_pose.annotated_sequence(),
++                out_pose.annotated_sequence(),
++                msg="Sequence recovery failed."
++            )
++            for res in range(1, in_pose.size() + 1):
++                for atom in range(1, in_pose.residue(res).natoms() + 1):
++                    atom_input = in_pose.residue(res).xyz(atom)
++                    atom_output = out_pose.residue(res).xyz(atom)
++                    for axis in "xyz":
++                        self.assertAlmostEqual(
++                            getattr(atom_input, axis),
++                            getattr(atom_output, axis),
++                            places=3,
++                            msg="Coordinate recovery failed."
++                        )
++
++    def test_file_io(self):
++        scorefxn = pyrosetta.create_score_function("ref2015")
++        with tempfile.TemporaryDirectory() as workdir:
++            in_pose = pyrosetta.io.pose_from_sequence("TEST/FILE")
++            for filetype in ("pdb", "mmtf", "cif"):
++                file = os.path.join(workdir, f"tmp.{filetype}")
++                if filetype == "pdb":
++                    pyrosetta.io.dump_scored_pdb(in_pose, file, scorefxn)
++                else:
++                    pyrosetta.io.dump_file(in_pose, file)
++                out_pose = pyrosetta.io.pose_from_file(file)
++                self.assertEqual(
++                    in_pose.annotated_sequence(),
++                    out_pose.annotated_sequence(),
++                    msg="Sequence recovery failed."
++                )
++                for res in range(1, in_pose.size() + 1):
++                    for atom in range(1, in_pose.residue(res).natoms() + 1):
++                        atom_input = in_pose.residue(res).xyz(atom)
++                        atom_output = out_pose.residue(res).xyz(atom)
++                        for axis in "xyz":
++                            self.assertAlmostEqual(
++                                getattr(atom_input, axis),
++                                getattr(atom_output, axis),
++                                places=3,
++                                msg="Coordinate recovery failed."
++                            )
++
++    def test_multimodel_pdb_io(self):
++        with tempfile.TemporaryDirectory() as workdir:
++            seqs = ["TESTING/" + "MANY" * i + "/SEQS" for i in range(1, 8)]
++            in_poses = list(pyrosetta.io.poses_from_sequences(seqs))
++            pdb_file = os.path.join(workdir, "tmp.pdb")
++            pyrosetta.io.dump_multimodel_pdb(in_poses, pdb_file)
++            with open(pdb_file, "r") as f:
++                lines = f.readlines()
++            model_lines = [line for line in lines if line.startswith("MODEL")]
++            self.assertEqual(
++                len(model_lines),
++                len(in_poses),
++                msg="Number of models recovery failed."
++            )
++            out_poses = list(pyrosetta.io.poses_from_multimodel_pdb(pdb_file))
++            self.assertEqual(
++                len(out_poses),
++                len(in_poses),
++                msg="Number of poses recovery failed."
++            )
++            for i in range(len(out_poses)):
++                in_pose = in_poses[i]
++                out_pose = out_poses[i]
++                model = i + 1
++                self.assertEqual(
++                    out_pose.annotated_sequence(),
++                    in_pose.annotated_sequence(),
++                    msg=f"Annotated sequence recovery failed for model {model}."
++                )
++                for res in range(1, in_pose.size() + 1):
++                    for atom in range(1, in_pose.residue(res).natoms() + 1):
++                        atom_input = in_pose.residue(res).xyz(atom)
++                        atom_output = out_pose.residue(res).xyz(atom)
++                        for axis in "xyz":
++                            self.assertAlmostEqual(
++                                getattr(atom_input, axis),
++                                getattr(atom_output, axis),
++                                places=3,
++                                msg=f"Coordinate recovery failed for model {model}."
++                            )
++
+ 
+ class TestPosesToSilent(unittest.TestCase):
+ 
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/tests/distributed/test_smoke.py b/source/src/python/PyRosetta/src/pyrosetta/tests/distributed/test_smoke.py
+index ea65b4bcb9c..5232539d4ab 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/tests/distributed/test_smoke.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/tests/distributed/test_smoke.py
+@@ -6,6 +6,7 @@
+ # (c) For more information, see http://www.rosettacommons.org.
+ # (c) Questions about this can be addressed to University of Washington CoMotion, email: license@uw.edu.
+ 
++import glob
+ import os
+ import pyrosetta
+ import pyrosetta.distributed
+@@ -80,6 +81,15 @@ def test_score_smoke_test(self):
+             score_result["total_score"], rs_result["total_score"]
+         )
+ 
++        score_task = io.create_score_function("score12")
++        self.assertIsInstance(score_task, score.ScorePoseTask)
++
++        score_task = io.get_fa_scorefxn()
++        self.assertIsInstance(score_task, score.ScorePoseTask)
++
++        score_task = io.get_score_function()
++        self.assertIsInstance(score_task, score.ScorePoseTask)
++
+     def test_update_score(self):
+         """PackedPose.update_score returns an updated copy.
+ 
+@@ -174,3 +184,183 @@ def test_silent_io(self):
+                     pyrosetta.rosetta.core.scoring.all_atom_rmsd(test_poses[i],returned_poses[i]), 
+                     places=3,
+                     msg="List position recovery failed.")
++
++    def test_clone(self):
++        # Test PackedPose cloning
++        packed_pose_1 = io.pose_from_sequence("DNA")
++        packed_pose_1.scores["key"] = 37.0
++        packed_pose_2 = packed_pose_1.clone()
++        self.assertNotEqual(
++            id(packed_pose_1),
++            id(packed_pose_2),
++            msg="Clone failed.",
++        )
++        self.assertEqual(
++            packed_pose_1.scores["key"],
++            packed_pose_2.scores["key"],
++            msg="Scores differ after clone.",
++        )
++        self.assertNotEqual(
++            id(packed_pose_1.scores["key"]),
++            id(packed_pose_2.scores["key"]),
++            msg="Score memory address is identical after clone.",
++        )
++
++    def roundtrip(self, func, ext, input_packed_pose, workdir, scorefxn):
++        """Used in `test_packed_pose_io` testing framework."""
++        # Dump PackedPose to disk
++        out_file = os.path.join(workdir, f"tmp.{ext}")
++        if ext == "scored.pdb":
++            func(input_packed_pose.pose, out_file, "score12")
++            func(input_packed_pose, out_file, score.ScorePoseTask(weights="ref2015_cart"))
++            func(input_packed_pose, out_file, scorefxn)
++        else:
++            func(input_packed_pose, out_file)
++        # Load PackedPose from disk
++        if ext in ("pdb.bz2", "bz2", "pdb.gz", "gz", "pdb.xz", "xz"):
++            with self.assertRaises(FileNotFoundError):
++                io.pose_from_pdb(123)
++            with self.assertRaises(FileNotFoundError):
++                io.pose_from_pdb(os.path.join(workdir, f"nonexistent_file.{ext}"))
++            self.assertIsNone(io.pose_from_pdb(None))
++            output_packed_pose = io.pose_from_pdb(out_file)
++        else:
++            output_packed_pose = io.pose_from_file(out_file)
++        # Test annotated sequence recovery
++        self.assertEqual(
++            input_packed_pose.pose.annotated_sequence(),
++            output_packed_pose.pose.annotated_sequence(),
++            msg=f"Sequence recovery failed for extension '{ext}'."
++        )
++        # Test coordiante recovery
++        places = 32 if ext in ("b64", "base64", "B64", "pose", "pickle", "pickled_pose") else 2
++        for res in range(1, input_packed_pose.pose.size() + 1):
++            for atom in range(1, input_packed_pose.pose.residue(res).natoms() + 1):
++                atom_input = input_packed_pose.pose.residue(res).xyz(atom)
++                atom_output = output_packed_pose.pose.residue(res).xyz(atom)
++                for axis in "xyz":
++                    self.assertAlmostEqual(
++                        getattr(atom_input, axis),
++                        getattr(atom_output, axis),
++                        places=places,
++                        msg=f"Coordinate recovery failed for extension '{ext}'."
++                    )
++        # Test score recovery
++        self.assertTrue(dict(input_packed_pose.pose.scores), msg=f"Pose scores dictionary is empty for extension '{ext}'.")
++        if ext in ("pdb", "scored.pdb", "cif", "mmcif", "mmtf", "pdb.bz2", "bz2", "pdb.gz", "gz", "pdb.xz", "xz"):
++            self.assertFalse(dict(output_packed_pose.pose.scores), msg=f"Pose scores dictionary has items for extension '{ext}'.")
++            self.assertNotEqual(
++                input_packed_pose.scores,
++                output_packed_pose.scores,
++                msg=f"PackedPose scores dictionaries differ for extension '{ext}'."
++            )
++        else: # base64-encoded and pickle-encoded files save the `pose.scores` dictionary
++            self.assertTrue(output_packed_pose.scores, msg=f"PackedPose scores dictionary is empty for extension '{ext}'.")
++            self.assertTrue(dict(output_packed_pose.pose.scores), msg=f"Pose scores dictionary is empty for extension '{ext}'.")
++            self.assertDictEqual(
++                input_packed_pose.scores,
++                output_packed_pose.scores,
++                msg=f"Pose scores dictionaries differ for extension '{ext}'."
++            )
++            self.assertDictEqual(
++                dict(input_packed_pose.pose.scores),
++                dict(output_packed_pose.pose.scores),
++                msg=f"Pose scores dictionaries differ for extension '{ext}'."
++            )
++
++    def test_packed_pose_io(self):
++        # Test PackedPose I/O
++        ext_func_dict = {
++            "pdb": io.dump_pdb,
++            "scored.pdb": io.dump_scored_pdb,
++            "cif": io.dump_cif,
++            "mmcif": io.dump_cif,
++            "mmtf": io.dump_mmtf,
++            "pdb.bz2": io.dump_pdb,
++            "bz2": io.dump_pdb,
++            "pdb.gz": io.dump_pdb,
++            "gz": io.dump_pdb,
++            "pdb.xz": io.dump_pdb,
++            "xz": io.dump_pdb,
++            "base64": io.dump_base64,
++            "b64": io.dump_base64,
++            "B64": io.dump_base64,
++            "pose": io.dump_base64,
++            "pickle": io.dump_pickle,
++            "pickled_pose": io.dump_pickle,
++        }
++        input_packed_pose = io.pose_from_sequence("CATALYST/X[ATP]")
++        scorefxn = pyrosetta.create_score_function("ref2015")
++        input_pose = input_packed_pose.pose
++        scorefxn(input_pose)
++        input_packed_pose = io.to_packed(input_pose)
++        with tempfile.TemporaryDirectory() as workdir:
++            for ext, func in ext_func_dict.items():
++                self.roundtrip(func, ext, input_packed_pose.clone(), workdir, scorefxn)
++
++    def test_poses_from_sequences_io(self):
++        # Test `io.poses_from_sequences`
++        seqs = ["DESIGN" * i for i in range(3, 8)]
++        in_packed_poses = list(io.poses_from_sequences(seqs))
++        for packed_pose, seq in zip(in_packed_poses, seqs):
++            self.assertIsInstance(
++                packed_pose,
++                pyrosetta.distributed.packed_pose.core.PackedPose,
++                msg="Instance is not a `PackedPose` object."
++            )
++            self.assertEqual(packed_pose.pose.sequence(), seq, msg="Sequences diverge.")
++
++    def test_multimodel_pdb_io(self):
++         # Test `poses_from_multimodel_pdb`
++        seqs = ["PHENYLALANINE" * i for i in range(3, 8)]
++        in_packed_poses = list(io.poses_from_sequences(seqs))
++        with tempfile.TemporaryDirectory() as workdir:
++            pdb_file = os.path.join(workdir, "tmp.pdb")
++            io.dump_multimodel_pdb(in_packed_poses, pdb_file)
++            out_packed_poses = list(io.poses_from_multimodel_pdb(pdb_file))
++        self.assertEqual(
++            len(out_packed_poses),
++            len(in_packed_poses),
++            msg="Number of `PackedPose` objects recovery failed."
++        )
++        for in_packed_pose, out_packed_pose in zip(in_packed_poses, out_packed_poses):
++            self.assertIsInstance(
++                in_packed_pose,
++                pyrosetta.distributed.packed_pose.core.PackedPose,
++                msg="Instance is not a `PackedPose` object."
++            )
++            self.assertIsInstance(
++                out_packed_pose,
++                pyrosetta.distributed.packed_pose.core.PackedPose,
++                msg="Instance is not a `PackedPose` object."
++            )
++            self.assertEqual(
++                out_packed_pose.pose.annotated_sequence(),
++                in_packed_pose.pose.annotated_sequence(),
++                msg="Annotated sequence recovery failed."
++            )
++
++    def test_poses_from_files_io(self):
++        seqs = ["/".join(["PHI/PSI"] * i) for i in range(1, 5)]
++        in_packed_poses = io.poses_from_sequences(seqs)
++        # Test `io.poses_from_files`
++        with tempfile.TemporaryDirectory() as workdir:
++            for i, test_packed_pose in enumerate(in_packed_poses, start=1):
++                io.dump_pdb(test_packed_pose, os.path.join(workdir, "%s.pdb" % i))
++            out_packed_poses = io.poses_from_files(glob.glob(os.path.join(workdir, "*.pdb")))
++        for in_packed_pose, out_packed_pose in zip(in_packed_poses, out_packed_poses):
++            self.assertIsInstance(
++                in_packed_pose,
++                pyrosetta.distributed.packed_pose.core.PackedPose,
++                msg="Instance is not a `PackedPose` object."
++            )
++            self.assertIsInstance(
++                out_packed_pose,
++                pyrosetta.distributed.packed_pose.core.PackedPose,
++                msg="Instance is not a `PackedPose` object."
++            )
++            self.assertEqual(
++                out_packed_pose.pose.annotated_sequence(),
++                in_packed_pose.pose.annotated_sequence(),
++                msg="Annotated sequence recovery failed."
++            )
+diff --git a/source/src/python/PyRosetta/src/test/T010_LoadPDB.py b/source/src/python/PyRosetta/src/test/T010_LoadPDB.py
+index dec2c44500c..0755378316b 100644
+--- a/source/src/python/PyRosetta/src/test/T010_LoadPDB.py
++++ b/source/src/python/PyRosetta/src/test/T010_LoadPDB.py
+@@ -12,45 +12,116 @@
+ ## @brief  Serve as example on how to import rosetta, load pdb and as script that create database
+ ## @brief        binaries on windows.
+ ## @author Sergey Lyskov
++## @author Jason C. Klima
+ 
+ from __future__ import print_function
+ 
++import os
+ import pyrosetta
+ import pyrosetta.rosetta as rosetta
+-
+-pyrosetta.init(extra_options = "-constant_seed")  # WARNING: option '-constant_seed' is for testing only! MAKE SURE TO REMOVE IT IN PRODUCTION RUNS!!!!!
+-import os; os.chdir('.test.output')
+-
+-print( pyrosetta.version() )
+-
+-pose = rosetta.core.import_pose.pose_from_file("../test/data/test_in.pdb")
+-
+-scorefxn = rosetta.core.scoring.get_score_function()
+-scorefxn(pose)
+-
+-
+-pose2 = pyrosetta.pose_from_sequence("ARNDCEQGHILKMFPSTWYV", 'fa_standard')
+-
+-scorefxn = rosetta.core.scoring.get_score_function()
+-scorefxn(pose2)
+-
+-
+-pose3 = pyrosetta.pose_from_sequence("DSEEKFLRRIGRFGYGYGPYE",'centroid')
+-
+-# Creating standard centroid score function and scoring
+-scorefxn = rosetta.core.scoring.ScoreFunctionFactory.create_score_function('score3')
+-scorefxn(pose3)
+-
+-pose_fs = pyrosetta.pose_from_sequence("DSEEKFLRRIGRFGYGYGPYE")
+-pose_fs.delete_polymer_residue(2)  # Testing that attached PDB info have right size...
+-
+-
+-poses = pyrosetta.poses_from_silent('../test/data/test_in.silent')
+-for pose in poses:
+-    scorefxn = rosetta.core.scoring.get_score_function()
+-    scorefxn(pose)
+-
+-import pyrosetta.toolbox
+-
+-# commenting this out for now to avoid release failures during debug builds when network is out
+-# pyrosetta.toolbox.pose_from_rcsb('1brs')
++import tempfile
++import unittest
++
++try:
++    import lzma as xz
++    _skip_xz = False
++except ImportError:
++    _skip_xz = True
++
++
++class LoadPDBTest(unittest.TestCase):
++    @classmethod
++    def setUpClass(cls):
++        pyrosetta.init(extra_options = "-constant_seed")  # WARNING: option '-constant_seed' is for testing only! MAKE SURE TO REMOVE IT IN PRODUCTION RUNS!!!!!
++        print( pyrosetta.version() )
++        cls.pose = pyrosetta.pose_from_sequence("DSEEKFLRRIGRFGYGYGPYE")
++        cls.scorefxn = rosetta.core.scoring.get_score_function()
++        cls.workdir = tempfile.TemporaryDirectory()
++
++    @classmethod
++    def tearDownClass(cls):
++        cls.workdir.cleanup()
++
++    def test_load_pdb(self):
++        import pyrosetta
++
++        os.chdir('.test.output')
++        pose = rosetta.core.import_pose.pose_from_file("../test/data/test_in.pdb")
++
++        scorefxn = rosetta.core.scoring.get_score_function()
++        scorefxn(pose)
++
++
++        pose2 = pyrosetta.pose_from_sequence("ARNDCEQGHILKMFPSTWYV", 'fa_standard')
++
++        scorefxn = rosetta.core.scoring.get_score_function()
++        scorefxn(pose2)
++
++
++        pose3 = pyrosetta.pose_from_sequence("DSEEKFLRRIGRFGYGYGPYE",'centroid')
++
++        # Creating standard centroid score function and scoring
++        scorefxn = rosetta.core.scoring.ScoreFunctionFactory.create_score_function('score3')
++        scorefxn(pose3)
++
++        pose_fs = pyrosetta.pose_from_sequence("DSEEKFLRRIGRFGYGYGPYE")
++        pose_fs.delete_polymer_residue(2)  # Testing that attached PDB info have right size...
++
++
++        poses = pyrosetta.poses_from_silent('../test/data/test_in.silent')
++        for pose in poses:
++            scorefxn = rosetta.core.scoring.get_score_function()
++            scorefxn(pose)
++
++        import pyrosetta.toolbox
++
++        # commenting this out for now to avoid release failures during debug builds when network is out
++        # pyrosetta.toolbox.pose_from_rcsb('1brs')
++
++    @unittest.skipIf(_skip_xz, "The package 'xz' is not installed.")
++    def test_roundtrip_pdb(self):
++        for ext in (".pdb", ".pdb.bz2", ".bz2", ".pdb.gz", ".gz", ".pdb.xz", ".xz"):
++            pdb_file = os.path.join(self.workdir.name, "tmp_pdb{0}".format(ext))
++            pyrosetta.dump_pdb(self.pose, pdb_file)
++            pose_out = pyrosetta.pose_from_file(pdb_file)
++            self.assertEqual(pose_out.size(), self.pose.size())
++
++    @unittest.skipIf(_skip_xz, "The package 'xz' is not installed.")
++    def test_roundtrip_scored_pdb(self):
++        for ext in (".pdb", ".pdb.bz2", ".bz2", ".pdb.gz", ".gz", ".pdb.xz", ".xz"):
++            pdb_file = os.path.join(self.workdir.name, "tmp_scored_pdb{0}".format(ext))
++            pyrosetta.dump_scored_pdb(self.pose, pdb_file, self.scorefxn)
++            pose_out = pyrosetta.pose_from_file(pdb_file)
++            self.assertEqual(pose_out.size(), self.pose.size())
++
++    def test_roundtrip_file(self):
++        for ext in (".cif", ".mmcif", ".mmtf"):
++            pdb_file = os.path.join(self.workdir.name, "tmp_file{0}".format(ext))
++            pyrosetta.dump_file(self.pose, pdb_file)
++            pose_out = pyrosetta.pose_from_file(pdb_file)
++            self.assertEqual(pose_out.size(), self.pose.size())
++            if ext in (".cif", ".mmcif"):
++                pyrosetta.dump_cif(self.pose, pdb_file)
++            elif ext == ".mmtf":
++                pyrosetta.dump_mmtf(self.pose, pdb_file)
++            else:
++                continue
++            pose_out = pyrosetta.pose_from_file(pdb_file)
++            self.assertEqual(pose_out.size(), self.pose.size())
++
++    def test_pdbstring_io(self):
++        self.assertIn("ATOM", pyrosetta.io.to_pdbstring(self.pose))
++        pose_out = pyrosetta.io.pose_from_pdbstring(pyrosetta.io.to_pdbstring(self.pose))
++        self.assertEqual(pose_out.size(), self.pose.size())
++        pose = pyrosetta.Pose()
++        pdbstring = pyrosetta.io.to_pdbstring(self.pose)
++        pose_out = pyrosetta.io.pose_from_pdbstring(pose, pdbstring)
++        self.assertEqual(pose_out.size(), self.pose.size())
++        pose_out = pyrosetta.io.pose_from_pdbstring(pose=pose, pdbcontents=pdbstring)
++        self.assertEqual(pose_out.size(), self.pose.size())
++        pose = pyrosetta.Pose()
++        pose_out = pyrosetta.io.pose_from_pdbstring(pdbstring, pose)
++        self.assertEqual(pose_out.size(), self.pose.size())
++
++if __name__ == "__main__":
++    unittest.main()

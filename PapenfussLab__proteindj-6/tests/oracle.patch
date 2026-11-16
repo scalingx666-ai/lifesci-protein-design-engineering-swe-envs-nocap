@@ -1,0 +1,300 @@
+diff --git a/bindsweeper/bindsweeper/cli.py b/bindsweeper/bindsweeper/cli.py
+index 7aa51be..102592d 100644
+--- a/bindsweeper/bindsweeper/cli.py
++++ b/bindsweeper/bindsweeper/cli.py
+@@ -9,7 +9,7 @@
+ 
+ import click
+ 
+-from .profile_generator import append_profiles_to_bindsweeper_config, insert_profiles_into_config
++from .profile_generator import write_profiles_to_bindsweeper_config
+ from .results_processor import ResultsProcessor
+ from .sweep_config import SweepConfig
+ from .sweep_engine import SweepEngine
+@@ -33,7 +33,7 @@
+ 
+ @click.command(context_settings=CONTEXT_SETTINGS)
+ @click.option("--debug", is_flag=True, help="Enable debug logging")
+-@click.version_option(version="0.1.7")
++@click.version_option(version="0.1.8")
+ @click.option("--dry-run", is_flag=True, help="Print commands without executing them")
+ @click.option(
+     "--skip-sweep", is_flag=True, help="Skip parameter sweep and only process results"
+@@ -93,6 +93,9 @@ def cli(
+     current_dir = os.getcwd()
+ 
+     try:
++        if dry_run:
++            click.echo(f"Performing dry run to validate config and preview parameter combinations\n")
++
+         # Use provided nextflow_config or discover it
+         if nextflow_config:
+             nextflow_config_path = nextflow_config
+@@ -116,9 +119,7 @@ def cli(
+             if os.path.exists(sweep_yaml):
+                 click.echo(f"✓ Automatically detected sweep configuration: {sweep_yaml}")
+             else:
+-                if dry_run:
+-                    sweep_yaml = "dummy_path/sweep.yaml"
+-                elif skip_sweep:
++                if skip_sweep:
+                     # In skip_sweep mode, we still need a config for validation, but make it optional
+                     click.echo("✓ Skip-sweep mode: config validation will be skipped")
+                     sweep_yaml = None
+@@ -213,7 +214,7 @@ def cli(
+                 if quick_combinations:
+                     # Generate quick test profiles
+                     quick_profiles = engine.generate_profiles(quick_combinations)
+-                    append_profiles_to_bindsweeper_config(
++                    write_profiles_to_bindsweeper_config(
+                         quick_profiles, "bindsweeper.config", dry_run
+                     )
+ 
+@@ -255,7 +256,7 @@ def cli(
+                     click.echo(f"Each combination runs a full ProteinDJ pipeline which can take significant time and resources.", err=True)
+                     click.echo(f"Consider using --quick-test first to validate your configuration with 2 designs per combination.\n", err=True)
+                     
+-                    if not skip_confirmation and not click.confirm("Do you want to proceed with the full sweep?"):
++                    if not skip_confirmation and not dry_run and not click.confirm("Do you want to proceed with the full sweep?"):
+                         click.echo("Sweep cancelled by user.")
+                         sys.exit(0)
+ 
+@@ -263,8 +264,8 @@ def cli(
+                     # Generate profiles
+                     profiles = engine.generate_profiles(combinations)
+ 
+-                    # Append profiles to bindsweeper.config
+-                    append_profiles_to_bindsweeper_config(profiles, "bindsweeper.config", dry_run)
++                    # Write profiles to bindsweeper.config
++                    write_profiles_to_bindsweeper_config(profiles, "bindsweeper.config", dry_run)
+ 
+                     # Execute sweep
+                     results = engine.execute_sweep(combinations, dry_run, continue_on_error)
+@@ -276,8 +277,9 @@ def cli(
+             results_config = config.results_config if config else ResultsConfig()
+             processor = ResultsProcessor(results_config, out_dir)
+             processor.process_results(results, config_paths, dry_run, skip_sweep)
+-
+-        click.echo("Sweep completed successfully!")
++            click.echo("\nSweep completed successfully!")
++        else:
++            click.echo("\nDry run completed successfully!")
+ 
+     except Exception as e:
+         click.echo(f"Error: {e}", err=True)
+diff --git a/bindsweeper/bindsweeper/profile_generator.py b/bindsweeper/bindsweeper/profile_generator.py
+index ee8af1b..8577405 100644
+--- a/bindsweeper/bindsweeper/profile_generator.py
++++ b/bindsweeper/bindsweeper/profile_generator.py
+@@ -2,6 +2,7 @@
+ """Nextflow profile generation for parameter sweeps."""
+ 
+ import re
++import os
+ from typing import Any
+ 
+ from .parameter_converters import get_converter
+@@ -88,92 +89,24 @@ def generate_profile_content(
+ 
+ 
+ 
+-def append_profiles_to_bindsweeper_config(
++def write_profiles_to_bindsweeper_config(
+     profiles: list[str], config_path: str = "bindsweeper.config", dry_run: bool = False
+ ) -> None:
+-    """Append generated profiles to bindsweeper.config file."""
++    """Write generated profiles to bindsweeper.config file."""
+     if dry_run:
+-        print("\nWould append profiles to bindsweeper.config:")
++        print("\nWould write profiles to bindsweeper.config:")
+         for profile in profiles:
+             print(profile)
+         return
+ 
+     try:
+-        # Check if config file exists, create if it doesn't
+-        import os
+-
+-        if not os.path.exists(config_path):
+-            # Create new config file with profiles section
+-            content = "profiles {\n" + "".join(profiles) + "}\n"
+-        else:
+-            # Read existing file
+-            with open(config_path) as f:
+-                content = f.read()
+-
+-            # Check if profiles section exists
+-            match = re.search(r"profiles\s*{\s*", content)
+-            if not match:
+-                # No profiles section, add it
+-                content = content.rstrip() + "\n\nprofiles {\n" + "".join(profiles) + "}\n"
+-            else:
+-                # Find the closing brace of the profiles section
+-                brace_count = 1
+-                search_pos = match.end()
+-
+-                while search_pos < len(content) and brace_count > 0:
+-                    if content[search_pos] == '{':
+-                        brace_count += 1
+-                    elif content[search_pos] == '}':
+-                        brace_count -= 1
+-                    search_pos += 1
+-
+-                # Insert profiles before the closing brace
+-                insert_pos = search_pos - 1  # Position of closing brace
+-                content = content[:insert_pos] + "".join(profiles) + content[insert_pos:]
++        content = "profiles {\n" + "".join(profiles) + "}\n"
+ 
+         # Write to file
+         with open(config_path, "w") as f:
+             f.write(content)
+ 
+-        print(f"Successfully appended {len(profiles)} profiles to {config_path}")
+-
+-    except Exception as e:
+-        raise ValueError(f"Failed to append profiles to {config_path}: {str(e)}")
+-
+-
+-def insert_profiles_into_config(
+-    config_path: str, profiles: list[str], dry_run: bool = False
+-) -> None:
+-    """Insert generated profiles into the nextflow.config file."""
+-    if dry_run:
+-        print("\nWould insert profiles into nextflow.config:")
+-        for profile in profiles:
+-            print(profile)
+-        return
+-
+-    try:
+-
+-        with open(config_path) as f:
+-            content = f.read()
+-
+-        # Find the profiles section
+-        match = re.search(r"profiles\s*{\s*", content)
+-        if not match:
+-            raise ValueError("Profiles section not found in nextflow.config")
+-
+-        # Calculate insertion position (after the opening brace)
+-        insert_pos = match.end()
+-
+-        # Insert profiles
+-        new_content = (
+-            content[:insert_pos] + "\n" + "".join(profiles) + content[insert_pos:]
+-        )
+-
+-        # Write back to file
+-        with open(config_path, "w") as f:
+-            f.write(new_content)
+-
+-        print(f"Successfully inserted {len(profiles)} profiles into nextflow.config")
++        print(f"Successfully wrote {len(profiles)} profiles to {config_path}")
+ 
+     except Exception as e:
+-        raise ValueError(f"Failed to insert profiles into nextflow.config: {str(e)}")
++        raise ValueError(f"Failed to write profiles to {config_path}: {str(e)}")
+diff --git a/bindsweeper/bindsweeper/results_processor.py b/bindsweeper/bindsweeper/results_processor.py
+index 51f2994..be7765a 100644
+--- a/bindsweeper/bindsweeper/results_processor.py
++++ b/bindsweeper/bindsweeper/results_processor.py
+@@ -64,7 +64,7 @@ def process_results(
+                         pdb_output_dir, output_csv, config_paths
+                     )
+                     if zip_path:
+-                        logger.info(f"Created zip file: {zip_path}")
++                        logger.info(f"Created zip archive: {zip_path}")
+         else:
+             # No successful designs found - create empty CSV
+             logger.info("No successful designs found to process, creating empty results CSV")
+@@ -223,7 +223,6 @@ def zip_results_with_configs(
+ 
+             # Clean up original files
+             shutil.rmtree(pdb_dir)
+-            os.remove(csv_file)
+             logger.info("Cleaned up temporary files")
+ 
+             return zip_path
+diff --git a/bindsweeper/bindsweeper/sweep_config.py b/bindsweeper/bindsweeper/sweep_config.py
+index 1f75cd5..bc018de 100644
+--- a/bindsweeper/bindsweeper/sweep_config.py
++++ b/bindsweeper/bindsweeper/sweep_config.py
+@@ -18,11 +18,11 @@
+ class ResultsConfig:
+     """Configuration for results processing."""
+ 
+-    rank_dirname: str = "rank"
+-    results_dirname: str = "results"
+-    csv_filename: str = "best.csv"
+-    output_csv: str = "merged_best.csv"
+-    pdb_output_dir: str = "merged_best_designs"
++    rank_dirname: str = "results"
++    results_dirname: str = "best_designs"
++    csv_filename: str = "best_designs.csv"
++    output_csv: str = "sweep_results.csv"
++    pdb_output_dir: str = "sweep_designs"
+     zip_results: bool = True
+ 
+ 
+diff --git a/bindsweeper/bindsweeper/utils.py b/bindsweeper/bindsweeper/utils.py
+index 7ae4202..260c72a 100644
+--- a/bindsweeper/bindsweeper/utils.py
++++ b/bindsweeper/bindsweeper/utils.py
+@@ -57,20 +57,12 @@ def find_config_files(
+     # Find nextflow.config
+     nextflow_config = os.path.join(current_dir, "nextflow.config")
+     if not os.path.isfile(nextflow_config):
+-        if dry_run:
+-            print(f"Would prompt for nextflow.config (not found in {current_dir})")
+-            nextflow_config = "dummy_path/nextflow.config"
+-        else:
+-            nextflow_config = prompt_for_file("nextflow.config", current_dir)
++        nextflow_config = prompt_for_file("nextflow.config", current_dir)
+ 
+     # Find sweep.yaml
+     sweep_yaml = os.path.join(current_dir, "sweep.yaml")
+     if not os.path.isfile(sweep_yaml):
+-        if dry_run:
+-            print(f"Would prompt for sweep.yaml (not found in {current_dir})")
+-            sweep_yaml = "dummy_path/sweep.yaml"
+-        else:
+-            sweep_yaml = prompt_for_file("sweep.yaml", current_dir)
++        sweep_yaml = prompt_for_file("sweep.yaml", current_dir)
+ 
+     # Confirm config files with user
+     if not skip_confirmation and not confirm_config_files(nextflow_config, sweep_yaml):
+@@ -126,9 +118,6 @@ def parse_out_dir_from_nextflow(config_path: str, dry_run: bool = False) -> str:
+     """Parse nextflow.config file to extract out_dir parameter."""
+     import re
+ 
+-    if dry_run:
+-        return os.path.expandvars("/dummy/output/path")
+-
+     try:
+         with open(config_path) as f:
+             content = f.read()
+diff --git a/bindsweeper/pyproject.toml b/bindsweeper/pyproject.toml
+index 9b3056f..480a20c 100644
+--- a/bindsweeper/pyproject.toml
++++ b/bindsweeper/pyproject.toml
+@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
+ 
+ [project]
+ name = "bindsweeper"
+-version = "0.1.7" 
++version = "0.1.8" 
+ authors = [
+     { name = "Dylan Silke", email = "silke.dy@wehi.edu.au"},
+     { name = "Josh Hardy", email = "hardy.j@wehi.edu.au"}
+diff --git a/bindsweeper/uv.lock b/bindsweeper/uv.lock
+index fec4f1e..896639a 100644
+--- a/bindsweeper/uv.lock
++++ b/bindsweeper/uv.lock
+@@ -10,7 +10,7 @@ resolution-markers = [
+ 
+ [[package]]
+ name = "bindsweeper"
+-version = "0.1.6"
++version = "0.1.8"
+ source = { editable = "." }
+ dependencies = [
+     { name = "click", version = "8.1.8", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },

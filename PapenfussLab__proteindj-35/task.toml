@@ -1,0 +1,69 @@
+version = "1.0"
+
+[task]
+name = "default/PapenfussLab__proteindj-35"
+description = "Patch: Schema required parameters and version validation"
+
+[metadata]
+difficulty = "large"
+category = "bugfix"
+keywords = [
+    "proteindj",
+    "pr_diff",
+]
+
+[metadata.repo2env]
+pipeline = "pr_diff"
+pipeline_version = "0.3.0"
+repo = "PapenfussLab/proteindj"
+ref = "bd3f3223d71f815a8b05a165e95567d440199968"
+reference = "https://github.com/PapenfussLab/proteindj/pull/35"
+source_access = "auto"
+built_at = "2026-11-16T03:26:45.830927+00:00"
+reward_kinds = [
+    "diff_similarity",
+]
+spec_version = "0.2.0"
+content_hash = "sha256:0f08781a647915ceddf205319b507d90879f8275e7416f5944bc5d8bf23c6c3f"
+
+[metadata.repo2env.pr_diff]
+pr_merged_at = "2026-01-04T04:48:17Z"
+diff_format = "unified"
+context_files = [
+    "bindsweeper/pyproject.toml",
+    "bindsweeper/uv.lock",
+    "nextflow.config",
+    "nextflow_schema.json",
+    "schemas/nextflow_schema_binder_motifscaff.json",
+    "schemas/nextflow_schema_custom.json",
+    "schemas/nextflow_schema_monomer_motifscaff.json",
+    "scripts/generate_mode_schemas.py",
+]
+
+[metadata.repo2env.reward_calibration]
+baseline_reward = 0.0
+loc_changed = 95
+difficulty = "large"
+
+[metadata.repo2env.evaluation]
+schema_version = "1"
+status = "unverified"
+stage = "generation"
+reason_codes = [
+    "validation_not_run",
+]
+detail = "Generated task; validation has not been established."
+provenance = "unknown"
+evidence = []
+
+[metadata.repo2env.reproducibility]
+mode = "local_only"
+image_ref = "python:3.12-slim"
+image_tag = "python:3.12-slim"
+image_visibility = "private"
+
+[agent]
+timeout_sec = 1800.0
+
+[verifier]
+timeout_sec = 300.0

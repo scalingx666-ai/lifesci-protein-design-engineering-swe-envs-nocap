@@ -1,0 +1,159 @@
+diff --git a/source/src/numeric/MathMatrix.hh b/source/src/numeric/MathMatrix.hh
+index 83e344a9b33..0b66fa7274e 100644
+--- a/source/src/numeric/MathMatrix.hh
++++ b/source/src/numeric/MathMatrix.hh
+@@ -59,11 +59,11 @@ public:
+ 	//////////////////////////////////
+ 
+ 	/// @brief default constructor
+-	MathMatrix< T>() :
+-	NumberRows_( 0),
+-	NumberCols_( 0),
+-	size_( 0 ),
+-	data_( nullptr )
++	MathMatrix() :
++		NumberRows_( 0),
++		NumberCols_( 0),
++		size_( 0 ),
++		data_( nullptr )
+ 	{
+ 	}
+ 
+@@ -79,16 +79,16 @@ public:
+ 	/// @param NUMBER_ROWS number of rows in matrix
+ 	/// @param NUMBER_COLS number of cols in matrix
+ 	/// @param FILL_VALUE assign every element to that value
+-	explicit MathMatrix< T>
++	explicit MathMatrix
+ 	(
+ 		const Size NUMBER_ROWS,
+ 		const Size NUMBER_COLS,
+ 		const T &FILL_VALUE = T( 0)
+ 	) :
+-	NumberRows_( NUMBER_ROWS),
+-	NumberCols_( NUMBER_COLS),
+-	size_( NumberRows_ * NumberCols_ ),
+-	data_( new T[ size_ ])
++		NumberRows_( NUMBER_ROWS),
++		NumberCols_( NUMBER_COLS),
++		size_( NumberRows_ * NumberCols_ ),
++		data_( new T[ size_ ])
+ 	{
+ 		// set all values to FILL_VALUE
+ 		std::fill( data_, data_ + size_, FILL_VALUE);
+@@ -98,16 +98,16 @@ public:
+ 	/// @param NUMBER_ROWS number of rows in matrix
+ 	/// @param NUMBER_COLS number of cols in matrix
+ 	/// @param DATA pointer to field of data
+-	MathMatrix< T>
++	MathMatrix
+ 	(
+ 		const Size NUMBER_ROWS,
+ 		const Size NUMBER_COLS,
+ 		const T *DATA
+ 	) :
+-	NumberRows_( NUMBER_ROWS),
+-	NumberCols_( NUMBER_COLS),
+-	size_( NumberRows_ * NumberCols_ ),
+-	data_( new T[ NumberRows_ * NumberCols_])
++		NumberRows_( NUMBER_ROWS),
++		NumberCols_( NUMBER_COLS),
++		size_( NumberRows_ * NumberCols_ ),
++		data_( new T[ NumberRows_ * NumberCols_])
+ 	{
+ 		// copy data
+ 		std::copy( DATA, DATA + size_, data_);
+@@ -133,7 +133,7 @@ public:
+ 	}
+ 
+ 	/// @brief destructor
+-	~MathMatrix< T>()
++	~MathMatrix()
+ 	{
+ 		delete[] data_;
+ 	}
+diff --git a/source/src/numeric/MathVector.hh b/source/src/numeric/MathVector.hh
+index 8f77d595261..97c3029add4 100644
+--- a/source/src/numeric/MathVector.hh
++++ b/source/src/numeric/MathVector.hh
+@@ -66,9 +66,9 @@ public:
+ 	//////////////////////////////////
+ 
+ 	/// @brief default constructor
+-	MathVector< T>() :
+-	size_( 0),
+-	data_( nullptr )
++	MathVector() :
++		size_( 0),
++		data_( nullptr )
+ 	{
+ 	}
+ 
+@@ -81,9 +81,9 @@ public:
+ 	/// @brief construct from size and possible filler
+ 	/// @param SIZE number fo elements in Vector
+ 	/// @param FILL_VALUE assign every element to that value
+-	explicit MathVector< T>( const Size SIZE, const T &FILL_VALUE= T( 0)) :
+-	size_( SIZE),
+-	data_( new T[ SIZE])
++	explicit MathVector( const Size SIZE, const T &FILL_VALUE= T( 0)) :
++		size_( SIZE),
++		data_( new T[ SIZE])
+ 	{
+ 
+ 		// set all values to FILL_VALUE
+@@ -91,9 +91,9 @@ public:
+ 	}
+ 
+ 	/// @brief construct from length and pointer to data
+-	MathVector< T>( const Size SIZE, const T *DATA) :
+-	size_( SIZE),
+-	data_( new T[ SIZE])
++	MathVector( const Size SIZE, const T *DATA) :
++		size_( SIZE),
++		data_( new T[ SIZE])
+ 	{
+ 		std::copy( DATA, DATA + SIZE, data_);
+ 	}
+@@ -116,7 +116,7 @@ public:
+ 	}
+ 
+ 	/// @ brief destructor
+-	~MathVector< T>()
++	~MathVector()
+ 	{
+ 		delete[] data_;
+ 	}
+diff --git a/source/src/numeric/histograms/OneDHistogram.hh b/source/src/numeric/histograms/OneDHistogram.hh
+index 72ddb913be3..d9e6a1f2bbc 100644
+--- a/source/src/numeric/histograms/OneDHistogram.hh
++++ b/source/src/numeric/histograms/OneDHistogram.hh
+@@ -29,8 +29,8 @@
+ #include <map>
+ #include <platform/types.hh>
+ 
+-namespace numeric{
+-namespace histograms{
++namespace numeric {
++namespace histograms {
+ 
+ 
+ template<typename key1>
+@@ -38,7 +38,7 @@ class OneDHistogram {
+ 
+ public:
+ 
+-	OneDHistogram<key1>()= default;
++	OneDHistogram()= default;
+ 
+ 	void insert_data(key1 key_1, platform::Size counts){
+ 		histogram_.insert(std::make_pair(key_1, counts));
+@@ -52,7 +52,7 @@ public:
+ 
+ 
+ private:
+-std::map< key1, platform::Size > histogram_;
++	std::map< key1, platform::Size > histogram_;
+ 
+ 
+ };

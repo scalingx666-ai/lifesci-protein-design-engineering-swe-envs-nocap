@@ -1,0 +1,64 @@
+version = "1.0"
+
+[task]
+name = "default/NVIDIA-BioNeMo__BioNeMo-Inference-Runtime-6"
+description = "fix(openfold3): match AF3 pTM/ipTM reduction and confidence bin centers"
+
+[metadata]
+difficulty = "large"
+category = "bugfix"
+keywords = [
+    "BioNeMo-Inference-Runtime",
+    "pr_diff",
+]
+
+[metadata.repo2env]
+pipeline = "pr_diff"
+pipeline_version = "0.3.0"
+repo = "NVIDIA-BioNeMo/BioNeMo-Inference-Runtime"
+ref = "bbf5f9ecb553a0a6707a5d37747041e0f58c81fe"
+reference = "https://github.com/NVIDIA-BioNeMo/BioNeMo-Inference-Runtime/pull/6"
+source_access = "auto"
+built_at = "2026-11-16T05:04:56.386154+00:00"
+reward_kinds = [
+    "diff_similarity",
+]
+spec_version = "0.2.0"
+content_hash = "sha256:80cf67952c251eafa704b774a567eb378dce5c2f4633dee02c67fa8b9d01896f"
+
+[metadata.repo2env.pr_diff]
+pr_merged_at = "2026-09-16T02:24:32Z"
+diff_format = "unified"
+context_files = [
+    "bionemo_ir/data/schemas/basic.py",
+    "bionemo_ir/pipeline/models/openfold3/postprocessor.py",
+    "tests/pipeline/models/openfold3/test_openfold3_ptm.py",
+]
+
+[metadata.repo2env.reward_calibration]
+baseline_reward = 0.0
+loc_changed = 508
+difficulty = "large"
+
+[metadata.repo2env.evaluation]
+schema_version = "1"
+status = "unverified"
+stage = "generation"
+reason_codes = [
+    "validation_not_run",
+]
+detail = "Generated task; validation has not been established."
+provenance = "unknown"
+evidence = []
+
+[metadata.repo2env.reproducibility]
+mode = "local_only"
+image_ref = "python:3.12-slim"
+image_tag = "python:3.12-slim"
+image_visibility = "private"
+
+[agent]
+timeout_sec = 1800.0
+
+[verifier]
+timeout_sec = 300.0

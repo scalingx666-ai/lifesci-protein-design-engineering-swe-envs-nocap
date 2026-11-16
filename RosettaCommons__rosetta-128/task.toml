@@ -1,0 +1,65 @@
+version = "1.0"
+
+[task]
+name = "default/RosettaCommons__rosetta-128"
+description = "Generate random keys for scattered data, and optionally delay results in PyRosettaCluster"
+
+[metadata]
+difficulty = "medium"
+category = "bugfix"
+keywords = [
+    "rosetta",
+    "pr_diff",
+]
+
+[metadata.repo2env]
+pipeline = "pr_diff"
+pipeline_version = "0.3.0"
+repo = "RosettaCommons/rosetta"
+ref = "1a5e0485141fc341dfdcc64150cbcd82a3cd821e"
+reference = "https://github.com/RosettaCommons/rosetta/pull/128"
+source_access = "auto"
+built_at = "2026-11-15T22:38:02.605270+00:00"
+reward_kinds = [
+    "diff_similarity",
+]
+spec_version = "0.2.0"
+content_hash = "sha256:0781156e62d33f31c156ddb1378b8dd38896d16c8be3d8ccc4d6876eec9ad96e"
+
+[metadata.repo2env.pr_diff]
+pr_merged_at = "2024-08-28T20:22:45Z"
+diff_format = "unified"
+context_files = [
+    "source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/__init__.py",
+    "source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/core.py",
+    "source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/multiprocessing.py",
+    "source/src/python/PyRosetta/src/pyrosetta/tests/distributed/cluster/test_smoke.py",
+]
+
+[metadata.repo2env.reward_calibration]
+baseline_reward = 0.0
+loc_changed = 42
+difficulty = "medium"
+
+[metadata.repo2env.evaluation]
+schema_version = "1"
+status = "unverified"
+stage = "generation"
+reason_codes = [
+    "validation_not_run",
+]
+detail = "Generated task; validation has not been established."
+provenance = "unknown"
+evidence = []
+
+[metadata.repo2env.reproducibility]
+mode = "local_only"
+image_ref = "python:3.12-slim"
+image_tag = "python:3.12-slim"
+image_visibility = "private"
+
+[agent]
+timeout_sec = 1800.0
+
+[verifier]
+timeout_sec = 300.0

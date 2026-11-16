@@ -1,0 +1,33 @@
+diff --git a/.github/workflows/build_generic.yml b/.github/workflows/build_generic.yml
+index 67c6adb8..4c98590b 100644
+--- a/.github/workflows/build_generic.yml
++++ b/.github/workflows/build_generic.yml
+@@ -39,15 +39,14 @@ jobs:
+ 
+     - name: Set candidate name
+       id: set_candidate_name
+-      run: echo "CANDIDATE_NAME=$(date +%y.%m).${{ github.event.number }}_${{ inputs.distribution }}_${{ inputs.compiler }}_${{ inputs.arch }}" >> "$GITHUB_OUTPUT"
++      run: echo "CANDIDATE_NAME=$(date +%y.%m).${{ github.run_number }}_${{ inputs.distribution }}_${{ inputs.compiler }}_${{ inputs.arch }}" >> "$GITHUB_OUTPUT"
+ 
+     - name: Create bundle
+       run: |
+-        tar -czvf rdock.tar.gz \
++        tar -czvf rdock-${{ steps.set_candidate_name.outputs.CANDIDATE_NAME }}.tar.gz \
+           bin/ lib/ include/ data/ scripts/ Makefile license.txt README.md old_README.md
+ 
+     - name: Upload bundle
+       uses: actions/upload-artifact@v3
+       with:
+-        name: rdock-${{ steps.set_candidate_name.outputs.CANDIDATE_NAME }}.tar.gz
+-        path: rdock.tar.gz
++        path: rdock-${{ steps.set_candidate_name.outputs.CANDIDATE_NAME }}.tar.gz
+diff --git a/.github/workflows/build_matrix.yml b/.github/workflows/build_matrix.yml
+index f133edb6..632e8ce4 100644
+--- a/.github/workflows/build_matrix.yml
++++ b/.github/workflows/build_matrix.yml
+@@ -61,4 +61,4 @@ jobs:
+       uses: ncipollo/release-action@v1
+       with:
+         tag: v${{ steps.set_version.outputs.RELEASE_VERSION }}
+-        artifacts: artifacts/*.tar.gz
++        artifacts: artifacts/*/*.tar.gz

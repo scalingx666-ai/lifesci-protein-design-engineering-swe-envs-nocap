@@ -1,0 +1,65 @@
+version = "1.0"
+
+[task]
+name = "default/RosettaCommons__rosetta-156"
+description = "PyRosetta update"
+
+[metadata]
+difficulty = "small"
+category = "bugfix"
+keywords = [
+    "rosetta",
+    "pr_diff",
+]
+
+[metadata.repo2env]
+pipeline = "pr_diff"
+pipeline_version = "0.3.0"
+repo = "RosettaCommons/rosetta"
+ref = "afb46af46d21d718a7bf0762761c746915ec5453"
+reference = "https://github.com/RosettaCommons/rosetta/pull/156"
+source_access = "auto"
+built_at = "2026-11-15T22:37:56.317236+00:00"
+reward_kinds = [
+    "diff_similarity",
+]
+spec_version = "0.2.0"
+content_hash = "sha256:0f59f933e18e57cbdcdec743425f67bd3400067850c43cf24ebb2673490cf0b5"
+
+[metadata.repo2env.pr_diff]
+pr_merged_at = "2024-09-10T14:27:53Z"
+diff_format = "unified"
+context_files = [
+    "source/src/python/PyRosetta/binder",
+    "source/src/python/PyRosetta/build.py",
+    "source/src/python/PyRosetta/rosetta.config",
+    "source/src/python/PyRosetta/src/test/T121_core.ResidueSelector.py",
+]
+
+[metadata.repo2env.reward_calibration]
+baseline_reward = 0.0
+loc_changed = 14
+difficulty = "small"
+
+[metadata.repo2env.evaluation]
+schema_version = "1"
+status = "unverified"
+stage = "generation"
+reason_codes = [
+    "validation_not_run",
+]
+detail = "Generated task; validation has not been established."
+provenance = "unknown"
+evidence = []
+
+[metadata.repo2env.reproducibility]
+mode = "local_only"
+image_ref = "python:3.12-slim"
+image_tag = "python:3.12-slim"
+image_visibility = "private"
+
+[agent]
+timeout_sec = 1800.0
+
+[verifier]
+timeout_sec = 300.0

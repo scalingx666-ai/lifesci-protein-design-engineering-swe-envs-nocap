@@ -1,0 +1,178 @@
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/__init__.py b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/__init__.py
+index 0e1ddb096e5..1adcb560e53 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/__init__.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/__init__.py
+@@ -45,7 +45,7 @@
+     "run",
+     "update_scores",
+ ]
+-__version__: str = "1.2.0"
++__version__: str = "1.2.1"
+ 
+ _print_conda_warnings()
+ 
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/core.py b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/core.py
+index 969258e417c..7e5929e08f6 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/core.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/core.py
+@@ -187,6 +187,16 @@
+         0.1 seconds seems reasonable. If each user-provided PyRosetta protocol is
+         expected to run slowly, then >1 second seems reasonable.
+         Default: 0.5
++    max_delay_time: A `float` or `int` object specifying the maximum number of seconds to 
++        sleep before returning the result(s) from each user-provided PyRosetta protocol
++        back to the client. If a dask worker returns the result(s) from a user-provided
++        PyRosetta protocol too quickly, the dask scheduler needs to first register that
++        the task is processing before it completes. In practice, in each user-provided
++        PyRosetta protocol the runtime is subtracted from `max_delay_time`, and the dask
++        worker sleeps for the remainder of the time, if any, before returning the result(s).
++        It's recommended to set this option to at least 1 second, but longer times may
++        be used as a safety throttle in cases of overwhelmed dask scheduler processes.
++        Default: 3.0
+     save_all: A `bool` object specifying whether or not to save all of the returned
+         or yielded `Pose` and `PackedPose` objects from all user-provided
+         PyRosetta protocols. This option may be used for checkpointing trajectories.
+@@ -524,6 +534,12 @@ class PyRosettaCluster(IO[G], LoggingSupport[G], SchedulerManager[G], TaskBase[G
+         validator=[_validate_float, attr.validators.instance_of((float, int))],
+         converter=attr.converters.default_if_none(default=0.5),
+     )
++    max_delay_time = attr.ib(
++        type=float,
++        default=3.0,
++        validator=[_validate_float, attr.validators.instance_of((float, int))],
++        converter=attr.converters.default_if_none(default=3.0),
++    )
+     save_all = attr.ib(
+         type=bool,
+         default=False,
+@@ -687,6 +703,7 @@ def distribute(self, *args: Any, protocols: Any = None, clients_indices: Any = N
+             self.logging_level,
+             self.DATETIME_FORMAT,
+             self.compression,
++            self.max_delay_time,
+             client_residue_type_set,
+         )
+         seq = as_completed(
+@@ -736,7 +753,7 @@ def distribute(self, *args: Any, protocols: Any = None, clients_indices: Any = N
+                             compressed_kwargs,
+                             pyrosetta_init_kwargs,
+                             *extra_args,
+-                        )
++                        ), hash=False,
+                     )
+                     seq.add(clients[clients_index].submit(user_spawn_thread, *scatter, pure=False, resources=resource))
+                     self.tasks_size += 1
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/multiprocessing.py b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/multiprocessing.py
+index b020997f3d9..900960b6eb0 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/multiprocessing.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/multiprocessing.py
+@@ -23,6 +23,7 @@
+     raise
+ 
+ import tempfile
++import time
+ 
+ from pyrosetta.distributed import requires_init
+ from pyrosetta.distributed.cluster.base import (
+@@ -61,6 +62,13 @@
+ S = TypeVar("S", bound=Serialization)
+ 
+ 
++def _maybe_delay(dt: float, max_delay_time: Union[float, int]) -> None:
++    """Maybe delay the user-provided PyRosetta protocol result(s)."""
++    delay_time = max_delay_time - dt
++    if delay_time > 0.0:
++        time.sleep(delay_time)
++
++
+ @trace_protocol_exceptions
+ def user_protocol(
+     packed_pose: PackedPose,
+@@ -161,9 +169,11 @@ def user_spawn_thread(
+     logging_level: str,
+     DATETIME_FORMAT: str,
+     compression: Optional[Union[str, bool]],
++    max_delay_time: Union[float, int],
+     client_residue_type_set: AbstractSet[str],
+ ) -> List[Tuple[Optional[Union[PackedPose, bytes]], Union[Dict[Any, Any], bytes]]]:
+     """Generic worker task using the billiard multiprocessing module."""
++    t0 = time.time()
+     client_repr = repr(get_client())
+ 
+     q = billiard.Queue()
+@@ -192,4 +202,7 @@ def user_spawn_thread(
+     )
+     p.join()
+ 
++    dt = time.time() - t0
++    _maybe_delay(dt, max_delay_time)
++
+     return results
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/tests/distributed/cluster/test_smoke.py b/source/src/python/PyRosetta/src/pyrosetta/tests/distributed/cluster/test_smoke.py
+index d3cd7ac4aaf..5e6d94c54e2 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/tests/distributed/cluster/test_smoke.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/tests/distributed/cluster/test_smoke.py
+@@ -110,6 +110,7 @@ def my_pyrosetta_protocol(packed_pose, **kwargs):
+                 logs_dir_name="logs",
+                 ignore_errors=False,
+                 timeout=0.1,
++                max_delay_time=0.5,
+                 sha1=None,
+                 dry_run=False,
+                 save_all=False,
+@@ -170,6 +171,7 @@ def protocol_with_error(packed_pose, **kwargs):
+                 logs_dir_name="logs",
+                 ignore_errors=True,
+                 timeout=0.1,
++                max_delay_time=3.0,
+                 sha1=None,
+                 dry_run=False,
+                 save_all=False,
+@@ -207,6 +209,7 @@ def protocol_with_error(packed_pose, **kwargs):
+                 logs_dir_name="logs",
+                 ignore_errors=False,
+                 timeout=0.1,
++                max_delay_time=1.0,
+                 sha1=None,
+                 dry_run=False,
+                 save_all=False,
+@@ -468,6 +471,7 @@ def my_tenth_protocol(packed_pose, **kwargs):
+                 logs_dir_name="logs",
+                 ignore_errors=False,
+                 timeout=0.1,
++                max_delay_time=0.0,
+                 sha1=None,
+                 dry_run=False,
+                 save_all=False,
+@@ -732,6 +736,7 @@ def my_pyrosetta_protocol(input_packed_pose, **kwargs):
+                 simulation_records_in_scorefile=True,
+                 ignore_errors=False,
+                 timeout=0.5,
++                max_delay_time=1.0,
+                 sha1=None,
+                 dry_run=True,
+                 save_all=True,
+@@ -940,6 +945,7 @@ def my_pyrosetta_protocol_2(packed_pose, **kwargs):
+                 logs_dir_name="logs",
+                 ignore_errors=False,
+                 timeout=0.1,
++                max_delay_time=1.0,
+                 sha1=None,
+                 dry_run=False,
+                 save_all=False,
+@@ -1036,6 +1042,7 @@ def my_pyrosetta_protocol_2(packed_pose, **kwargs):
+                 logs_dir_name="logs",
+                 ignore_errors=False,
+                 timeout=0.1,
++                max_delay_time=1.0,
+                 sha1=None,
+                 dry_run=False,
+                 save_all=False,
+@@ -1164,6 +1171,7 @@ def my_pyrosetta_protocol_2(packed_pose, **kwargs):
+                 logs_dir_name="logs",
+                 ignore_errors=False,
+                 timeout=0.1,
++                max_delay_time=1.0,
+                 sha1=None,
+                 dry_run=False,
+                 save_all=False,

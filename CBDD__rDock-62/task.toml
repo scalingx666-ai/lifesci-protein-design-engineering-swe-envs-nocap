@@ -1,0 +1,65 @@
+version = "1.0"
+
+[task]
+name = "default/CBDD__rDock-62"
+description = "Issue #61/migrate sdfield"
+
+[metadata]
+difficulty = "large"
+category = "bugfix"
+keywords = [
+    "rDock",
+    "pr_diff",
+]
+
+[metadata.repo2env]
+pipeline = "pr_diff"
+pipeline_version = "0.3.0"
+repo = "CBDD/rDock"
+ref = "41bbf98f2c2cdc035dca134040848e0bfe0cdc0f"
+reference = "https://github.com/CBDD/rDock/pull/62"
+source_access = "auto"
+built_at = "2026-11-16T05:54:31.166943+00:00"
+reward_kinds = [
+    "diff_similarity",
+]
+spec_version = "0.2.0"
+content_hash = "sha256:394ed31bca838fac6b60e3eb9953cf501bad87cf3472ff6ef50d17c6e1a2eae0"
+
+[metadata.repo2env.pr_diff]
+pr_merged_at = "2023-12-24T16:29:45Z"
+diff_format = "unified"
+context_files = [
+    "rdock-utils/pyproject.toml",
+    "rdock-utils/rdock_utils/parser.py",
+    "rdock-utils/rdock_utils/sdfield.py",
+    "rdock-utils/setup.py",
+]
+
+[metadata.repo2env.reward_calibration]
+baseline_reward = 0.0
+loc_changed = 157
+difficulty = "large"
+
+[metadata.repo2env.evaluation]
+schema_version = "1"
+status = "unverified"
+stage = "generation"
+reason_codes = [
+    "validation_not_run",
+]
+detail = "Generated task; validation has not been established."
+provenance = "unknown"
+evidence = []
+
+[metadata.repo2env.reproducibility]
+mode = "local_only"
+image_ref = "python:3.12-slim"
+image_tag = "python:3.12-slim"
+image_visibility = "private"
+
+[agent]
+timeout_sec = 1800.0
+
+[verifier]
+timeout_sec = 300.0

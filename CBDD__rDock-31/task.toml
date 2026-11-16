@@ -1,0 +1,62 @@
+version = "1.0"
+
+[task]
+name = "default/CBDD__rDock-31"
+description = "update workflow to use gha cache"
+
+[metadata]
+difficulty = "easy"
+category = "bugfix"
+keywords = [
+    "rDock",
+    "pr_diff",
+]
+
+[metadata.repo2env]
+pipeline = "pr_diff"
+pipeline_version = "0.3.0"
+repo = "CBDD/rDock"
+ref = "d234d8520f76dc29c011b0aa5778b06c117575c6"
+reference = "https://github.com/CBDD/rDock/pull/31"
+source_access = "auto"
+built_at = "2026-11-16T05:54:59.546222+00:00"
+reward_kinds = [
+    "diff_similarity",
+]
+spec_version = "0.2.0"
+content_hash = "sha256:fcd862a04ec82ad0a7ed775c5abff8c9d0027859fb9d65664b838a7adf8d27fe"
+
+[metadata.repo2env.pr_diff]
+pr_merged_at = "2023-05-13T14:37:36Z"
+diff_format = "unified"
+context_files = [
+    ".github/workflows/build_generic.yml",
+]
+
+[metadata.repo2env.reward_calibration]
+baseline_reward = 0.0
+loc_changed = 3
+difficulty = "trivial"
+
+[metadata.repo2env.evaluation]
+schema_version = "1"
+status = "unverified"
+stage = "generation"
+reason_codes = [
+    "validation_not_run",
+]
+detail = "Generated task; validation has not been established."
+provenance = "unknown"
+evidence = []
+
+[metadata.repo2env.reproducibility]
+mode = "local_only"
+image_ref = "python:3.12-slim"
+image_tag = "python:3.12-slim"
+image_visibility = "private"
+
+[agent]
+timeout_sec = 1800.0
+
+[verifier]
+timeout_sec = 300.0

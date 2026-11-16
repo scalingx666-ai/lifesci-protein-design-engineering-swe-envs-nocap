@@ -1,0 +1,67 @@
+version = "1.0"
+
+[task]
+name = "default/PapenfussLab__proteindj-13"
+description = "Fix: Better handling of null values for bindcraft parameters"
+
+[metadata]
+difficulty = "medium"
+category = "bugfix"
+keywords = [
+    "proteindj",
+    "pr_diff",
+]
+
+[metadata.repo2env]
+pipeline = "pr_diff"
+pipeline_version = "0.3.0"
+repo = "PapenfussLab/proteindj"
+ref = "8c5baea21fece7ccc5f52e9b73ff833f8ed483fe"
+reference = "https://github.com/PapenfussLab/proteindj/pull/13"
+source_access = "auto"
+built_at = "2026-11-16T03:27:00.696854+00:00"
+reward_kinds = [
+    "diff_similarity",
+]
+spec_version = "0.2.0"
+content_hash = "sha256:1cfd146118a0b4bfa1075a3584ab8128edf6fc3430191ce4d01fa7140c660b3b"
+
+[metadata.repo2env.pr_diff]
+pr_merged_at = "2025-10-23T06:10:14Z"
+diff_format = "unified"
+context_files = [
+    "modules/bindcraft.nf",
+    "nextflow_schema.json",
+    "schemas/nextflow_schema_bindcraft.json",
+    "schemas/nextflow_schema_binder_denovo.json",
+    "schemas/nextflow_schema_binder_foldcond.json",
+    "schemas/nextflow_schema_custom.json",
+]
+
+[metadata.repo2env.reward_calibration]
+baseline_reward = 0.0
+loc_changed = 41
+difficulty = "medium"
+
+[metadata.repo2env.evaluation]
+schema_version = "1"
+status = "unverified"
+stage = "generation"
+reason_codes = [
+    "validation_not_run",
+]
+detail = "Generated task; validation has not been established."
+provenance = "unknown"
+evidence = []
+
+[metadata.repo2env.reproducibility]
+mode = "local_only"
+image_ref = "python:3.12-slim"
+image_tag = "python:3.12-slim"
+image_visibility = "private"
+
+[agent]
+timeout_sec = 1800.0
+
+[verifier]
+timeout_sec = 300.0

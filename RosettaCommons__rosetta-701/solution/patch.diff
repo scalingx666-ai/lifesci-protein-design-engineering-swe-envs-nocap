@@ -1,0 +1,135 @@
+diff --git a/source/src/core/environment/LocalPosition.cc b/source/src/core/environment/LocalPosition.cc
+index bd1ead09c44..2d1ba0430ef 100644
+--- a/source/src/core/environment/LocalPosition.cc
++++ b/source/src/core/environment/LocalPosition.cc
+@@ -24,6 +24,7 @@
+ 
+ // C++ Headers
+ #include <boost/lexical_cast.hpp>
++#include <tuple>
+ 
+ // ObjexxFCL Headers
+ 
+@@ -94,14 +95,12 @@ void LocalPosition::position( core::Size position ){
+ 
+ 
+ bool LocalPosition::operator< ( LocalPosition const& other ) const {
+-	Size cmp = label_.compare( other.label_ );
+-	if ( cmp == 0 ) {
+-		return position_ < other.position_;
+-	} else if ( cmp > 0 ) {
+-		return true;
+-	} else {
+-		return false;
+-	}
++	// Previously assigned the (signed) result of std::string::compare to the unsigned
++	// type Size, so any "label < other.label" case wrapped to a huge value and the
++	// branch returned true. On top of that, the cmp > 0 branch was also inverted.
++	// Combined effect: for any two distinct labels both a < b and b < a returned
++	// true, breaking the strict weak ordering required by std::map<LocalPosition,...>.
++	return std::tie( label_, position_ ) < std::tie( other.label_, other.position_ );
+ }
+ 
+ bool LocalPosition::operator==( LocalPosition const& other ) const {
+diff --git a/source/src/protocols/environment/claims/ClaimStrength.cc b/source/src/protocols/environment/claims/ClaimStrength.cc
+index 8a45c2ca036..7f86bcecfe3 100644
+--- a/source/src/protocols/environment/claims/ClaimStrength.cc
++++ b/source/src/protocols/environment/claims/ClaimStrength.cc
+@@ -22,6 +22,7 @@
+ 
+ // C++ Headers
+ #include <ostream>
++#include <tuple>
+ 
+ #include <utility/assert.hh> // AUTO IWYU For debug_assert
+ 
+@@ -44,17 +45,10 @@ ClaimStrength::ClaimStrength( ClaimStrength const& src ) :
+ 
+ 
+ bool ClaimStrength::operator< ( ClaimStrength const& other ) const {
+-	if ( other.subtype_ < subtype_ ) {
+-		return true;
+-	} else if ( other.subtype_ > subtype_ ) {
+-		return false;
+-	} else {
+-		if ( other.subprio_ < subprio_ ) {
+-			return true;
+-		} else {
+-			return false;
+-		}
+-	}
++	// Operands were reversed: the previous implementation returned true exactly
++	// when *this was lexicographically greater than other in (subtype_, subprio_),
++	// so the operator was fully inverted relative to its name and to operator==.
++	return std::tie( subtype_, subprio_ ) < std::tie( other.subtype_, other.subprio_ );
+ }
+ 
+ 
+diff --git a/source/src/protocols/ligand_docking/GALigandDock/GALigandDock.cc b/source/src/protocols/ligand_docking/GALigandDock/GALigandDock.cc
+index 6c30798e598..565f061cb9c 100644
+--- a/source/src/protocols/ligand_docking/GALigandDock/GALigandDock.cc
++++ b/source/src/protocols/ligand_docking/GALigandDock/GALigandDock.cc
+@@ -1670,7 +1670,7 @@ GALigandDock::calculate_free_ligand_score(
+ 
+ 	//core::pose::Pose pose_premin( *pose );
+ 	core::id::AtomID anchorid( 1, pose->fold_tree().root() );
+-	for ( core::Size ires = 1; ires < pose->total_residue(); ++ires ) {
++	for ( core::Size ires = 1; ires <= pose->total_residue(); ++ires ) {
+ 		for ( core::Size iatm = 1; iatm <= pose->residue(ires).natoms(); ++iatm ) {
+ 			core::id::AtomID atomid( iatm, ires );
+ 			core::Vector const &xyz = pose->xyz( atomid );
+diff --git a/source/src/protocols/membrane_benchmark/MembraneEnergyLandscapeSampler.cc b/source/src/protocols/membrane_benchmark/MembraneEnergyLandscapeSampler.cc
+index 001b3fe586e..58aa4929504 100644
+--- a/source/src/protocols/membrane_benchmark/MembraneEnergyLandscapeSampler.cc
++++ b/source/src/protocols/membrane_benchmark/MembraneEnergyLandscapeSampler.cc
+@@ -503,7 +503,7 @@ MembraneEnergyLandscapeSampler::get_pH_value() {
+ core::Real
+ MembraneEnergyLandscapeSampler::count_res(std::string res, core::pose::Pose const & pose){
+ 	core::Real count(0.0);
+-	for ( core::Size ii=1; ii<pose.total_residue(); ++ii ) {
++	for ( core::Size ii=1; ii<=pose.total_residue(); ++ii ) {
+ 		if ( pose.residue(ii).name() == res ) {
+ 			count = count+1.0;
+ 		}
+@@ -515,7 +515,7 @@ MembraneEnergyLandscapeSampler::count_res(std::string res, core::pose::Pose cons
+ core::Real
+ MembraneEnergyLandscapeSampler::count_diff(core::pose::Pose const & pose1, core::pose::Pose const & pose2){
+ 	core::Real count(0.0);
+-	for ( core::Size ii=1; ii<pose1.total_residue(); ++ii ) {
++	for ( core::Size ii=1; ii<=pose1.total_residue(); ++ii ) {
+ 		//TR << "residues: " << pose2.residue(ii).name3() << std::endl;
+ 		if ( pose1.residue(ii).name3() != pose2.residue(ii).name3() ) {
+ 			count = count+1.0;
+diff --git a/source/src/protocols/simple_moves/ExplicitWaterMover.cc b/source/src/protocols/simple_moves/ExplicitWaterMover.cc
+index d0473c1bd07..7285e7cecb9 100644
+--- a/source/src/protocols/simple_moves/ExplicitWaterMover.cc
++++ b/source/src/protocols/simple_moves/ExplicitWaterMover.cc
+@@ -1011,7 +1011,7 @@ ExplicitWaterMover::get_water_recovery( core::pose::Pose const & pose, bool incl
+ 	if ( !native_ ) return;
+ 
+ 	utility::vector1< core::Vector > native_hoh, predicted_hoh;
+-	for ( core::Size i=1; i<pose.total_residue(); ++i ) {
++	for ( core::Size i=1; i<=pose.total_residue(); ++i ) {
+ 		bool is_wat = ( pose.residue(i).name() == "PWAT" || pose.residue(i).name() == "HOH" );
+ 		bool is_vwat = ( pose.residue(i).name() == "PWAT_V" || pose.residue(i).name() == "HOH_V" );
+ 		if ( is_wat || (incl_vrt&&is_vwat) ) {
+@@ -1019,16 +1019,16 @@ ExplicitWaterMover::get_water_recovery( core::pose::Pose const & pose, bool incl
+ 		}
+ 	}
+ 
+-	for ( core::Size i=1; i<native_->total_residue(); ++i ) {
++	for ( core::Size i=1; i<=native_->total_residue(); ++i ) {
+ 		if ( native_->residue(i).name() == "PWAT" || native_->residue(i).name() == "HOH" ) {
+ 			native_hoh.push_back( native_->residue(i).xyz(1) );
+ 		}
+ 	}
+ 
+ 	core::Real ncorr_05 = 0, ncorr_10 = 0;
+-	for ( core::Size i=1; i<native_hoh.size(); ++i ) {
++	for ( core::Size i=1; i<=native_hoh.size(); ++i ) {
+ 		core::Real mindist_i = 100.0;
+-		for ( core::Size j=1; j<predicted_hoh.size(); ++j ) {
++		for ( core::Size j=1; j<=predicted_hoh.size(); ++j ) {
+ 			core::Real dist_ij = (predicted_hoh[j] - native_hoh[i]).length_squared();
+ 			mindist_i = std::min( mindist_i, dist_ij );
+ 		}

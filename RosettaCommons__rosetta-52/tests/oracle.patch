@@ -1,0 +1,34 @@
+diff --git a/source/external/cifparse/CifScanner.c b/source/external/cifparse/CifScanner.c
+index 85e45d973c2..6839a2150a0 100644
+--- a/source/external/cifparse/CifScanner.c
++++ b/source/external/cifparse/CifScanner.c
+@@ -40,7 +40,12 @@
+ #include <string.h>
+ #include <errno.h>
+ #include <stdlib.h>
++
++#if defined(WIN32) || defined(_WIN32)
++#include <io.h>
++#else
+ #include <unistd.h>
++#endif
+ 
+ /* end standard C headers. */
+ 
+diff --git a/source/external/cifparse/DICScanner.c b/source/external/cifparse/DICScanner.c
+index 9d6fb1f09cf..a4a5569fa36 100644
+--- a/source/external/cifparse/DICScanner.c
++++ b/source/external/cifparse/DICScanner.c
+@@ -40,7 +40,12 @@
+ #include <string.h>
+ #include <errno.h>
+ #include <stdlib.h>
++
++#if defined(WIN32) || defined(_WIN32)
++#include <io.h>
++#else
+ #include <unistd.h>
++#endif
+ 
+ /* end standard C headers. */
+ 

@@ -1,0 +1,66 @@
+version = "1.0"
+
+[task]
+name = "default/RosettaCommons__rosetta-695"
+description = "Fix off-by-one bugs in 1-indexed loops over pose residues"
+
+[metadata]
+difficulty = "small"
+category = "bugfix"
+keywords = [
+    "rosetta",
+    "pr_diff",
+]
+
+[metadata.repo2env]
+pipeline = "pr_diff"
+pipeline_version = "0.3.0"
+repo = "RosettaCommons/rosetta"
+ref = "d10f3af574b60550f256856d5a9742600ce1128b"
+reference = "https://github.com/RosettaCommons/rosetta/pull/695"
+source_access = "auto"
+built_at = "2026-11-15T22:34:57.042917+00:00"
+reward_kinds = [
+    "diff_similarity",
+]
+spec_version = "0.2.0"
+content_hash = "sha256:cb93dd1d850d4f79d9c44aa18206065bde8b85a82c0698717a825b73e8c9389e"
+
+[metadata.repo2env.pr_diff]
+pr_merged_at = "2026-06-15T15:34:10Z"
+diff_format = "unified"
+context_files = [
+    "source/src/core/pack/task/PackerTask_.cc",
+    "source/src/protocols/denovo_design/components/StructureData.cc",
+    "source/src/protocols/enzdes/BackboneSampler.cc",
+    "source/src/protocols/fldsgn/BluePrintBDR.cc",
+    "source/src/protocols/forge/components/BDR.cc",
+]
+
+[metadata.repo2env.reward_calibration]
+baseline_reward = 0.0
+loc_changed = 12
+difficulty = "small"
+
+[metadata.repo2env.evaluation]
+schema_version = "1"
+status = "unverified"
+stage = "generation"
+reason_codes = [
+    "validation_not_run",
+]
+detail = "Generated task; validation has not been established."
+provenance = "unknown"
+evidence = []
+
+[metadata.repo2env.reproducibility]
+mode = "local_only"
+image_ref = "python:3.12-slim"
+image_tag = "python:3.12-slim"
+image_visibility = "private"
+
+[agent]
+timeout_sec = 1800.0
+
+[verifier]
+timeout_sec = 300.0

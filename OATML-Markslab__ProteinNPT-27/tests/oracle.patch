@@ -1,0 +1,1893 @@
+diff --git a/.DS_Store b/.DS_Store
+new file mode 100644
+index 0000000..543388f
+Binary files /dev/null and b/.DS_Store differ
+diff --git a/proteinnpt/.DS_Store b/proteinnpt/.DS_Store
+new file mode 100644
+index 0000000..489088b
+Binary files /dev/null and b/proteinnpt/.DS_Store differ
+diff --git a/proteinnpt/baselines/data_processing.py b/proteinnpt/baselines/data_processing.py
+index f292190..1a9b31e 100755
+--- a/proteinnpt/baselines/data_processing.py
++++ b/proteinnpt/baselines/data_processing.py
+@@ -6,13 +6,42 @@
+ from ..utils.data_utils import slice_sequences, get_indices_retrieved_embeddings
+ from ..utils.msa_utils import weighted_sample_MSA
+ 
+-def process_batch(batch, model, alphabet, args, device, MSA_sequences=None, MSA_weights=None, MSA_start_position=None, MSA_end_position=None, eval_mode = True, indel_mode=False, start_idx=1):
+-    """
+-    start_idx is the one-indexed postion of the first residue in the sequence. If full sequence is passed (as always assumed in this codebase) this is equal to 1.
++def process_batch(batch, model, alphabet, args, device, MSA_sequences=None, MSA_weights=None, MSA_start_position=None, MSA_end_position=None, eval_mode=True, indel_mode=False, start_idx=1):
++    """Processes a batch of sequences for baseline model input.
++
++    Handles various aspects of sequence processing including:
++    - Loading and processing pre-computed embeddings
++    - MSA sequence processing and sampling
++    - Sequence length adjustment and slicing
++    - Model-specific tokenization (Tranception, ESM, MSA Transformer)
++    - Special handling for insertions/deletions in sequences
++
++    Args:
++        batch (dict): Input batch containing:
++            - mutant_mutated_seq_pairs: List of (mutant, sequence) pairs
++            - Additional target values as specified in args.target_config
++        model: The baseline model instance
++        alphabet: Tokenizer alphabet for protein sequences
++        args: Configuration object containing model parameters
++        device: PyTorch device (CPU/GPU)
++        MSA_sequences (list, optional): List of MSA sequences
++        MSA_weights (numpy.ndarray, optional): Weights for MSA sequence sampling
++        MSA_start_position (int, optional): Start position for MSA sequence slice
++        MSA_end_position (int, optional): End position for MSA sequence slice
++        eval_mode (bool, optional): Whether to run in evaluation mode. Defaults to True
++        indel_mode (bool, optional): Whether to handle insertions/deletions. Defaults to False
++        start_idx (int, optional): One-indexed position of first residue. Defaults to 1
++
++    Returns:
++        dict: Processed batch containing:
++            - input_tokens: Tokenized sequences
++            - target_labels: Target values for prediction
++            - mutant_mutated_seq_pairs: Original sequence pairs
++            - sequence_embeddings: Pre-computed embeddings if available
+     """
+     target_names = args.target_config.keys()
+-    raw_sequence_length = len(batch['mutant_mutated_seq_pairs'][0][1]) 
+-    raw_batch_size = len(batch['mutant_mutated_seq_pairs']) 
++    raw_sequence_length = len(batch['mutant_mutated_seq_pairs'][0][1])
++    raw_batch_size = len(batch['mutant_mutated_seq_pairs'])
+ 
+     if args.sequence_embeddings_location is not None and args.aa_embeddings!="One_hot_encoding":
+         try:
+@@ -29,7 +58,7 @@ def process_batch(batch, model, alphabet, args, device, MSA_sequences=None, MSA_
+     batch_target_labels = defaultdict(list)
+     for target_name in target_names: batch_target_labels[target_name] = batch[target_name].to(device)
+ 
+-    if args.augmentation=="zero_shot_fitness_predictions_covariate": batch_target_labels['zero_shot_fitness_predictions'] = batch['zero_shot_fitness_predictions'].to(device) 
++    if args.augmentation=="zero_shot_fitness_predictions_covariate": batch_target_labels['zero_shot_fitness_predictions'] = batch['zero_shot_fitness_predictions'].to(device)
+ 
+     if args.aa_embeddings=="MSA_Transformer":
+         # If MSAT and MSA does not cover full sequence length, we chop off all sequences to be scored as needed so that everything lines up properly.
+@@ -39,26 +68,26 @@ def process_batch(batch, model, alphabet, args, device, MSA_sequences=None, MSA_
+             batch['mutant_mutated_seq_pairs'] = [ (mutant,seq[MSA_start_index:MSA_end_index]) for (mutant,seq) in batch['mutant_mutated_seq_pairs']]
+             # Recompute sequence length (has potentially been chopped off above)
+             raw_sequence_length = len(batch['mutant_mutated_seq_pairs'][0][1])
+-        
+-        #Sample MSA sequences as needed 
++
++        #Sample MSA sequences as needed
+         if args.sequence_embeddings_location is None and args.num_MSA_sequences_per_training_instance > 0:
+             assert MSA_weights is not None, "Trying to add MSA_sequences to scoring batch but no weights are provided"
+             if model.MSA_sample_sequences is None:
+                 model.MSA_sample_sequences = weighted_sample_MSA(
+-                    MSA_all_sequences=MSA_sequences, 
+-                    MSA_non_ref_sequences_weights=MSA_weights, 
++                    MSA_all_sequences=MSA_sequences,
++                    MSA_non_ref_sequences_weights=MSA_weights,
+                     number_sampled_MSA_sequences=args.num_MSA_sequences_per_training_instance
+                 )
+             # Concatenate MSA sequences with labelled assay sequences
+             batch['mutant_mutated_seq_pairs'] += model.MSA_sample_sequences
+-        
++
+     # Slice sequences around mutation if sequence longer than context length
+     if args.max_positions is not None and raw_sequence_length + 1 > args.max_positions and args.sequence_embeddings_location is None: # Adding one for the BOS token
+         if args.long_sequences_slicing_method=="center" and args.aa_embeddings=="MSA_Transformer":
+             print("Center slicing method not adapted to MSA Transformer embedding as sequences would not be aligned in the same coordinate system anymore. Defaulting to 'left' mode.")
+             args.long_sequences_slicing_method="left"
+         batch['mutant_mutated_seq_pairs'], batch_target_labels, _ = slice_sequences(
+-            list_mutant_mutated_seq_pairs = batch['mutant_mutated_seq_pairs'], 
++            list_mutant_mutated_seq_pairs = batch['mutant_mutated_seq_pairs'],
+             max_positions=args.max_positions,
+             method=args.long_sequences_slicing_method,
+             rolling_overlap=args.max_positions//4,
+@@ -68,7 +97,7 @@ def process_batch(batch, model, alphabet, args, device, MSA_sequences=None, MSA_
+             target_names=target_names,
+             num_extra_tokens=2 if args.aa_embeddings=="Tranception" else 1
+         )
+-    
++
+     # Tokenize input sequences with Tranception or ESM tokenizer
+     if args.aa_embeddings=="Tranception":
+         for k, v in batch.items():
+@@ -83,27 +112,27 @@ def process_batch(batch, model, alphabet, args, device, MSA_sequences=None, MSA_
+         processed_batch['sequence_embeddings'] = sequence_embeddings
+         processed_batch['target_labels'] = batch_target_labels
+     else:
+-        if args.aa_embeddings == "MSA_Transformer" and args.training_num_assay_sequences_per_batch_per_gpu > 1 and args.sequence_embeddings_location is None: 
++        if args.aa_embeddings == "MSA_Transformer" and args.training_num_assay_sequences_per_batch_per_gpu > 1 and args.sequence_embeddings_location is None:
+             #Re-organize list of sequences to have training_num_assay_sequences_per_batch_per_gpu MSA batches, where in each the sequence to score is the first and the rest are the sampled MSA sequences.
+             num_sequences = raw_batch_size + args.num_MSA_sequences_per_training_instance
+             assert len(batch['mutant_mutated_seq_pairs']) == num_sequences, "Unexpected number of sequences"
+             sequences_to_score = batch['mutant_mutated_seq_pairs'][:raw_batch_size]
+             MSA_sequences = batch['mutant_mutated_seq_pairs'][raw_batch_size:]
+             batch['mutant_mutated_seq_pairs'] = [ [sequence] + MSA_sequences for sequence in sequences_to_score]
+-            
++
+         token_batch_converter = alphabet.get_batch_converter()
+         if indel_mode:
+             mutants, mutated_seqs = list(zip(*batch['mutant_mutated_seq_pairs']))
+             max_seq_length = max(len(s) for s in mutated_seqs)
+             mutated_seqs_padded = [s.ljust(max_seq_length, "-") for s in mutated_seqs]
+             batch['mutant_mutated_seq_pairs'] = list(zip(mutants,mutated_seqs_padded))
+-        batch_sequence_names, batch_AA_sequences, batch_token_sequences = token_batch_converter(batch['mutant_mutated_seq_pairs'])        
+-            
++        batch_sequence_names, batch_AA_sequences, batch_token_sequences = token_batch_converter(batch['mutant_mutated_seq_pairs'])
++
+         if args.aa_embeddings=="MSA_Transformer" and args.sequence_embeddings_location is not None:
+             # Drop unnecessary dimension if embedding model is MSAT and embeddings are retrieved from disk
+             num_MSAs_in_batch, num_sequences_in_alignments, seqlen = batch_token_sequences.size()
+             batch_token_sequences = batch_token_sequences.view(num_sequences_in_alignments, seqlen)
+-            
++
+         batch_token_sequences = batch_token_sequences.to(device)
+         processed_batch = {
+             'input_tokens': batch_token_sequences,
+diff --git a/proteinnpt/proteinnpt/data_processing.py b/proteinnpt/proteinnpt/data_processing.py
+index 974a993..e791549 100755
+--- a/proteinnpt/proteinnpt/data_processing.py
++++ b/proteinnpt/proteinnpt/data_processing.py
+@@ -7,6 +7,21 @@
+ from ..utils.msa_utils import weighted_sample_MSA
+ 
+ def PNPT_sample_training_points_inference(training_sequences, sequences_sampling_method, num_sampled_points):
++    """Samples training points for inference using various sampling strategies.
++
++    Args:
++        training_sequences (dict): Dictionary containing training data including:
++            - mutant_mutated_seq_pairs: List of (mutant, sequence) pairs
++            - fitness: List of fitness values (required for distributed_target sampling)
++        sequences_sampling_method (str): Sampling strategy to use:
++            - 'random': Uniform random sampling
++            - 'distributed_positions': Sample based on mutation position distribution
++            - 'distributed_target': Sample based on target value distribution
++        num_sampled_points (int): Number of points to sample
++
++    Returns:
++        numpy.ndarray: Indices of selected training points
++    """
+     replace = True if "with_replacement" in sequences_sampling_method else False
+     num_sequences_training_data = len(training_sequences['mutant_mutated_seq_pairs'])
+     if (num_sequences_training_data <= num_sampled_points) and (not replace): return range(num_sequences_training_data)
+@@ -32,31 +47,67 @@ def PNPT_sample_training_points_inference(training_sequences, sequences_sampling
+         weights = weights / weights.sum()
+     return np.random.choice(range(num_sequences_training_data), replace=replace, p=weights, size = num_sampled_points)
+ 
+-def process_batch(batch, model, alphabet, args, device, MSA_sequences=None, MSA_weights=None, MSA_start_position=None, MSA_end_position=None, target_processing=None, training_sequences = None, proba_target_mask = 0.15, proba_aa_mask = 0.15, eval_mode = True, start_idx=1, selected_indices_seed=0, indel_mode=False, verbose=True):
+-    """
+-    If MSA_sequences is not None, then we sample args.num_MSA_sequences_per_training_instance sequences from it that we add to the batch. 
+-    
+-    If training_sequences is not None (eg., in eval mode), then we complement the data with training instances. Each batch instance will have:
+-        - eval_num_sequences_to_score_per_batch_per_gpu sequences with no label (that we want to score)
+-        - eval_num_training_sequences_per_batch_per_gpu sequences from training (that we want to use as context)
++def process_batch(batch, model, alphabet, args, device, MSA_sequences=None, MSA_weights=None, MSA_start_position=None, MSA_end_position=None, target_processing=None, training_sequences=None, proba_target_mask=0.15, proba_aa_mask=0.15, eval_mode=True, start_idx=1, selected_indices_seed=0, indel_mode=False, verbose=True):
++    """Processes a batch of protein sequences and their associated targets for model input.
++
++    This function handles multiple aspects of batch processing including:
++    - Target masking and processing
++    - MSA sequence sampling and integration
++    - Sequence embedding loading and processing
++    - Sequence length adjustment and slicing
++    - Tokenization and masking of protein sequences
++
++    Args:
++        batch (dict): Input batch containing:
++            - mutant_mutated_seq_pairs: List of (mutant, sequence) pairs
++            - Additional target values as specified in args.target_config
++        model: The Protein NPT model instance
++        alphabet: Tokenizer alphabet for protein sequences
++        args: Configuration object containing model parameters
++        device: PyTorch device (CPU/GPU)
++        MSA_sequences (list, optional): List of MSA sequences
++        MSA_weights (numpy.ndarray, optional): Weights for MSA sequence sampling
++        MSA_start_position (int, optional): Start position for MSA sequence slice
++        MSA_end_position (int, optional): End position for MSA sequence slice
++        target_processing (dict, optional): Target processing configurations
++        training_sequences (dict, optional): Training sequences to include as context
++        proba_target_mask (float, optional): Probability of masking target values. Defaults to 0.15
++        proba_aa_mask (float, optional): Probability of masking amino acids. Defaults to 0.15
++        eval_mode (bool, optional): Whether to run in evaluation mode. Defaults to True
++        start_idx (int, optional): Starting index for sequence processing. Defaults to 1
++        selected_indices_seed (int, optional): Seed for sampling training sequences. Defaults to 0
++        indel_mode (bool, optional): Whether to handle insertions/deletions. Defaults to False
++        verbose (bool, optional): Whether to print processing details. Defaults to True
++
++    Returns:
++        dict: Processed batch containing:
++            - masked_tokens: Masked protein sequences
++            - token_labels: Original tokens for masked positions
++            - masked_targets: Masked target values
++            - target_labels: Original target values
++            - mutant_mutated_seq_pairs: Original sequence pairs
++            - num_all_mutated_sequences_input: Total number of sequences
++            - num_of_mutated_seqs_to_score: Number of sequences to score
++            - num_selected_training_sequences: Number of training sequences
++            - sequence_embeddings: Pre-computed sequence embeddings if available
+     """
+     target_names = args.target_config.keys()
+     target_names_unknown = [x for x in args.target_config.keys() if args.target_config[x]["in_NPT_loss"]]
+     raw_sequence_length = len(batch['mutant_mutated_seq_pairs'][0][1])
+-    number_of_mutated_seqs_to_score = len(batch['mutant_mutated_seq_pairs']) 
+-    
+-    batch_masked_targets = {} 
+-    batch_target_labels = {} 
++    number_of_mutated_seqs_to_score = len(batch['mutant_mutated_seq_pairs'])
++
++    batch_masked_targets = {}
++    batch_target_labels = {}
+     for target_name in target_names:
+-        if target_name not in batch: 
++        if target_name not in batch:
+             if verbose: print("Target values were not passed in input batch. We assume all corresponding values are missing & to be predicted.")
+             batch[target_name] = torch.tensor([np.nan] * number_of_mutated_seqs_to_score) # By construction this will set all labels to -100 in subsequent mask_targets.
+             eval_mode = True
+         if target_name in target_names_unknown:
+             masked_targets, target_labels = mask_targets(
+-                inputs = batch[target_name], 
+-                input_target_type = args.target_config[target_name]["type"], 
+-                target_processing = target_processing[target_name], 
++                inputs = batch[target_name],
++                input_target_type = args.target_config[target_name]["type"],
++                target_processing = target_processing[target_name],
+                 proba_target_mask = proba_target_mask if not eval_mode else 1.0, #In eval mode we mask all input targets
+                 proba_random_mutation = 0.1 if not eval_mode else 0.0, #No random mutation in eval mode
+                 proba_unchanged = 0.1 if not eval_mode else 0.0, #No unchanged token in eval mode (all masked)
+@@ -65,8 +116,8 @@ def process_batch(batch, model, alphabet, args, device, MSA_sequences=None, MSA_
+         else:
+             masked_targets, target_labels = mask_targets(
+                 inputs = batch[target_name],
+-                input_target_type = args.target_config[target_name]["type"], 
+-                target_processing = target_processing[target_name], 
++                input_target_type = args.target_config[target_name]["type"],
++                target_processing = target_processing[target_name],
+                 proba_target_mask = 0.0,
+                 proba_random_mutation = 0.0,
+                 proba_unchanged = 1.0
+@@ -82,8 +133,8 @@ def process_batch(batch, model, alphabet, args, device, MSA_sequences=None, MSA_
+             num_ensemble_seeds = model.PNPT_ensemble_test_num_seeds if model.PNPT_ensemble_test_num_seeds > 0 else 1
+             for ensemble_seed in range(num_ensemble_seeds):
+                 selected_indices_dict[ensemble_seed] = PNPT_sample_training_points_inference(
+-                    training_sequences=training_sequences, 
+-                    sequences_sampling_method=args.eval_training_sequences_sampling_method, 
++                    training_sequences=training_sequences,
++                    sequences_sampling_method=args.eval_training_sequences_sampling_method,
+                     num_sampled_points=args.eval_num_training_sequences_per_batch_per_gpu
+                 )
+             model.training_sample_sequences_indices = selected_indices_dict
+@@ -98,8 +149,8 @@ def process_batch(batch, model, alphabet, args, device, MSA_sequences=None, MSA_
+             # training_sequences[target_name] expected of size (len_training_seq,2). No entry is actually masked here since we want to use all available information to predict as accurately as possible
+             masked_training_targets, training_target_labels = mask_targets(
+                 inputs = torch.tensor(np.array(training_sequences[target_name])[selected_indices]),
+-                input_target_type = args.target_config[target_name]["type"], 
+-                target_processing = target_processing[target_name], 
++                input_target_type = args.target_config[target_name]["type"],
++                target_processing = target_processing[target_name],
+                 proba_target_mask = 0.0,
+                 proba_random_mutation = 0.0,
+                 proba_unchanged = 1.0
+@@ -107,7 +158,7 @@ def process_batch(batch, model, alphabet, args, device, MSA_sequences=None, MSA_
+             batch_masked_targets[target_name] = torch.cat( [batch_masked_targets[target_name], masked_training_targets], dim=0).float().to(device)
+             num_all_mutated_sequences_input = number_of_mutated_seqs_to_score + num_selected_training_sequences
+             assert batch_masked_targets[target_name].shape[0] == num_all_mutated_sequences_input, "Error adding training data to seqs to score: {} Vs {}".format(batch_masked_targets[target_name].shape[0], num_all_mutated_sequences_input)
+-            batch_target_labels[target_name] = torch.cat( [batch_target_labels[target_name], training_target_labels]).float().to(device) 
++            batch_target_labels[target_name] = torch.cat( [batch_target_labels[target_name], training_target_labels]).float().to(device)
+             assert batch_masked_targets[target_name].shape[0] == batch_target_labels[target_name].shape[0], "Lengths of masked targets and target labels do not match: {} Vs {}".format(batch_masked_targets[target_name].shape[0], batch_target_labels[target_name].shape[0])
+     else:
+         for target_name in target_names:
+@@ -144,20 +195,20 @@ def process_batch(batch, model, alphabet, args, device, MSA_sequences=None, MSA_
+         assert MSA_weights is not None, "Trying to add MSA_sequences to scoring batch but no weights are provided"
+         if model.MSA_sample_sequences is None:
+             model.MSA_sample_sequences = weighted_sample_MSA(
+-                MSA_all_sequences=MSA_sequences, 
+-                MSA_non_ref_sequences_weights=MSA_weights, 
++                MSA_all_sequences=MSA_sequences,
++                MSA_non_ref_sequences_weights=MSA_weights,
+                 number_sampled_MSA_sequences=args.num_MSA_sequences_per_training_instance
+             )
+         # Concatenate MSA sequences with labelled assay sequences
+         batch['mutant_mutated_seq_pairs'] += model.MSA_sample_sequences
+-    
++
+     # Slice sequences around mutation if sequence longer than context length
+     if args.max_positions is not None and raw_sequence_length + 1 > args.max_positions: # Adding one for the BOS token
+         if args.long_sequences_slicing_method=="center" and args.aa_embeddings=="MSA_Transformer":
+             print("Center slicing method not adapted to MSA Transformer embedding as sequences would not be aligned in the same system anymore. Defaulting to 'left' mode.")
+             args.long_sequences_slicing_method="left"
+         batch['mutant_mutated_seq_pairs'], batch_target_labels, batch_masked_targets, batch_scoring_optimal_window = slice_sequences(
+-            list_mutant_mutated_seq_pairs = batch['mutant_mutated_seq_pairs'], 
++            list_mutant_mutated_seq_pairs = batch['mutant_mutated_seq_pairs'],
+             max_positions=args.max_positions,
+             method=args.long_sequences_slicing_method,
+             rolling_overlap=args.max_positions//4,
+@@ -172,7 +223,7 @@ def process_batch(batch, model, alphabet, args, device, MSA_sequences=None, MSA_
+         batch_scoring_optimal_window = None
+ 
+     # Tokenize protein sequences
+-    if args.aa_embeddings == "MSA_Transformer" and num_all_mutated_sequences_input > 1 and args.sequence_embeddings_location is None: 
++    if args.aa_embeddings == "MSA_Transformer" and num_all_mutated_sequences_input > 1 and args.sequence_embeddings_location is None:
+         #Re-organize list of sequences to have training_num_assay_sequences_per_batch_per_gpu MSA batches, where in each the sequence to score is the first and the rest are the sampled MSA sequences.
+         num_sequences = num_all_mutated_sequences_input + args.num_MSA_sequences_per_training_instance
+         assert len(batch['mutant_mutated_seq_pairs']) == num_sequences, "Unexpected number of sequences"
+@@ -189,13 +240,13 @@ def process_batch(batch, model, alphabet, args, device, MSA_sequences=None, MSA_
+     elif args.aa_embeddings == "Tranception":
+         _, sequence = zip(*batch['mutant_mutated_seq_pairs'])
+         batch_token_sequences = torch.tensor(model.alphabet(sequence, add_special_tokens=True, truncation=True, padding=True, max_length=model.aa_embedding.config.n_ctx)['input_ids'])
+-        
++
+     # Mask protein sequences
+     batch_masked_tokens, batch_token_labels, masked_indices = mask_protein_sequences(
+-        inputs = batch_token_sequences, 
+-        alphabet = alphabet, 
++        inputs = batch_token_sequences,
++        alphabet = alphabet,
+         proba_aa_mask = proba_aa_mask if not eval_mode else 0.0, #In eval mode we do not mask any token
+-        proba_random_mutation = 0.1, 
++        proba_random_mutation = 0.1,
+         proba_unchanged = 0.1
+     )
+     if args.sequence_embeddings_location is not None:
+@@ -217,4 +268,4 @@ def process_batch(batch, model, alphabet, args, device, MSA_sequences=None, MSA_
+         'num_selected_training_sequences': num_selected_training_sequences,
+         'sequence_embeddings': sequence_embeddings
+     }
+-    return processed_batch
+\ No newline at end of file
++    return processed_batch
+diff --git a/proteinnpt/proteinnpt/model.py b/proteinnpt/proteinnpt/model.py
+index 6f89655..b44be87 100755
+--- a/proteinnpt/proteinnpt/model.py
++++ b/proteinnpt/proteinnpt/model.py
+@@ -5,7 +5,7 @@
+ import torch.nn as nn
+ from torch.optim import AdamW
+ from torch.nn import CrossEntropyLoss, MSELoss
+-# from transformers import ConvBertConfig, ConvBertLayer
++from transformers import ConvBertConfig, ConvBertLayer
+ 
+ from ..utils.esm.modules import (
+     AxialTransformerLayer,
+@@ -20,6 +20,31 @@
+ from ..utils.model_utils import get_parameter_names
+ 
+ class ProteinNPTModel(nn.Module):
++    """Neural Process Transformer model for protein sequence analysis.
++
++    This model combines transformer architecture with neural process networks to analyze
++    protein sequences and predict multiple target properties simultaneously. It supports
++    various embedding methods and can handle both continuous and categorical targets.
++
++    Args:
++        args: Configuration object containing model parameters including:
++            - model_type: Type of model architecture
++            - embed_dim: Embedding dimension
++            - attention_heads: Number of attention heads
++            - max_positions: Maximum sequence length
++            - dropout: Dropout rate
++            - target_config: Dictionary of target properties to predict
++        alphabet: Tokenizer alphabet for protein sequences
++
++    Attributes:
++        args: Model configuration parameters
++        alphabet: Tokenizer alphabet instance
++        target_names: List of target properties to predict
++        device: Device the model is running on
++        num_targets: Number of prediction targets
++        MSA_sample_sequences: MSA sequences for sampling
++        training_sample_sequences_indices: Training sequence indices
++    """
+     def __init__(self, args, alphabet):
+         super().__init__()
+         self.args = args
+@@ -44,7 +69,7 @@ def __init__(self, args, alphabet):
+         self.PNPT_no_reconstruction_error = False
+         self.deactivate_col_attention = False
+         self.tranception_attention = False
+-        
++
+         assert self.args.embed_dim % self.args.attention_heads ==0, "Embedding size {} needs to be a multiple of number of heads {}".format(self.args.embed_dim, self.args.attention_heads)
+         if self.args.aa_embeddings=="MSA_Transformer" or args.aa_embeddings.startswith("ESM"):
+             model, _ = load_model_and_alphabet(args.embedding_model_location)
+@@ -80,14 +105,14 @@ def __init__(self, args, alphabet):
+                     )
+ 
+         self.target_embedding =  nn.ModuleDict(
+-            {   
++            {
+                 target_name:
+                 nn.Linear(
+-                    self.args.target_config[target_name]["dim"] + 1, #Need to add one as we append the mask flag to each input target 
++                    self.args.target_config[target_name]["dim"] + 1, #Need to add one as we append the mask flag to each input target
+                     self.args.embed_dim
+                 )
+                 if self.args.target_config[target_name]["type"]=="continuous"
+-                else 
++                else
+                 nn.Embedding(
+                     self.args.target_config[target_name]["dim"] + 1, #Size of the dictionary of embeddings. Need to add 1 for the mask flag as well
+                     self.args.embed_dim
+@@ -95,7 +120,7 @@ def __init__(self, args, alphabet):
+                 for target_name in self.target_names_input
+             }
+         )
+-        
++
+         self.dropout_module = nn.Dropout(self.args.dropout)
+ 
+         self.layers = nn.ModuleList(
+@@ -117,7 +142,7 @@ def __init__(self, args, alphabet):
+             )
+         self.emb_layer_norm_before = ESM1bLayerNorm(self.args.embed_dim)
+         self.emb_layer_norm_after = ESM1bLayerNorm(self.args.embed_dim)
+-        
++
+         if self.args.aa_embeddings=="MSA_Transformer" or args.aa_embeddings.startswith("ESM"):
+             weight = self.aa_embedding.embed_tokens.weight
+         elif self.args.aa_embeddings == "Tranception":
+@@ -130,10 +155,10 @@ def __init__(self, args, alphabet):
+             output_dim=self.alphabet_size,
+             weight=weight
+         )
+-        
++
+         target_pred_input_dim = self.args.embed_dim
+ 
+-        if args.target_prediction_model=="MLP": 
++        if args.target_prediction_model=="MLP":
+             self.layer_pre_head = nn.ModuleDict(
+                 {
+                     target_name:
+@@ -141,11 +166,11 @@ def __init__(self, args, alphabet):
+                         nn.Linear(target_pred_input_dim, target_pred_input_dim),
+                         nn.Dropout(self.args.dropout),
+                         nn.ReLU()
+-                        ) 
++                        )
+                     for target_name in self.target_names
+                 }
+             )
+-            
++
+         if args.target_prediction_model=="ConvBERT":
+             configuration = ConvBertConfig(
+                 hidden_size = self.args.embed_dim,
+@@ -156,14 +181,14 @@ def __init__(self, args, alphabet):
+                 attention_probs_dropout_prob = self.args.dropout
+             )
+             self.layer_pre_head = ConvBertLayer(configuration)
+-        
++
+         if args.target_prediction_model=="CNN":
+             self.layer_pre_head = nn.Sequential(
+                 nn.Conv1d(in_channels=target_pred_input_dim, out_channels=target_pred_input_dim, kernel_size = self.args.conv_kernel_size, padding='same'),
+                 nn.Dropout(self.args.dropout),
+                 nn.ReLU()
+             )
+-        
++
+         if self.args.target_prediction_head == "Target_embeddings_only":
+             target_pred_input_dim = target_pred_input_dim
+         elif self.args.target_prediction_head == "Target_embeddings_and_AA_embeddings_mean_pooled":
+@@ -171,7 +196,7 @@ def __init__(self, args, alphabet):
+ 
+         if self.args.augmentation=="zero_shot_fitness_predictions_covariate":
+             self.zero_shot_fitness_prediction_weight = nn.ModuleDict(
+-                { 
++                {
+                     target_name: nn.Linear(1, self.args.target_config[target_name]["dim"], bias=False)
+                     for target_name in self.target_names
+                 }
+@@ -180,21 +205,44 @@ def __init__(self, args, alphabet):
+                 torch.nn.init.constant_(self.zero_shot_fitness_prediction_weight[target_name].weight,1e-4)
+ 
+         self.target_pred_head = nn.ModuleDict(
+-                { 
++                {
+                     target_name: nn.Linear(target_pred_input_dim, self.args.target_config[target_name]["dim"])
+                     for target_name in self.target_names
+                 }
+         )
+-    
++
+     def set_device(self):
++        """Sets the device for the model.
++
++        Automatically detects and sets the device (CPU/GPU) for the model
++        based on the device of its parameters.
++        """
+         if self.device is None:
+             self.device = next(self.parameters()).device
+         print("Model device: {}".format(self.device))
+-        
++
+     def forward(self, tokens, targets=None, zero_shot_fitness_predictions=None, sequence_embeddings=None, repr_layers=[], need_head_weights=False):
+-        padding_mask = tokens.eq(self.padding_idx) 
++        """Forward pass of the model.
++
++        Args:
++            tokens (torch.Tensor): Input protein sequence tokens
++            targets (dict, optional): Dictionary of target values to predict
++            zero_shot_fitness_predictions (torch.Tensor, optional): Pre-computed fitness predictions
++            sequence_embeddings (torch.Tensor, optional): Pre-computed sequence embeddings
++            repr_layers (list, optional): Layers to output representations from
++            need_head_weights (bool, optional): Whether to output attention weights
++
++        Returns:
++            dict: Dictionary containing:
++                - logits_protein_sequence: Predicted amino acid probabilities
++                - target_predictions: Predicted values for each target
++                - representations: Hidden representations from specified layers
++                - col_attentions: Column attention weights (if need_head_weights)
++                - row_attentions: Row attention weights (if need_head_weights)
++        """
++        padding_mask = tokens.eq(self.padding_idx)
+         if not padding_mask.any(): padding_mask = None
+-        
++
+         if self.args.aa_embeddings == "MSA_Transformer" and self.args.sequence_embeddings_location is None: #If loading MSAT embeddings from disk, we have dropped one dim already
+             assert tokens.ndim == 3, "Finding dimension of tokens to be: {}".format(tokens.ndim)
+             num_MSAs_in_batch, num_sequences_in_alignments, seqlen = tokens.size() # N, B, L (seqs with labels, seqs in MSA, seq length)
+@@ -202,7 +250,7 @@ def forward(self, tokens, targets=None, zero_shot_fitness_predictions=None, sequ
+         else:
+             assert tokens.ndim == 2, "Finding dimension of tokens to be: {}".format(tokens.ndim)
+             batch_size, seqlen = tokens.size() # N, L (seqs with labels, seq length)
+-        
++
+         if sequence_embeddings is not None:
+             x = sequence_embeddings.to(self.device)
+         else:
+@@ -227,11 +275,11 @@ def forward(self, tokens, targets=None, zero_shot_fitness_predictions=None, sequ
+             else:
+                 print("AA embeddings not recognized")
+                 sys.exit(0)
+-    
++
+         if self.aa_embedding_dim != self.args.embed_dim: x = self.token_embedding_projection(x)
+-        
++
+         if self.args.target_prediction_head != "Target_embeddings_and_AA_embeddings_mean_pooled": #We mix AA embeddings pre NPT
+-            if self.args.target_prediction_model == "CNN": 
++            if self.args.target_prediction_model == "CNN":
+                 assert len(x.size())==3, "Size error input"
+                 N, L, D = x.size()
+                 x = x.permute(0,2,1) #N, D, L
+@@ -241,7 +289,7 @@ def forward(self, tokens, targets=None, zero_shot_fitness_predictions=None, sequ
+                 x = self.layer_pre_head(x)[0]
+ 
+         x = x.view(1, batch_size, seqlen, self.args.embed_dim) # 1, N, L, D
+-        
++
+         #Dimensions for each target (there are self.num_targets of them):
+         y = []
+         for target_name in self.target_names_input:
+@@ -254,7 +302,7 @@ def forward(self, tokens, targets=None, zero_shot_fitness_predictions=None, sequ
+         y = torch.cat(y, dim=-2) #concatenate across second to last dimension # N, num_targets, D
+         assert y.shape == (num_sequences_with_target, self.num_targets_input, self.args.embed_dim), "Error in y shape: {}".format(y.shape)
+         y = y.view(1, num_sequences_with_target, self.num_targets_input, self.args.embed_dim) # 1, N, num_targets, D
+-        
++
+         #Concatenate AA tokens and targets
+         x = torch.cat((x,y),dim=-2) # 1, N, (L+num_targets), D
+         x = self.emb_layer_norm_before(x)
+@@ -267,7 +315,7 @@ def forward(self, tokens, targets=None, zero_shot_fitness_predictions=None, sequ
+             padding_mask = padding_mask_with_targets
+             x = x * (1 - padding_mask.unsqueeze(-1).type_as(x))
+             padding_mask = padding_mask.bool()
+-        
++
+         repr_layers = set(repr_layers)
+         hidden_representations = {}
+         if 0 in repr_layers: hidden_representations[0] = x
+@@ -294,18 +342,18 @@ def forward(self, tokens, targets=None, zero_shot_fitness_predictions=None, sequ
+         assert x.shape == (1, num_sequences_with_target, seqlen + self.num_targets_input, self.args.embed_dim), "Error with axial transformer"
+         # last hidden representation should have layer norm applied
+         if (layer_idx + 1) in repr_layers: hidden_representations[layer_idx + 1] = x
+-        
++
+         # Loss over NPT MLM objective
+         if self.aa_embedding_dim != self.args.embed_dim:
+             logits_protein_sequence = self.lm_head(self.token_embedding_expansion(x[...,:seqlen,:]))
+         else:
+             logits_protein_sequence = self.lm_head(x[...,:seqlen,:]) #Remove dependency on targets for final AA predictions. logits size: (1, N, L, Vocab)
+-        
++
+         x = x.view(num_sequences_with_target, seqlen + self.num_targets_input, self.args.embed_dim)
+         x, y = x[:,:seqlen,:], x[:,seqlen:,:] # (N,L,D) and (N,num_targets,D)
+         assert y.shape == (num_sequences_with_target, self.num_targets_input, self.args.embed_dim)
+-        if self.args.target_prediction_head == "Target_embeddings_and_AA_embeddings_mean_pooled": 
+-            if self.args.target_prediction_model == "CNN": 
++        if self.args.target_prediction_head == "Target_embeddings_and_AA_embeddings_mean_pooled":
++            if self.args.target_prediction_model == "CNN":
+                 assert len(x.size())==3, "Size error input"
+                 N, L, D = x.size()
+                 x = x.permute(0,2,1) #N, D, L
+@@ -316,19 +364,19 @@ def forward(self, tokens, targets=None, zero_shot_fitness_predictions=None, sequ
+             x = x.mean(dim=-2) # N, D
+             y = y.view(num_sequences_with_target,self.num_targets_input * self.args.embed_dim)
+             y = torch.cat((x,y),dim=-1) # N, (1+num_targets) * D
+-        
++
+         target_predictions = {}
+         for target_index, target_name in enumerate(self.target_names):
+-            if self.args.target_prediction_head == "Target_embeddings_and_AA_embeddings_mean_pooled": 
++            if self.args.target_prediction_head == "Target_embeddings_and_AA_embeddings_mean_pooled":
+                 target_predictions[target_name] = self.target_pred_head[target_name](y).view(-1,self.args.target_config[target_name]["dim"]).squeeze(dim=-1) #We use the concatenated X and target embeddings (all of them) to predict each target
+             else:
+                 if self.args.target_prediction_model == "MLP": y[:,target_index,:] = self.layer_pre_head[target_name](y[:,target_index,:])
+                 target_predictions[target_name] = self.target_pred_head[target_name](y[:,target_index,:]).view(-1,self.args.target_config[target_name]["dim"]).squeeze(dim=-1) #input the embedding with the relevant target_index
+             if self.args.augmentation=="zero_shot_fitness_predictions_covariate":
+                 target_predictions[target_name] += self.zero_shot_fitness_prediction_weight[target_name](zero_shot_fitness_predictions).view(-1,self.args.target_config[target_name]["dim"]).squeeze(dim=-1)
+-            
++
+         result = {"logits_protein_sequence": logits_protein_sequence, "target_predictions": target_predictions, "representations": hidden_representations}
+-        
++
+         if need_head_weights:
+             col_attentions = torch.stack(col_attn_weights, 1)
+             row_attentions = torch.stack(row_attn_weights, 1)
+@@ -338,11 +386,25 @@ def forward(self, tokens, targets=None, zero_shot_fitness_predictions=None, sequ
+         return result
+ 
+     def forward_with_uncertainty(self, tokens, targets, zero_shot_fitness_predictions=None, sequence_embeddings=None, num_MC_dropout_samples=10, number_of_mutated_seqs_to_score=None):
++        """Performs forward pass with uncertainty estimation using MC dropout.
++
++        Uses Monte Carlo dropout to generate multiple predictions and estimate uncertainty.
++        Keeps dropout active during inference to sample different network configurations.
++
++        Args:
++            tokens (torch.Tensor): Input protein sequence tokens
++            targets (dict): Dictionary of target values to predict
++            zero_shot_fitness_predictions (torch.Tensor, optional): Pre-computed fitness predictions
++            sequence_embeddings (torch.Tensor, optional): Pre-computed sequence embeddings
++            num_MC_dropout_samples (int, optional): Number of MC dropout samples. Defaults to 10
++            number_of_mutated_seqs_to_score (int, optional): Number of mutated sequences to evaluate
++
++        Returns:
++            dict: Dictionary containing for each target:
++                - predictions_avg: Mean prediction across MC samples
++                - uncertainty: Standard deviation across MC samples
+         """
+-        Performs MC dropout to compute predictions and the corresponding uncertainties.
+-        Assumes 1D predictions (eg., prediction of continuous output)
+-        """
+-        self.eval() 
++        self.eval()
+         for m in self.modules(): #Move all dropout layers in train mode to support MC dropout. Keep everything else in eval mode.
+             if m.__class__.__name__.startswith('Dropout'):
+                 m.train()
+@@ -359,21 +421,45 @@ def forward_with_uncertainty(self, tokens, targets, zero_shot_fitness_prediction
+                 results_with_uncertainty[target_name]['predictions_avg'] = concatenated_target_pred.mean(dim=-1)
+                 results_with_uncertainty[target_name]['uncertainty'] = concatenated_target_pred.std(dim=-1)
+         return results_with_uncertainty
+-    
++
+     @property
+     def num_layers(self):
++        """int: Number of transformer layers in the model."""
+         return self.args.num_protein_npt_layers
+-    
++
+     def max_tokens_per_msa_(self, value: int) -> None:
+-        """
+-        Batching attention computations when gradients are disabled as per MSA_Transformer
+-        Set this value to infinity to disable this behavior.
++        """Sets maximum tokens per MSA for attention computation batching.
++
++        Used to batch attention computations when gradients are disabled,
++        following MSA Transformer implementation. Set to infinity to disable batching.
++
++        Args:
++            value (int): Maximum number of tokens per MSA batch
+         """
+         for module in self.modules():
+             if isinstance(module, (RowSelfAttention, ColumnSelfAttention)):
+                 module.max_tokens_per_msa = value
+ 
+     def protein_npt_loss(self, token_predictions_logits, token_labels, target_predictions, target_labels, MLM_reconstruction_loss_weight, label_smoothing=0.0):
++        """Calculates the total loss for model training.
++
++        Combines masked language modeling loss for sequence reconstruction and
++        prediction losses for each target property.
++
++        Args:
++            token_predictions_logits (torch.Tensor): Predicted token logits
++            token_labels (torch.Tensor): True token labels
++            target_predictions (dict): Dictionary of predicted target values
++            target_labels (dict): Dictionary of true target labels
++            MLM_reconstruction_loss_weight (float): Weight for MLM loss component
++            label_smoothing (float, optional): Label smoothing factor. Defaults to 0.0
++
++        Returns:
++            tuple:
++                - total_loss (torch.Tensor): Combined loss value
++                - reconstruction_loss (torch.Tensor): MLM loss component
++                - target_prediction_loss (dict): Loss values for each target
++        """
+         target_prediction_loss_weight = 1.0 - MLM_reconstruction_loss_weight
+         total_loss = 0.0
+         if (token_labels is not None) and (MLM_reconstruction_loss_weight > 0.0):
+@@ -397,16 +483,22 @@ def protein_npt_loss(self, token_predictions_logits, token_labels, target_predic
+                     print("Detected nan loss")
+                     print(target_predictions[target_name])
+                 target_prediction_loss[target_name] = tgt_loss
+-                
++
+                 total_loss += target_prediction_loss_weight * target_prediction_loss[target_name]
+         return total_loss, reconstruction_loss, target_prediction_loss
+ 
+     def create_optimizer(self):
+-        """
+-        Setup the optimizer.
+-        We provide a reasonable default that works well. If you want to use something else, you can pass a tuple in the
+-        Trainer's init through `optimizers`, or subclass and override this method in a subclass.
+-        Adapted from Huggingface Transformers library.
++        """Creates and configures the model optimizer.
++
++        Sets up an AdamW optimizer with parameter-specific weight decay settings:
++        - Regular parameters: Use specified weight decay
++        - Pseudo-likelihood weights: Use very small weight decay (1e-8)
++        - Bias terms: No weight decay
++
++        The configuration is adapted from the Huggingface Transformers library.
++
++        Returns:
++            AdamW: Configured optimizer instance
+         """
+         if self.optimizer is None:
+             all_parameters = get_parameter_names(self, [nn.LayerNorm])
+@@ -425,7 +517,7 @@ def create_optimizer(self):
+                     "params": [p for n, p in self.named_parameters() if (n not in decay_parameters and n not in psl_decay_parameters)],
+                     "weight_decay": 0.0,
+                 },
+-            ]        
++            ]
+         optimizer_kwargs = {
+             "betas": (self.args.adam_beta1, self.args.adam_beta2),
+             "eps": self.args.adam_epsilon,
+@@ -433,4 +525,3 @@ def create_optimizer(self):
+             }
+         optimizer = AdamW(optimizer_grouped_parameters, **optimizer_kwargs)
+         return optimizer
+-    
+\ No newline at end of file
+diff --git a/proteinnpt/utils/__init__.py b/proteinnpt/utils/__init__.py
+index bef15b5..8bd4181 100755
+--- a/proteinnpt/utils/__init__.py
++++ b/proteinnpt/utils/__init__.py
+@@ -1 +1 @@
+-from . import esm, tranception
+\ No newline at end of file
++from . import esm, tranception
+diff --git a/proteinnpt/utils/data_utils.py b/proteinnpt/utils/data_utils.py
+index aeeb99c..95788c8 100755
+--- a/proteinnpt/utils/data_utils.py
++++ b/proteinnpt/utils/data_utils.py
+@@ -7,10 +7,30 @@
+ from datasets import Dataset
+ from proteinnpt.utils.tranception.utils.scoring_utils import get_mutated_sequence
+ 
+-def standardize(x, epsilon = 1e-10):
++def standardize(x, epsilon=1e-10):
++    """Standardizes data to zero mean and unit variance.
++
++    Args:
++        x (numpy.ndarray): Input array to standardize
++        epsilon (float, optional): Small constant for numerical stability. Defaults to 1e-10
++
++    Returns:
++        numpy.ndarray: Standardized array with zero mean and unit variance
++    """
+     return (x - x.mean()) / (x.std() + epsilon)
+ 
+-def split_data_based_on_test_fold_index(dataframe, fold_variable_name = 'fold_modulo_5', test_fold_index=None, use_validation_set=True):
++def split_data_based_on_test_fold_index(dataframe, fold_variable_name='fold_modulo_5', test_fold_index=None, use_validation_set=True):
++    """Splits data into train, validation, and test sets based on fold indices.
++
++    Args:
++        dataframe (pandas.DataFrame): Input data containing fold assignments
++        fold_variable_name (str, optional): Name of column containing fold indices. Defaults to 'fold_modulo_5'
++        test_fold_index (int, optional): Index of fold to use as test set. Defaults to None
++        use_validation_set (bool, optional): Whether to create validation set. Defaults to True
++
++    Returns:
++        tuple: (train_df, val_df, test_df) DataFrames for each split. val_df may be None if use_validation_set is False
++    """
+     unique_folds = np.unique(dataframe[fold_variable_name])
+     num_distinct_folds = len(unique_folds)
+     if fold_variable_name=="fold_multiples":
+@@ -38,10 +58,23 @@ def split_data_based_on_test_fold_index(dataframe, fold_variable_name = 'fold_mo
+     return train, val, test
+ 
+ def cleanup_ids_assay_data(df, indel_mode=False, target_seq=None):
++    """Standardizes mutation identifiers and sequences in assay data.
++
++    Ensures consistent formatting of mutant IDs and sequences across different data sources.
++    Can reconstruct mutant IDs from sequences or create dummy IDs as needed.
++
++    Args:
++        df (pandas.DataFrame): Input dataframe containing mutation data
++        indel_mode (bool, optional): Whether to handle insertions/deletions. Defaults to False
++        target_seq (str, optional): Reference sequence. Required for substitution mode. Defaults to None
++
++    Returns:
++        pandas.DataFrame: DataFrame with standardized mutant IDs and sequences
++    """
+     assert 'mutated_sequence' in df.columns or 'mutant' in df.columns, "assay did not reference mutant nor mutated_sequence"
+-    if 'mutated_sequence' not in df: 
++    if 'mutated_sequence' not in df:
+         df['mutated_sequence'] = df['mutant'].apply(lambda x: get_mutated_sequence(target_seq, x))
+-    if 'mutant' not in df: 
++    if 'mutant' not in df:
+         if not indel_mode and target_seq is not None: #If substitutions assay, we reconstruct the mutants by comparing the mutated sequences with the target sequence
+             df['mutant'] = df["mutated_sequence"].apply(lambda x: ':'.join([wt + str(i+1) + mut for i, (wt, mut) in enumerate(zip(target_seq, x)) if wt != mut]))
+         else: #If indels we default to dummy mutant names
+@@ -49,24 +82,24 @@ def cleanup_ids_assay_data(df, indel_mode=False, target_seq=None):
+     return df
+ 
+ def get_train_val_test_data(args, assay_file_names):
+-    target_names = args.target_config.keys() 
++    target_names = args.target_config.keys()
+     assay_data={}
+     merge = None
+     main_target_name = None
+     main_target_name_count = 0
+     for target in target_names:
+-        if args.target_config[target]["main_target"]: 
++        if args.target_config[target]["main_target"]:
+             main_target_name=target
+             main_target_name_count+=1
+     assert main_target_name is not None, "No main target referenced. Please update config to select a unique main target."
+     assert main_target_name_count <= 1, "Several main targets referenced. Please update config to select a unique main target."
+-    
+-    assay_data[main_target_name] = pd.read_csv(args.target_config[main_target_name]["location"] + os.sep + assay_file_names[main_target_name]) 
++
++    assay_data[main_target_name] = pd.read_csv(args.target_config[main_target_name]["location"] + os.sep + assay_file_names[main_target_name])
+     assay_data[main_target_name] = cleanup_ids_assay_data(assay_data[main_target_name])[['mutant','mutated_sequence',args.target_config[main_target_name]["var_name"],args.fold_variable_name]]
+     assay_data[main_target_name].columns = ['mutant','mutated_sequence', main_target_name, args.fold_variable_name]
+     merge = assay_data[main_target_name]
+-    
+-    # Get target sequence from mutated 
++
++    # Get target sequence from mutated
+     wt_sequence = list(merge.loc[0, 'mutated_sequence'])
+     mut_0 = merge.loc[0, 'mutant']
+     for mutation in mut_0.split(':'):
+@@ -74,14 +107,14 @@ def get_train_val_test_data(args, assay_file_names):
+         assert wt_sequence[pos-1] == mut
+         wt_sequence[pos-1] = wt
+     target_seq = ''.join(wt_sequence)
+-    
++
+     for target_name in target_names:
+         if target_name!=main_target_name:
+-            assay_data[target_name] = pd.read_csv(args.target_config[target_name]["location"] + os.sep + assay_file_names[target_name]) 
++            assay_data[target_name] = pd.read_csv(args.target_config[target_name]["location"] + os.sep + assay_file_names[target_name])
+             assay_data[target_name] = cleanup_ids_assay_data(assay_data[target_name], target_seq=target_seq)[['mutant',args.target_config[target_name]["var_name"]]]
+             assay_data[target_name].columns = ['mutant',target_name]
+             merge = pd.merge(merge, assay_data[target_name], how='outer', on='mutant')
+-            
++
+     if args.augmentation=="zero_shot_fitness_predictions_covariate":
+         zero_shot_fitness_predictions = pd.read_csv(args.zero_shot_fitness_predictions_location + os.sep + assay_file_names[main_target_name])
+         # Remove wt row if present
+@@ -92,7 +125,7 @@ def get_train_val_test_data(args, assay_file_names):
+         merge = pd.merge(merge,zero_shot_fitness_predictions,how='left',on='mutant')
+ 
+     train_val_test_splits = split_data_based_on_test_fold_index(
+-        dataframe = merge, 
++        dataframe = merge,
+         fold_variable_name = args.fold_variable_name,
+         test_fold_index = args.test_fold_index,
+         use_validation_set = args.use_validation_set
+@@ -108,7 +141,7 @@ def get_train_val_test_data(args, assay_file_names):
+             raw_targets, target_processing = preprocess_training_targets(raw_targets, args.target_config)
+         else:
+             raw_targets = preprocess_test_targets(raw_targets, args.target_config, target_processing)
+-        for target_name in target_names: 
++        for target_name in target_names:
+             splits_dict[split_name][target_name] = raw_targets[target_name]
+         if args.augmentation=="zero_shot_fitness_predictions_covariate": splits_dict[split_name]['zero_shot_fitness_predictions'] = raw_targets['zero_shot_fitness_predictions']
+     # load dict into dataset objects
+@@ -118,12 +151,21 @@ def get_train_val_test_data(args, assay_file_names):
+     return train_data, val_data, test_data, target_processing
+ 
+ def preprocess_training_targets(training_targets, target_config, verbose=True):
+-    """
+-    training_targets: dict of tensors of target values. Assumed to be 1D continuous values or 1D categorical values
+-    
+-    returns:
+-        - standard scaled versions of continuous targets
+-        - one-hot encoding versions of categorical targets with 1 extra column for masked token
++    """Preprocesses training target values for model input.
++
++    Handles both continuous and categorical target values:
++    - Continuous targets are standardized to zero mean and unit variance
++    - Categorical targets are converted to indices with additional mask token
++
++    Args:
++        training_targets (dict): Dictionary of target tensors (1D continuous or categorical values)
++        target_config (dict): Configuration for each target's processing
++        verbose (bool, optional): Whether to print processing details. Defaults to True
++
++    Returns:
++        tuple: (processed_targets, target_processing)
++            - processed_targets: Dictionary of processed target values
++            - target_processing: Dictionary of processing parameters (means, stds, category mappings)
+     """
+     target_processing = {}
+     for target_name in training_targets.keys():
+@@ -150,8 +192,15 @@ def preprocess_training_targets(training_targets, target_config, verbose=True):
+     return training_targets, target_processing
+ 
+ def preprocess_test_targets(test_targets, target_config, target_processing):
+-    """
+-    Applies target processing learned from training data
++    """Applies preprocessing transformations learned from training data to test targets.
++
++    Args:
++        test_targets (dict): Dictionary of test target values
++        target_config (dict): Configuration for each target's processing
++        target_processing (dict): Processing parameters learned from training data
++
++    Returns:
++        dict: Dictionary of processed test target values
+     """
+     for target_name in test_targets.keys():
+         if (target_name in target_config and target_config[target_name]["type"]=='continuous') or (target_name=='zero_shot_fitness_predictions'):
+@@ -161,11 +210,28 @@ def preprocess_test_targets(test_targets, target_config, target_processing):
+     return test_targets
+ 
+ def mask_protein_sequences(inputs, alphabet, proba_aa_mask=0.15, proba_random_mutation=0.1, proba_unchanged=0.1):
+-    """
+-    Masks amino acids in the MSA at random with proba proba_aa_mask (15% by default).
+-    inputs: batched tokens (ie., MSA post tokenization)
+-    Returns the masked batch tokens and the corresponding labels for MLM.
+-    Adapted from HuggingFace transformers library.
++    """Applies masking to protein sequences for masked language modeling.
++
++    Randomly masks amino acids with specified probabilities:
++    - Replace with mask token (proba_actual_masking = 0.8 by default)
++    - Replace with random amino acid (proba_random_mutation = 0.1 by default)
++    - Leave unchanged (proba_unchanged = 0.1 by default)
++
++    Args:
++        inputs (torch.Tensor): Batched token sequences
++        alphabet: Tokenizer alphabet for protein sequences
++        proba_aa_mask (float, optional): Probability of masking a position. Defaults to 0.15
++        proba_random_mutation (float, optional): Probability of random mutation. Defaults to 0.1
++        proba_unchanged (float, optional): Probability of leaving masked position unchanged. Defaults to 0.1
++
++    Returns:
++        tuple: (masked_inputs, labels, masked_indices)
++            - masked_inputs: Input sequences with masking applied
++            - labels: Original tokens (-100 for unmasked positions)
++            - masked_indices: Boolean tensor indicating masked positions
++
++    Note:
++        Adapted from HuggingFace transformers library
+     """
+     labels = inputs.clone() # B, N, C
+     all_special_tokens = torch.tensor([alphabet.tok_to_idx[x] for x in alphabet.all_special_tokens])
+@@ -193,24 +259,34 @@ def mask_protein_sequences(inputs, alphabet, proba_aa_mask=0.15, proba_random_mu
+ 
+     # The rest of the time (10% of the time) we keep the masked input tokens unchanged
+     return inputs, labels, masked_indices
+-    
+-def mask_targets(inputs, input_target_type , target_processing, proba_target_mask=0.15, proba_random_mutation=0.1, proba_unchanged=0.1, min_num_labels_masked=None):
+-    """
+-    Masks targets at random with proba proba_target_mask.
+-    inputs is a tensor with the target values for a *single* target.
+-    The masked batch targets are also concatenated with the corresponding mask tensor (needed before embedding):
+-        - For continuous targets, masked elements are set to zero (mean of standard normal) and we concatenate a '1' mask value (non-masked elements are left unchnaged & we concatenate a '0' mask value)
+-        - For discrete targets, we assume that the vocabulary has been extended so that the last category value corresponds to the make token (handled by the target preprocessing function). 
+-          We simply set that value to 1 (all other values to 0, as per one-hot encoding scheme)
+-    Returns the masked batch target and the mask tensor.
+-    Note: Unlike for tokens, a masked target is encoded by a "1.0" (not alphabet.tok_to_idx['<mask>'])
++
++def mask_targets(inputs, input_target_type, target_processing, proba_target_mask=0.15, proba_random_mutation=0.1, proba_unchanged=0.1, min_num_labels_masked=None):
++    """Applies masking to target values for prediction.
++
++    Handles both continuous and discrete targets:
++    - Continuous targets: Masked values set to 0 (mean of standard normal)
++    - Discrete targets: Masked values set to mask token index
++
++    Args:
++        inputs (torch.Tensor): Target values for a single target
++        input_target_type (str): Type of target ('continuous' or 'categorical')
++        target_processing (dict): Processing parameters for the target
++        proba_target_mask (float, optional): Probability of masking. Defaults to 0.15
++        proba_random_mutation (float, optional): Probability of random value. Defaults to 0.1
++        proba_unchanged (float, optional): Probability of leaving unchanged. Defaults to 0.1
++        min_num_labels_masked (int, optional): Minimum number of values to mask. Defaults to None
++
++    Returns:
++        tuple: (masked_inputs, labels)
++            - masked_inputs: Target values with masking applied
++            - labels: Original values (-100 for unmasked positions)
+     """
+     labels = inputs.clone()
+     indices_missing_values = torch.isnan(inputs)
+     probability_tensor = torch.full(inputs.shape, proba_target_mask)
+     probability_tensor.masked_fill_(indices_missing_values, value=0.0) #This will help ensure we do not mask missing values (we have no ground truth values to compute the loss against for these)
+     masked_indices = torch.bernoulli(probability_tensor).bool() #tensor indicating which entries should be masked and used in loss computation.
+-    
++
+     if min_num_labels_masked is not None and min_num_labels_masked > 0: #Routine to help enforce we mask at least min_num_labels_masked labels, eg., to ensure we do compute a prediction loss
+         if masked_indices.int().sum().item() < min_num_labels_masked: #We sample additional masks as needed
+             num_additional_masks_needed = min_num_labels_masked - masked_indices.int().sum().item()
+@@ -220,7 +296,7 @@ def mask_targets(inputs, input_target_type , target_processing, proba_target_mas
+             masked_indices[selected_indices] = True
+             masked_indices = torch.tensor(masked_indices)
+     labels[~masked_indices] = -100 #All non masked items (incl. missing values) are excluded from loss computation.
+-    
++
+     # proba_actual_masking of the time (80% by default), we replace masked input tokens with tokenizer.mask_token (<mask>)
+     proba_actual_masking = 1.0 - proba_random_mutation - proba_unchanged
+     indices_replaced = torch.bernoulli(torch.full(labels.shape, proba_actual_masking)).bool() & masked_indices
+@@ -239,13 +315,13 @@ def mask_targets(inputs, input_target_type , target_processing, proba_target_mas
+         else:
+             random_tokens = torch.randint(low=0, high=target_processing['category_to_index']['<mask>'], size=labels.shape, dtype=torch.long)
+         inputs[indices_random] = random_tokens[indices_random]
+-    
++
+     # concatenate mask value to input tensor (only for continuous; by design we reserved the last category index to <mask> so will be automatically handled in Embedding layer)
+     if input_target_type=='continuous':
+         indices_masked_or_missing = masked_indices | indices_missing_values
+         inputs = torch.cat((inputs.view(-1,1), indices_masked_or_missing.float().view(-1,1)), dim=-1)
+     #inputs is the modified version of input in which masked tokens are zeroed out / imputed (to be passed to the model as input). Labels corresponds ground truth values to be predicted at masked positions (-100 otherwise)
+-    return inputs, labels 
++    return inputs, labels
+ 
+ def collate_fn_protein_npt(raw_batch):
+     keys = raw_batch[0].keys()
+@@ -277,17 +353,37 @@ def get_optimal_window(mutation_position_relative, seq_len_wo_special, model_win
+         window_start = max(0,mutation_position_relative-half_model_window)
+         window_end = min(seq_len_wo_special,mutation_position_relative+half_model_window)
+         if (window_end - window_start) < model_window: # ensures all sequences will be same lengths (catch all for edge cases, due to non integer half_model_window)
+-            window_end +=1 
++            window_end +=1
+         return [window_start, window_end]
+ 
+ def slice_sequences(list_mutant_mutated_seq_pairs, max_positions=1024, method="rolling", rolling_overlap=100, eval_mode=True, batch_target_labels=None, batch_masked_targets=None, target_names=None, start_idx=1, num_extra_tokens=1):
+-    """
+-    rolling: creates overlapping sequence chunks of length args.max_positions - 1 (minus 1 to allow the BOS token addition)
+-    center: centers sequence slice around mutation
+-    left: selects the first (args.max_positions - 1) tokens in the sequence
+-    batch_target_labels are needed in eval_mode with rolling as we do target duplication for the different windows.
+-    Assumption: all input sequences are of same length.
+-    num_extra_tokens: 1 is just BOS added (eg., ESM); 2 if BOS and EOS added (eg., Tranception)
++    """Slices long sequences to fit within model context window.
++
++    Provides different methods for sequence slicing:
++    - rolling: Creates overlapping chunks with specified overlap
++    - center: Centers window around mutation position
++    - left: Takes window from start of sequence
++
++    Args:
++        list_mutant_mutated_seq_pairs (list): List of (mutant, sequence) pairs
++        max_positions (int, optional): Maximum sequence length. Defaults to 1024
++        method (str, optional): Slicing method ('rolling', 'center', 'left'). Defaults to "rolling"
++        rolling_overlap (int, optional): Overlap size for rolling method. Defaults to 100
++        eval_mode (bool, optional): Whether in evaluation mode. Defaults to True
++        batch_target_labels (dict, optional): Labels for targets. Required for rolling in eval mode
++        batch_masked_targets (dict, optional): Masked target values
++        target_names (list, optional): Names of targets
++        start_idx (int, optional): One-indexed start position. Defaults to 1
++        num_extra_tokens (int, optional): Number of special tokens to account for. Defaults to 1
++
++    Returns:
++        tuple: Varies based on output type:
++            - For Protein NPT: (sliced_pairs, target_labels, masked_targets, optimal_windows)
++            - For baselines: (sliced_pairs, target_labels, optimal_windows)
++
++    Note:
++        All input sequences must be the same length.
++        num_extra_tokens is 1 for BOS only (ESM) or 2 for BOS+EOS (Tranception)
+     """
+     mutant_mutated_seqs = list(zip(*list_mutant_mutated_seq_pairs))
+     raw_sequence_length = len(mutant_mutated_seqs[1][0]) # length of first sequence
+@@ -312,6 +408,16 @@ def slice_sequences(list_mutant_mutated_seq_pairs, max_positions=1024, method="r
+         return list_mutant_mutated_seq_pairs, batch_target_labels, scoring_optimal_window
+ 
+ def get_indices_retrieved_embeddings(batch, embeddings_dict_location, number_of_mutated_seqs_to_score=None):
++    """Retrieves indices of pre-computed embeddings for a batch of sequences.
++
++    Args:
++        batch (dict): Batch containing mutant-sequence pairs
++        embeddings_dict_location (str): Path to HDF5 file containing embeddings
++        number_of_mutated_seqs_to_score (int, optional): Limit number of sequences. Defaults to None
++
++    Returns:
++        numpy.ndarray: Array of indices for retrieving embeddings
++    """
+     batch_mutants, batch_sequences = zip(*batch['mutant_mutated_seq_pairs'])
+     with h5py.File(embeddings_dict_location, 'r') as h5f:
+         num_all_embeddings = len(h5f['mutants'])
+@@ -325,10 +431,32 @@ def get_indices_retrieved_embeddings(batch, embeddings_dict_location, number_of_
+     intersection = pd.merge(batch_mutants_df, mutants_embeddings_df, how='inner', on='mutants')
+     return np.array(intersection['mutant_index'].values)
+ 
+-def pnpt_spearmanr(prediction,target):
++def pnpt_spearmanr(prediction, target):
++    """Calculates Spearman correlation while handling missing values.
++
++    Computes correlation between predictions and targets, excluding missing values
++    (NaN or -100) from the calculation.
++
++    Args:
++        prediction (numpy.ndarray): Predicted values
++        target (numpy.ndarray): True target values
++
++    Returns:
++        float: Spearman correlation coefficient
++    """
+     mask_missing_values = np.isnan(target) | np.equal(target, -100) #In PNPT missing values are never masked so corresponding labels are always set to -100
+-    return spearmanr(prediction[~mask_missing_values], target[~mask_missing_values])[0] #first value is spearman rho, second is the corresponding p-value           
+-    
++    return spearmanr(prediction[~mask_missing_values], target[~mask_missing_values])[0] #first value is spearman rho, second is the corresponding p-value
++
+ def pnpt_count_non_nan(x):
++    """Counts non-missing values in an array.
++
++    Missing values are either NaN or -100 in the PNPT model.
++
++    Args:
++        x (numpy.ndarray): Input array
++
++    Returns:
++        int: Number of non-missing values
++    """
+     missing_mask = np.isnan(x) | np.equal(x,-100)
+     return np.count_nonzero(~missing_mask)
+diff --git a/proteinnpt/utils/merge_zero_shot.py b/proteinnpt/utils/merge_zero_shot.py
+index f3dbee5..66769dc 100644
+--- a/proteinnpt/utils/merge_zero_shot.py
++++ b/proteinnpt/utils/merge_zero_shot.py
+@@ -4,6 +4,24 @@
+ from proteinnpt.utils.data_utils import cleanup_ids_assay_data
+ 
+ def main(args):
++    """Merges zero-shot prediction scores from multiple models for a DMS assay.
++
++    Takes predictions from different protein language models and combines them
++    into a single file, ensuring proper alignment and data consistency.
++
++    Args:
++        args: Command line arguments containing:
++            - DMS_reference_file_path: Path to DMS reference file
++            - DMS_mutants_folder: Path to mutants data
++            - DMS_index: Index of DMS assay in reference
++            - zero_shot_scores_folder: Path to model predictions
++            - indel_mode: Whether handling insertions/deletions
++
++    Note:
++        Supports different model types including ensemble models.
++        Handles both mutation-based and sequence-based predictions.
++        Ensures no data loss during merging through consistency checks.
++    """
+     mapping_protein_seq_DMS = pd.read_csv(args.DMS_reference_file_path)
+     DMS_id=mapping_protein_seq_DMS["DMS_id"][args.DMS_index]
+     print("Merging all zero-shot scores for DMS: "+str(DMS_id))
+@@ -43,7 +61,7 @@ def main(args):
+         model_score_file_path = args.zero_shot_scores_folder + os.sep + model_name + os.sep + DMS_file_name
+         if os.path.exists(model_score_file_path):
+             scores = pd.read_csv(model_score_file_path,low_memory=False)
+-            if 'mutated_sequence' in scores: 
++            if 'mutated_sequence' in scores:
+                 scores = scores[['mutated_sequence',score_name_mapping_original_names[model_name]]].drop_duplicates()
+                 merge_key = 'mutated_sequence'
+             else:
+@@ -55,6 +73,16 @@ def main(args):
+     merge.to_csv(args.zero_shot_scores_folder + os.sep + DMS_file_name, index=False)
+ 
+ if __name__ == '__main__':
++    """Command-line interface for merging zero-shot predictions.
++
++    Example:
++        python merge_zero_shot.py
++            --DMS_reference_file_path path/to/reference.csv
++            --DMS_mutants_folder path/to/mutants
++            --DMS_index 0
++            --zero_shot_scores_folder path/to/scores
++            --indel_mode
++    """
+     print("Merging zero-shot predictions score files")
+     parser = argparse.ArgumentParser(description='Merge scoring')
+     parser.add_argument('--DMS_reference_file_path', type=str, help='Path to reference file with list of DMS to score')
+@@ -63,4 +91,4 @@ def main(args):
+     parser.add_argument('--zero_shot_scores_folder', type=str, help='Path to folder that contains all zero-shot model scores')
+     parser.add_argument('--indel_mode', action='store_true', help='Flag to be used when scoring insertions and deletions. Otherwise assumes substitutions')
+     args = parser.parse_args()
+-    main(args)
+\ No newline at end of file
++    main(args)
+diff --git a/proteinnpt/utils/msa_utils.py b/proteinnpt/utils/msa_utils.py
+index 07f8914..5f22049 100755
+--- a/proteinnpt/utils/msa_utils.py
++++ b/proteinnpt/utils/msa_utils.py
+@@ -22,6 +22,24 @@
+ ALPHABET_PROTEIN_GAP = GAP + ALPHABET_PROTEIN_NOGAP
+ 
+ class MSA_processing:
++    """Handler for Multiple Sequence Alignment preprocessing and analysis.
++
++    This class provides comprehensive functionality for processing MSA data, including:
++    - Reading and parsing MSA files
++    - Filtering sequences based on gap content
++    - Computing sequence weights
++    - Converting sequences to one-hot encodings
++    - Managing focus sequences and columns
++
++    The implementation is adapted from the EVE codebase with modifications
++    for use in the Protein NPT project.
++
++    Note:
++        The input MSA must follow specific format constraints:
++        - Focus sequence is the first sequence in the MSA
++        - First line format: ">focus_seq_name/start_pos-end_pos"
++        - Subsequent lines contain the sequence data
++    """
+     def __init__(self,
+         MSA_location="",
+         theta=0.2,
+@@ -35,17 +53,17 @@ def __init__(self,
+         num_cpus=1,
+         skip_one_hot_encodings=False,
+         ):
+-        
++
+         """
+         This class was borrowed from our EVE codebase: https://github.com/OATML-Markslab/EVE
+         Parameters:
+-        - msa_location: (path) Location of the MSA data. Constraints on input MSA format: 
++        - msa_location: (path) Location of the MSA data. Constraints on input MSA format:
+             - focus_sequence is the first one in the MSA data
+             - first line is structured as follows: ">focus_seq_name/start_pos-end_pos" (e.g., >SPIKE_SARS2/310-550)
+             - corespondding sequence data located on following line(s)
+             - then all other sequences follow with ">name" on first line, corresponding data on subsequent lines
+         - theta: (float) Sequence weighting hyperparameter. Generally: Prokaryotic and eukaryotic families =  0.2; Viruses = 0.01
+-        - use_weights: (bool) If False, sets all sequence weights to 1. If True, checks weights_location -- if non empty uses that; 
++        - use_weights: (bool) If False, sets all sequence weights to 1. If True, checks weights_location -- if non empty uses that;
+             otherwise compute weights from scratch and store them at weights_location
+         - weights_location: (path) Location to load from/save to the sequence weights
+         - preprocess_MSA: (bool) performs pre-processing of MSA to remove short fragments and positions that are not well covered.
+@@ -96,7 +114,7 @@ def __init__(self,
+                 seq_length=self.seq_len,
+             )
+             print ("Data Shape =", self.one_hot_encoding.shape)
+-            
++
+         self.calc_weights(num_cpus=num_cpus, method=weights_calc_method)
+ 
+     def gen_alignment(self):
+@@ -157,7 +175,7 @@ def gen_alignment(self):
+                 num_sequences_removed_due_to_indeterminate_AAs+=1
+                 del self.seq_name_to_sequence[seq_name]
+             print("Proportion of sequences dropped due to indeterminate AAs: {}%".format(round(float(num_sequences_removed_due_to_indeterminate_AAs/num_sequences_before_indeterminate_AA_drop*100),2)))
+-        
++
+         print("Number of sequences after preprocessing:", len(self.seq_name_to_sequence))
+         self.num_sequences = len(self.seq_name_to_sequence.keys())
+ 
+@@ -206,9 +224,9 @@ def _lower_case_and_filter_fragments(seq):
+ 
+     def calc_weights(self, num_cpus=1, method="eve"):
+         """
+-        From the EVE repo, but modified to skip printing out progress bar / time taken 
++        From the EVE repo, but modified to skip printing out progress bar / time taken
+         (because for ProteinNPT embeddings, weights will usually be computed on the fly for small subsamples of MSA).
+-        
++
+         If num_cpus == 1, weights are computed in serial.
+         If num_cpus == -1, weights are computed in parallel using all available cores.
+         Note: This will use multiprocessing.cpu_count() to get the number of available cores, which on clusters may
+@@ -251,13 +269,21 @@ def calc_weights(self, num_cpus=1, method="eve"):
+         self.seq_name_to_weight={}  # For later, if we want to remove certain sequences and associated weights
+         for i,seq_name in enumerate(self.seq_name_to_sequence.keys()):
+             self.seq_name_to_weight[seq_name]=self.weights[i]
+-        
++
+         return self.weights
+ 
+ # One-hot encoding of sequences
+ def one_hot_3D(seq_keys, seq_name_to_sequence, alphabet, seq_length):
+-    """
+-    Take in a list of sequence names/keys and corresponding sequences, and generate a one-hot array according to an alphabet.
++    """Creates one-hot encoding of sequences using specified alphabet.
++
++    Args:
++        seq_keys (list): List of sequence identifiers
++        seq_name_to_sequence (dict): Mapping from sequence names to sequences
++        alphabet (str): String containing all valid characters to encode
++        seq_length (int): Length of sequences to encode
++
++    Returns:
++        numpy.ndarray: One-hot encoded sequences of shape (n_sequences, seq_length, alphabet_size)
+     """
+     aa_dict = {letter: i for (i, letter) in enumerate(alphabet)}
+ 
+@@ -272,17 +298,37 @@ def one_hot_3D(seq_keys, seq_name_to_sequence, alphabet, seq_length):
+     return one_hot_out
+ 
+ def get_num_cpus():
++    """Gets number of available CPU cores.
++
++    Checks for SLURM environment variable first, then falls back to OS scheduling info.
++
++    Returns:
++        int: Number of available CPU cores
++    """
+     if 'SLURM_CPUS_PER_TASK' in os.environ:
+         num_cpus = int(os.environ['SLURM_CPUS_PER_TASK'])
+         print("SLURM_CPUS_PER_TASK:", os.environ['SLURM_CPUS_PER_TASK'])
+         print("Using all available cores (calculated using SLURM_CPUS_PER_TASK):", num_cpus)
+     else:
+-        num_cpus = len(os.sched_getaffinity(0)) 
++        num_cpus = len(os.sched_getaffinity(0))
+         print("Using all available cores (calculated using len(os.sched_getaffinity(0))):", num_cpus)
+     return num_cpus
+ 
+ @njit
+ def compute_weight(seq, list_seq, theta):
++    """Computes sequence weight based on similarity threshold.
++
++    Calculates weight for a sequence based on its similarity to other sequences
++    in the alignment, using a specified threshold.
++
++    Args:
++        seq (numpy.ndarray): Sequence to compute weight for
++        list_seq (numpy.ndarray): List of all sequences
++        theta (float): Similarity threshold
++
++    Returns:
++        float: Weight for the sequence (inverse of number of similar sequences)
++    """
+     number_non_empty_positions = np.dot(seq, seq)
+     if number_non_empty_positions > 0:
+         denom = np.dot(list_seq, seq) / number_non_empty_positions
+@@ -292,6 +338,19 @@ def compute_weight(seq, list_seq, theta):
+         return 0.0  # return 0 weight if sequence is fully empty
+ 
+ def compute_weight_all(list_seq, theta, updated_freq=100):
++    """Computes weights for all sequences in an MSA with progress tracking.
++
++    Uses numba for parallel computation of sequence weights based on their
++    similarity to other sequences in the alignment.
++
++    Args:
++        list_seq (numpy.ndarray): List of sequences to compute weights for
++        theta (float): Similarity threshold for weight calculation
++        updated_freq (int, optional): Progress bar update frequency. Defaults to 100
++
++    Returns:
++        numpy.ndarray: Array of computed weights, one per sequence
++    """
+     list_seq = np.array(list_seq)  # Assuming list_seq is convertible to a numpy array
+     final_results = np.zeros(len(list_seq))
+     pbar = tqdm(total=len(list_seq), desc="Computing weights")
+@@ -302,16 +361,32 @@ def compute_weight_all(list_seq, theta, updated_freq=100):
+     return final_results
+ 
+ def filter_msa(filename, path_to_hhfilter, hhfilter_min_cov=75, hhfilter_max_seq_id=90, hhfilter_min_seq_id=0):
+-    """
+-    We use the filtering defaults from the MSA Transformer paper wrt maximum sequence id: hhfilter_max_seq_id = 90; hhfilter_min_cov=75.
+-    Install hhfilter:
+-        wget https://github.com/soedinglab/hh-suite/releases/download/v3.3.0/hhsuite-3.3.0-AVX2-Linux.tar.gz; tar xvfz hhsuite-3.3.0-AVX2-Linux.tar.gz; export PATH="$(pwd)/bin:$(pwd)/scripts:$PATH"
++    """Filters MSA using hhfilter tool with specified parameters.
++
++    Uses default parameters from MSA Transformer paper for sequence filtering.
++    Requires hhfilter to be installed and accessible.
++
++    Args:
++        filename (str): Path to input MSA file
++        path_to_hhfilter (str): Path to hhfilter installation
++        hhfilter_min_cov (int, optional): Minimum coverage. Defaults to 75
++        hhfilter_max_seq_id (int, optional): Maximum sequence identity. Defaults to 90
++        hhfilter_min_seq_id (int, optional): Minimum sequence identity. Defaults to 0
++
++    Returns:
++        str: Path to filtered MSA file
++
++    Note:
++        Install hhfilter:
++        wget https://github.com/soedinglab/hh-suite/releases/download/v3.3.0/hhsuite-3.3.0-AVX2-Linux.tar.gz
++        tar xvfz hhsuite-3.3.0-AVX2-Linux.tar.gz
++        export PATH="$(pwd)/bin:$(pwd)/scripts:$PATH"
+     """
+     input_folder = '/'.join(filename.split('/')[:-1])
+     msa_name = filename.split('/')[-1].split('.a2m')[0]
+     preprocessed_filename = input_folder+os.sep+'preprocessed'+os.sep+msa_name
+     output_filename = input_folder+os.sep+'hhfiltered'+os.sep+msa_name+'_hhfiltered_cov_'+str(hhfilter_min_cov)+'_maxid_'+str(hhfilter_max_seq_id)+'_minid_'+str(hhfilter_min_seq_id)+'.a2m'
+-    
++
+     if msa_name=="R1AB_SARS2_02-19-2022_b07": hhfilter_max_seq_id=100 #Otherwise we would only keep 1 sequence.
+     if not os.path.isdir(input_folder+os.sep+'preprocessed'):
+         os.mkdir(input_folder+os.sep+'preprocessed')
+@@ -324,8 +399,22 @@ def filter_msa(filename, path_to_hhfilter, hhfilter_min_cov=75, hhfilter_max_seq
+     return output_filename
+ 
+ def compute_sequence_weights(MSA_filename, MSA_weights_filename):
+-    """
+-    MSA_non_ref_sequences_weights contains the weights for all sequences besides the reference sequence
++    """Computes sequence weights for MSA while handling reference sequence separately.
++
++    Processes MSA file to calculate sequence weights, removing and separately handling
++    the reference sequence. Non-reference sequence weights are normalized to sum to 1.
++
++    Args:
++        MSA_filename (str): Path to MSA file
++        MSA_weights_filename (str): Path to save/load weight calculations
++
++    Returns:
++        tuple:
++            - list: All sequences [(name, seq), ...] with reference sequence first
++            - numpy.ndarray: Normalized weights for non-reference sequences
++
++    Note:
++        Reference sequence is always the first sequence in MSA_all_sequences
+     """
+     processed_MSA = MSA_processing(
+         MSA_location=MSA_filename,
+@@ -337,37 +426,61 @@ def compute_sequence_weights(MSA_filename, MSA_weights_filename):
+     MSA_other_sequences=[]
+     weights=[]
+     MSA_reference_sequence=[]
+-    
++
+     # Removes the WT sequences
+     for seq_name in processed_MSA.raw_seq_name_to_sequence.keys():
+         if seq_name == processed_MSA.focus_seq_name:
+             MSA_reference_sequence.append((seq_name,processed_MSA.raw_seq_name_to_sequence[seq_name]))
+             del processed_MSA.seq_name_to_weight[seq_name]
+         else:
+-            if seq_name in processed_MSA.seq_name_to_weight: 
++            if seq_name in processed_MSA.seq_name_to_weight:
+                 MSA_other_sequences.append((seq_name,processed_MSA.raw_seq_name_to_sequence[seq_name]))
+                 weights.append(processed_MSA.seq_name_to_weight[seq_name])
+-    
++
+     if len(MSA_other_sequences)>0:
+         # Re-weight the non-wt sequences to sum to 1
+         MSA_non_ref_sequences_weights = np.array(weights) / np.array(list(processed_MSA.seq_name_to_weight.values())).sum()
+         #print("Check sum weights MSA: "+str(np.array(weights).sum()))
+-    
++
+     MSA_all_sequences = MSA_reference_sequence + MSA_other_sequences
+     return MSA_all_sequences, MSA_non_ref_sequences_weights
+ 
+ def random_sample_MSA(filename, nseq):
++    """Randomly samples sequences from MSA file.
++
++    Reads sequences from FASTA file and randomly selects a subset.
++    Handles case where requested sample size exceeds available sequences.
++
++    Args:
++        filename (str): Path to FASTA format MSA file
++        nseq (int): Number of sequences to sample
++
++    Returns:
++        list: [(description, sequence), ...] pairs for sampled sequences
++        All sequences are converted to uppercase
++    """
+     msa = [
+-            (record.description, str(record.seq)) for record in SeqIO.parse(filename, "fasta")
++        (record.description, str(record.seq)) for record in SeqIO.parse(filename, "fasta")
+     ]
+     nseq = min(len(msa),nseq) #ensures number of samples at most as large as pop size
+     msa = random.sample(msa, nseq)
+     msa = [(desc, seq.upper()) for desc, seq in msa]
+     return msa
+-    
++
+ def weighted_sample_MSA(MSA_all_sequences, MSA_non_ref_sequences_weights, number_sampled_MSA_sequences):
+-    """
+-    We always enforce the first sequence in the MSA to be the refence sequence.
++    """Samples sequences from MSA using sequence weights.
++
++    Maintains the reference sequence as the first sequence and samples additional
++    sequences based on their weights.
++
++    Args:
++        MSA_all_sequences (list): All sequences including reference sequence
++        MSA_non_ref_sequences_weights (numpy.ndarray): Weights for non-reference sequences
++        number_sampled_MSA_sequences (int): Total number of sequences to sample
++
++    Returns:
++        list: [(name, sequence), ...] pairs for sampled sequences,
++        with reference sequence first and all sequences in uppercase
+     """
+     msa = [MSA_all_sequences[0]]
+     msa.extend(random.choices(MSA_all_sequences[1:], weights=MSA_non_ref_sequences_weights, k=number_sampled_MSA_sequences-1))
+@@ -375,8 +488,25 @@ def weighted_sample_MSA(MSA_all_sequences, MSA_non_ref_sequences_weights, number
+     return msa
+ 
+ def process_MSA(MSA_data_folder, MSA_weight_data_folder, MSA_filename, MSA_weights_filename, path_to_hhfilter):
+-    """
+-    Filter an MSA according to sequence identity (for e.g. MSATransformer) and then compute sequence weights
++    """Complete MSA processing pipeline.
++
++    Performs filtering based on sequence identity and computes sequence weights.
++    Particularly useful for MSA Transformer model processing.
++
++    Args:
++        MSA_data_folder (str): Directory containing MSA files
++        MSA_weight_data_folder (str): Directory to store weight files
++        MSA_filename (str): Name of MSA file
++        MSA_weights_filename (str): Name for weights file
++        path_to_hhfilter (str): Path to hhfilter installation
++
++    Returns:
++        tuple:
++            - list: All sequences with reference sequence first
++            - numpy.ndarray: Normalized weights for non-reference sequences
++
++    Note:
++        Creates 'hhfiltered' subdirectory in MSA_weight_data_folder if needed
+     """
+     filtered_MSA_filename = filter_msa(filename=MSA_data_folder + os.sep + MSA_filename, path_to_hhfilter=path_to_hhfilter)
+     hhfiltered_weights_folder = os.path.join(MSA_weight_data_folder, "hhfiltered")
+@@ -384,13 +514,29 @@ def process_MSA(MSA_data_folder, MSA_weight_data_folder, MSA_filename, MSA_weigh
+         # To be safe, this will not create the parent weights directory if it does not already exist.
+         # To create intermediate directories, we would use os.makedirs()
+         os.mkdir(hhfiltered_weights_folder)
+-        
++
+     MSA_all_sequences, MSA_non_ref_sequences_weights = compute_sequence_weights(MSA_filename=filtered_MSA_filename, MSA_weights_filename=os.path.join(MSA_weight_data_folder, "hhfiltered", MSA_weights_filename))
+     return MSA_all_sequences, MSA_non_ref_sequences_weights
+ 
+ def align_new_sequences_to_msa(MSA_sequences, new_sequences, new_mutants, clustalomega_path):
+-    """
+-    Helps realign mutated sequences with sequences in a MSA. Useful to compute embeddings of indel 
++    """Aligns new sequences to existing MSA using Clustal Omega.
++
++    Uses Clustal Omega to align new sequences to an existing MSA, particularly
++    useful for handling insertions/deletions when computing embeddings.
++
++    Args:
++        MSA_sequences (list): List of (name, sequence) pairs from existing MSA
++        new_sequences (list): List of sequences to be aligned
++        new_mutants (list): List of identifiers for new sequences
++        clustalomega_path (str): Path to Clustal Omega executable
++
++    Returns:
++        list: List of (name, aligned_sequence) pairs for both original and new sequences
++
++    Note:
++        - Creates and removes temporary files during the alignment process
++        - Requires Clustal Omega to be installed and accessible
++        - Handles potential errors in Clustal Omega execution
+     """
+     # Convert MSA_sequences and new_sequence to a list of SeqRecord objects
+     records = [SeqRecord(Seq(seq), id=name) for name, seq in MSA_sequences]
+@@ -421,4 +567,4 @@ def align_new_sequences_to_msa(MSA_sequences, new_sequences, new_mutants, clusta
+     aligned_sequences = [(record.id, str(record.seq)) for record in aligned_records]
+     # Remove the temporary output file
+     os.remove(output_filename)
+-    return aligned_sequences
+\ No newline at end of file
++    return aligned_sequences
+diff --git a/proteinnpt/utils/tranception/__init__.py b/proteinnpt/utils/tranception/__init__.py
+index efba47a..e1cb29b 100755
+--- a/proteinnpt/utils/tranception/__init__.py
++++ b/proteinnpt/utils/tranception/__init__.py
+@@ -1,2 +1,2 @@
+-from . import activations,config
+-from . import utils
+\ No newline at end of file
++from . import activations, config
++from . import utils
+diff --git a/proteinnpt/utils/tranception/utils/__init__.py b/proteinnpt/utils/tranception/utils/__init__.py
+index 90ad887..6f2cab5 100755
+--- a/proteinnpt/utils/tranception/utils/__init__.py
++++ b/proteinnpt/utils/tranception/utils/__init__.py
+@@ -1 +1 @@
+-from . import scoring_utils, msa_utils
+\ No newline at end of file
++from . import scoring_utils, msa_utils
+diff --git a/proteinnpt/utils/weights.py b/proteinnpt/utils/weights.py
+index f0b1d14..b72c98d 100644
+--- a/proteinnpt/utils/weights.py
++++ b/proteinnpt/utils/weights.py
+@@ -1,4 +1,3 @@
+-# This class is copied from the EVE codebase https://github.com/OATML-Markslab/EVE, removing the progress bar (since we're calculating weights on the fly so don't need one)
+ import multiprocessing
+ import time
+ from collections import defaultdict
+@@ -11,21 +10,28 @@
+ from tqdm import tqdm
+ 
+ def calc_weights_fast(matrix_mapped, identity_threshold, empty_value, num_cpus=1):
++    """Rapidly calculates sequence weights using optional parallelization.
++
++    Computes weights by clustering sequences based on sequence identity.
++    Handles empty sequences and provides parallel computation option.
++
++    Args:
++        matrix_mapped (numpy.ndarray): NxL matrix of N sequences of length L,
++            mapped to numerical values
++        identity_threshold (float): Sequences with identity above this
++            threshold are clustered together
++        empty_value (int): Value indicating gaps or invalid characters
++        num_cpus (int, optional): Number of CPUs for parallel computation.
++            Defaults to 1 (serial)
++
++    Returns:
++        numpy.ndarray: Array of sequence weights
++
++    Note:
++        Adapted from EVCouplings (https://github.com/debbiemarkslab/EVcouplings).
++        When num_cpus > 1, uses Numba parallel computation. On clusters,
++        available CPUs may be less than multiprocessing.cpu_count().
+     """
+-        Modified from EVCouplings: https://github.com/debbiemarkslab/EVcouplings
+-        
+-        Note: Numba by default uses `multiprocessing.cpu_count()` threads. 
+-        On a cluster where a process might only have access to a subset of CPUs, this may be less than the number of CPUs available.
+-        The caller should ideally use len(os.sched_getaffinity(0)) to get the number of CPUs available to the process.
+-        
+-        Calculate weights for sequences in alignment by
+-        clustering all sequences with sequence identity
+-        greater or equal to the given threshold.
+-        Parameters
+-        ----------
+-        identity_threshold : float
+-            Sequence identity threshold
+-        """
+     empty_idx = is_empty_sequence_matrix(matrix_mapped, empty_value=empty_value)  # e.g. sequences with just gaps or lowercase, no valid AAs
+     N = matrix_mapped.shape[0]
+ 
+@@ -33,15 +39,15 @@ def calc_weights_fast(matrix_mapped, identity_threshold, empty_value, num_cpus=1
+     if num_cpus != 1:
+         # print("Calculating weights using Numba parallel (experimental) since num_cpus > 1. If you want to disable multiprocessing set num_cpus=1.")
+         # print("Default number of threads for Numba:", numba.config.NUMBA_NUM_THREADS)
+-        
++
+         # num_cpus > numba.config.NUMBA_NUM_THREADS will give an error.
+         # But we'll leave it so that the user has to be explicit.
+         numba.set_num_threads(num_cpus)
+         print("Set number of threads to:", numba.get_num_threads())  # Sometimes Numba uses all the CPUs anyway
+-        
++
+         num_cluster_members = calc_num_cluster_members_nogaps_parallel(matrix_mapped[~empty_idx], identity_threshold,
+                                                                        invalid_value=empty_value)
+-        
++
+     else:
+         # Use the serial version
+         num_cluster_members = calc_num_cluster_members_nogaps(matrix_mapped[~empty_idx], identity_threshold,
+@@ -54,29 +60,42 @@ def calc_weights_fast(matrix_mapped, identity_threshold, empty_value, num_cpus=1
+ 
+ # Below are util functions copied from EVCouplings
+ def is_empty_sequence_matrix(matrix, empty_value):
++    """Identifies empty sequences in a matrix.
++
++    A sequence is considered empty if all positions contain the empty_value.
++    Used to identify sequences that should be excluded from weight calculations.
++
++    Args:
++        matrix (numpy.ndarray): 2D matrix of sequences
++        empty_value (int or float): Value indicating empty position
++
++    Returns:
++        numpy.ndarray: Boolean array indicating empty sequences (True for empty)
++
++    Raises:
++        AssertionError: If matrix is not 2D or empty_value is not numeric
++    """
+     assert len(matrix.shape) == 2, f"Matrix must be 2D; shape={matrix.shape}"
+     assert isinstance(empty_value, (int, float)), f"empty_value must be a number; type={type(empty_value)}"
+-    # Check for each sequence if all positions are equal to empty_value
+     empty_idx = np.all((matrix == empty_value), axis=1)
+     return empty_idx
+ 
+ 
+ def map_from_alphabet(alphabet, default):
+-    """
+-    Creates a mapping dictionary from a given alphabet.
+-    Parameters
+-    ----------
+-    alphabet : str
+-        Alphabet for remapping. Elements will
+-        be remapped according to alphabet starting
+-        from 0
+-    default : Elements in matrix that are not
+-        contained in alphabet will be treated as
+-        this character
+-    Raises
+-    ------
+-    ValueError
+-        For invalid default character
++    """Creates a mapping dictionary from a given alphabet.
++
++    Maps characters to indices, with a default value for unmapped characters.
++
++    Args:
++        alphabet (str): Characters to map to indices
++        default (str): Character to use for unmapped values.
++            Must be present in alphabet.
++
++    Returns:
++        defaultdict: Mapping from characters to indices
++
++    Raises:
++        ValueError: If default character is not in alphabet
+     """
+     map_ = {
+         c: i for i, c in enumerate(alphabet)
+@@ -94,18 +113,14 @@ def map_from_alphabet(alphabet, default):
+ 
+ 
+ def map_matrix(matrix, map_):
+-    """
+-    Map elements in a numpy array using alphabet
+-    Parameters
+-    ----------
+-    matrix : np.array
+-        Matrix that should be remapped
+-    map_ : defaultdict
+-        Map that will be applied to matrix elements
+-    Returns
+-    -------
+-    np.array
+-        Remapped matrix
++    """Maps elements in a matrix using a character mapping.
++
++    Args:
++        matrix (numpy.ndarray): Matrix to remap
++        map_ (defaultdict): Character to index mapping
++
++    Returns:
++        numpy.ndarray: Matrix with characters mapped to indices
+     """
+     return np.vectorize(map_.__getitem__)(matrix)
+ 
+@@ -113,27 +128,26 @@ def map_matrix(matrix, map_):
+ # Fastmath should be safe here, as we can assume that there are no NaNs in the input etc.
+ @numba.jit(nopython=True, fastmath=True)  #parallel=True
+ def calc_num_cluster_members_nogaps(matrix, identity_threshold, invalid_value):
+-    """
+-    From EVCouplings: https://github.com/debbiemarkslab/EVcouplings/blob/develop/evcouplings/align/alignment.py#L1172.
+-    Modified to use non-gapped length and not counting gaps as sequence similarity matches.
+-    
+-    Calculate number of sequences in alignment
+-    within given identity_threshold of each other
+-    Parameters
+-    ----------
+-    matrix : np.array
+-        N x L matrix containing N sequences of length L.
+-        Matrix must be mapped to range(0, num_symbols) using
+-        map_matrix function
+-    identity_threshold : float
+-        Sequences with at least this pairwise identity will be
+-        grouped in the same cluster.
+-    Returns
+-    -------
+-    np.array
+-        Vector of length N containing number of cluster
+-        members for each sequence (inverse of sequence
+-        weight)
++    """Calculates cluster sizes excluding gaps from identity calculations.
++
++    Serial implementation of sequence clustering based on identity threshold.
++    Modified from EVCouplings to use non-gapped length and exclude gaps from matches.
++
++    Args:
++        matrix (numpy.ndarray): NxL matrix of N sequences of length L,
++            mapped to numerical values using map_matrix
++        identity_threshold (float): Identity threshold for sequence clustering
++        invalid_value (int): Value indicating gaps or invalid positions
++
++    Returns:
++        numpy.ndarray: Number of cluster members for each sequence
++        (inverse of sequence weight)
++
++    Note:
++        Adapted from EVCouplings with modifications for gap handling:
++        - Uses non-gapped length for identity calculation
++        - Excludes gaps from sequence similarity matches
++        - Optimized with Numba no-Python mode
+     """
+     N, L = matrix.shape
+     L = 1.0 * L
+@@ -163,28 +177,25 @@ def calc_num_cluster_members_nogaps(matrix, identity_threshold, invalid_value):
+ 
+ @numba.jit(nopython=True, fastmath=True, parallel=True)
+ def calc_num_cluster_members_nogaps_parallel(matrix, identity_threshold, invalid_value):
+-    """
+-    Parallel implementation of calc_num_cluster_members_nogaps above.
+-    
+-    Calculate number of sequences in alignment
+-    within given identity_threshold of each other
+-    Parameters
+-    ----------
+-    matrix : np.array
+-        N x L matrix containing N sequences of length L.
+-        Matrix must be mapped to range(0, num_symbols) using
+-        map_matrix function
+-    identity_threshold : float
+-        Sequences with at least this pairwise identity will be
+-        grouped in the same cluster.
+-    invalid_value : int
+-        Value in matrix that is considered invalid, e.g. gap or lowercase character.
+-    Returns
+-    -------
+-    np.array
+-        Vector of length N containing number of cluster
+-        members for each sequence (inverse of sequence
+-        weight)
++    """Calculates cluster sizes in parallel excluding gaps from identity calculations.
++
++    Parallel implementation of sequence clustering based on identity threshold.
++    Uses Numba for parallelization and optimized computation.
++
++    Args:
++        matrix (numpy.ndarray): NxL matrix of N sequences of length L,
++            mapped to numerical values using map_matrix
++        identity_threshold (float): Identity threshold for sequence clustering
++        invalid_value (int): Value indicating gaps or invalid positions
++
++    Returns:
++        numpy.ndarray: Number of cluster members for each sequence
++        (inverse of sequence weight)
++
++    Note:
++        - Uses non-gapped positions for identity calculation
++        - Employs asymmetric similarity calculation
++        - Optimized with Numba parallel processing
+     """
+     N, L = matrix.shape
+     L = 1.0 * L
+@@ -217,15 +228,27 @@ def calc_num_cluster_members_nogaps_parallel(matrix, identity_threshold, invalid
+ 
+ @numba.jit(nopython=True, fastmath=True, parallel=True)
+ def calc_num_cluster_members_nogaps_parallel_print(matrix, identity_threshold, invalid_value, progress_proxy=None, update_frequency=1000):
++    """Parallel cluster size calculation with progress tracking.
++
++    Version of calc_num_cluster_members_nogaps_parallel that includes progress
++    tracking for long-running calculations.
++
++    Args:
++        matrix (numpy.ndarray): NxL matrix of N sequences of length L
++        identity_threshold (float): Identity threshold for clustering
++        invalid_value (int): Value indicating gaps/invalid positions
++        progress_proxy (numba_progress.ProgressBar, optional): Progress bar handle.
++            Defaults to None
++        update_frequency (int, optional): Progress update interval.
++            Defaults to 1000
++
++    Returns:
++        numpy.ndarray: Number of cluster members for each sequence
++
++    Note:
++        Particularly useful for multi-hour weight calculations on large MSAs.
+     """
+-    Modified calc_num_cluster_members_nogaps_parallel to add tqdm progress bar - useful for multi-hour weights calc.
+-    
+-    progress_proxy : numba_progress.ProgressBar
+-        A handle on the progress bar to update
+-    update_frequency : int
+-        Similar to miniters in tqdm, how many iterations between updating the progress bar (which then will only print every `update_interval` seconds)
+-    """
+-    
++
+     N, L = matrix.shape
+     L = 1.0 * L
+ 

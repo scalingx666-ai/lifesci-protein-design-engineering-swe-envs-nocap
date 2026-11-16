@@ -1,0 +1,63 @@
+version = "1.0"
+
+[task]
+name = "default/RosettaCommons__rosetta-765"
+description = "Restore CA_only default for AddConstraintsToCurrentConformationMover in RosettaScripts"
+
+[metadata]
+difficulty = "medium"
+category = "bugfix"
+keywords = [
+    "rosetta",
+    "pr_diff",
+]
+
+[metadata.repo2env]
+pipeline = "pr_diff"
+pipeline_version = "0.3.0"
+repo = "RosettaCommons/rosetta"
+ref = "369e400415dd5c585f80dcf7b647147ee520e8ba"
+reference = "https://github.com/RosettaCommons/rosetta/pull/765"
+source_access = "auto"
+built_at = "2026-11-15T22:34:11.747823+00:00"
+reward_kinds = [
+    "diff_similarity",
+]
+spec_version = "0.2.0"
+content_hash = "sha256:c0aa5f078b72fa580b22b2a1ed06187205ff6303b47202ff84300ee1d9a2a293"
+
+[metadata.repo2env.pr_diff]
+pr_merged_at = "2026-11-11T15:51:23Z"
+diff_format = "unified"
+context_files = [
+    "source/src/protocols/constraint_movers/AddConstraintsToCurrentConformationMover.cc",
+    "source/test/protocols/constraint_movers/AddConstraintsToCurrentConformationMover.cxxtest.hh",
+]
+
+[metadata.repo2env.reward_calibration]
+baseline_reward = 0.0
+loc_changed = 53
+difficulty = "medium"
+
+[metadata.repo2env.evaluation]
+schema_version = "1"
+status = "unverified"
+stage = "generation"
+reason_codes = [
+    "validation_not_run",
+]
+detail = "Generated task; validation has not been established."
+provenance = "unknown"
+evidence = []
+
+[metadata.repo2env.reproducibility]
+mode = "local_only"
+image_ref = "python:3.12-slim"
+image_tag = "python:3.12-slim"
+image_visibility = "private"
+
+[agent]
+timeout_sec = 1800.0
+
+[verifier]
+timeout_sec = 300.0

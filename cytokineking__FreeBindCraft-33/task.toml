@@ -1,0 +1,70 @@
+version = "1.0"
+
+[task]
+name = "default/cytokineking__FreeBindCraft-33"
+description = "Experiment with opt-in BF16 attention epilogue fusion on MetalJAX"
+
+[metadata]
+difficulty = "large"
+category = "bugfix"
+keywords = [
+    "FreeBindCraft",
+    "pr_diff",
+]
+
+[metadata.repo2env]
+pipeline = "pr_diff"
+pipeline_version = "0.3.0"
+repo = "cytokineking/FreeBindCraft"
+ref = "137d98dddc61f4ca8d81a3cd7f0105a9eec3d502"
+reference = "https://github.com/cytokineking/FreeBindCraft/pull/33"
+source_access = "auto"
+built_at = "2026-11-16T03:23:44.367268+00:00"
+reward_kinds = [
+    "diff_similarity",
+]
+spec_version = "0.2.0"
+content_hash = "sha256:521bbf793ffae169e820798790266d56422dd70ecf208daba11130dee4612902"
+
+[metadata.repo2env.pr_diff]
+pr_merged_at = "2026-10-23T16:22:35Z"
+diff_format = "unified"
+context_files = [
+    "extras/benchmark_metaljax_attention.py",
+    "extras/run_metaljax_attention_comparison.py",
+    "installation/build_metaljax_attention.py",
+    "installation/metaljax/README.md",
+    "installation/metaljax/attention/0001-bf16-attention-epilogues.patch",
+    "installation/metaljax/attention/README.md",
+    "installation/metaljax/attention/build-manifest.json",
+    "installation/metaljax/attention/diagnostic-fences.patch",
+    "installation/metaljax/attention/validation.json",
+]
+
+[metadata.repo2env.reward_calibration]
+baseline_reward = 0.0
+loc_changed = 4129
+difficulty = "large"
+
+[metadata.repo2env.evaluation]
+schema_version = "1"
+status = "unverified"
+stage = "generation"
+reason_codes = [
+    "validation_not_run",
+]
+detail = "Generated task; validation has not been established."
+provenance = "unknown"
+evidence = []
+
+[metadata.repo2env.reproducibility]
+mode = "local_only"
+image_ref = "python:3.12-slim"
+image_tag = "python:3.12-slim"
+image_visibility = "private"
+
+[agent]
+timeout_sec = 1800.0
+
+[verifier]
+timeout_sec = 300.0

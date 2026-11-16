@@ -1,0 +1,74 @@
+version = "1.0"
+
+[task]
+name = "default/RosettaCommons__rosetta-725"
+description = "Apply Rule of Zero to protocols/ classes with redundant destructors"
+
+[metadata]
+difficulty = "medium"
+category = "bugfix"
+keywords = [
+    "rosetta",
+    "pr_diff",
+]
+
+[metadata.repo2env]
+pipeline = "pr_diff"
+pipeline_version = "0.3.0"
+repo = "RosettaCommons/rosetta"
+ref = "9567e54bafdaf4697b28b6f4d41a07596e50ed5c"
+reference = "https://github.com/RosettaCommons/rosetta/pull/725"
+source_access = "auto"
+built_at = "2026-11-15T22:34:34.479278+00:00"
+reward_kinds = [
+    "diff_similarity",
+]
+spec_version = "0.2.0"
+content_hash = "sha256:fce6207598d0b2aec289d3724b878a0cb8ccd0917d732d24d5484b3edfe73cec"
+
+[metadata.repo2env.pr_diff]
+pr_merged_at = "2026-07-14T22:24:12Z"
+diff_format = "unified"
+context_files = [
+    "source/src/protocols/antibody/clusters/CDRClusterSet.cc",
+    "source/src/protocols/antibody/clusters/CDRClusterSet.hh",
+    "source/src/protocols/hbnet/NetworkState.hh",
+    "source/src/protocols/jobdist/JobDistributors.cc",
+    "source/src/protocols/jobdist/JobDistributors.hh",
+    "source/src/protocols/nmr/pcs/PCSLigandTransformMover.cc",
+    "source/src/protocols/nmr/pcs/PCSLigandTransformMover.hh",
+    "source/src/protocols/noesy_assign/FloatingResonance.cc",
+    "source/src/protocols/noesy_assign/FloatingResonance.hh",
+    "source/src/protocols/noesy_assign/PeakAssignment.cc",
+    "source/src/protocols/noesy_assign/PeakAssignment.hh",
+    "source/src/protocols/peptide_deriver/PeptideDeriverBasicStreamOutputter.cc",
+    "source/src/protocols/peptide_deriver/PeptideDeriverBasicStreamOutputter.hh",
+]
+
+[metadata.repo2env.reward_calibration]
+baseline_reward = 0.0
+loc_changed = 34
+difficulty = "medium"
+
+[metadata.repo2env.evaluation]
+schema_version = "1"
+status = "unverified"
+stage = "generation"
+reason_codes = [
+    "validation_not_run",
+]
+detail = "Generated task; validation has not been established."
+provenance = "unknown"
+evidence = []
+
+[metadata.repo2env.reproducibility]
+mode = "local_only"
+image_ref = "python:3.12-slim"
+image_tag = "python:3.12-slim"
+image_visibility = "private"
+
+[agent]
+timeout_sec = 1800.0
+
+[verifier]
+timeout_sec = 300.0

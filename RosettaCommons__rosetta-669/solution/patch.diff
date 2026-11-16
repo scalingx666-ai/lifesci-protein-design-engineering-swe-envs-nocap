@@ -1,0 +1,36 @@
+diff --git a/source/src/utility/io/irstream.hh b/source/src/utility/io/irstream.hh
+index ed444b5f5a0..c3b2e0e4625 100644
+--- a/source/src/utility/io/irstream.hh
++++ b/source/src/utility/io/irstream.hh
+@@ -48,6 +48,9 @@ public: // Creation
+ 	virtual
+ 	~irstream() {}
+ 
++	irstream( irstream const & ) = delete;
++	irstream & operator =( irstream const & ) = delete;
++
+ 
+ protected: // Creation
+ 
+@@ -58,21 +61,6 @@ protected: // Creation
+ 	= default;
+ 
+ 
+-private: // Creation
+-
+-
+-	/// @brief Copy constructor: Undefined
+-	irstream( irstream const & );
+-
+-
+-private: // Methods: assignment
+-
+-
+-	/// @brief Copy assignment: Undefined
+-	irstream &
+-	operator =( irstream const & );
+-
+-
+ public: // Methods: conversion
+ 
+ 

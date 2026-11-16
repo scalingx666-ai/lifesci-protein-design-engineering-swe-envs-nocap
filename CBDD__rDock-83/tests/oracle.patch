@@ -1,0 +1,37 @@
+diff --git a/.devcontainer/devcontainer.json b/.devcontainer/devcontainer.json
+new file mode 100644
+index 0000000..955fa75
+--- /dev/null
++++ b/.devcontainer/devcontainer.json
+@@ -0,0 +1,20 @@
++// For format details, see https://aka.ms/devcontainer.json. For config options, see the
++// README at: https://github.com/devcontainers/templates/tree/main/src/docker-existing-dockerfile
++{
++    "name": "rDock - dev",
++    "build": {
++        "context": "..",
++        "dockerfile": "../Dockerfile"
++    },
++    "customizations": {
++        "vscode": {
++            "extensions": [
++                "ms-vscode.cpptools",
++                "ms-vscode.cpptools-extension-pack",
++                "mhutchie.git-graph",
++                "ms-vscode.makefile-tools",
++                "github.vscode-github-actions"
++            ]
++        }
++    }
++}
+\ No newline at end of file
+diff --git a/Dockerfile b/Dockerfile
+new file mode 100644
+index 0000000..bd8271c
+--- /dev/null
++++ b/Dockerfile
+@@ -0,0 +1,4 @@
++FROM ubuntu:22.04
++
++RUN apt-get update && apt-get install -y --no-install-recommends make g++ libpopt-dev libpopt0
++RUN apt-get install -y --no-install-recommends git clang-tidy clang-format ssh gdb

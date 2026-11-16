@@ -1,0 +1,391 @@
+diff --git a/.claude-plugin/marketplace.json b/.claude-plugin/marketplace.json
+index 8f2bad0..e042eb2 100644
+--- a/.claude-plugin/marketplace.json
++++ b/.claude-plugin/marketplace.json
+@@ -10,236 +10,7 @@
+     {
+       "name": "adaptyv",
+       "description": "All 24 protein design skills",
+-      "source": "./",
+-      "skills": [
+-        "./skills/boltzgen",
+-        "./skills/bindcraft",
+-        "./skills/rfdiffusion",
+-        "./skills/mosaic",
+-        "./skills/germinal",
+-        "./skills/proteinmpnn",
+-        "./skills/ligandmpnn",
+-        "./skills/solublempnn",
+-        "./skills/chai",
+-        "./skills/boltz",
+-        "./skills/protenix",
+-        "./skills/alphafold",
+-        "./skills/esm",
+-        "./skills/protein-qc",
+-        "./skills/ipsae",
+-        "./skills/pdb",
+-        "./skills/uniprot",
+-        "./skills/foldseek",
+-        "./skills/cell-free-expression",
+-        "./skills/binding-characterization",
+-        "./skills/protein-design-workflow",
+-        "./skills/campaign-manager",
+-        "./skills/binder-design",
+-        "./skills/setup"
+-      ]
+-    },
+-    {
+-      "name": "design-tools",
+-      "description": "Core protein design methods (BoltzGen, BindCraft, RFdiffusion, Mosaic, Germinal, etc.)",
+-      "source": "./",
+-      "skills": [
+-        "./skills/boltzgen",
+-        "./skills/bindcraft",
+-        "./skills/rfdiffusion",
+-        "./skills/mosaic",
+-        "./skills/germinal",
+-        "./skills/proteinmpnn",
+-        "./skills/ligandmpnn",
+-        "./skills/solublempnn",
+-        "./skills/chai",
+-        "./skills/boltz",
+-        "./skills/protenix",
+-        "./skills/alphafold",
+-        "./skills/esm"
+-      ]
+-    },
+-    {
+-      "name": "evaluation",
+-      "description": "Metrics, filtering, and quality control",
+-      "source": "./",
+-      "skills": [
+-        "./skills/protein-qc",
+-        "./skills/ipsae"
+-      ]
+-    },
+-    {
+-      "name": "utilities",
+-      "description": "Database access, structure utilities, setup",
+-      "source": "./",
+-      "skills": [
+-        "./skills/pdb",
+-        "./skills/uniprot",
+-        "./skills/foldseek",
+-        "./skills/setup"
+-      ]
+-    },
+-    {
+-      "name": "experimental",
+-      "description": "Experimental validation workflows",
+-      "source": "./",
+-      "skills": [
+-        "./skills/cell-free-expression",
+-        "./skills/binding-characterization"
+-      ]
+-    },
+-    {
+-      "name": "orchestration",
+-      "description": "End-to-end workflows and pipeline management",
+-      "source": "./",
+-      "skills": [
+-        "./skills/protein-design-workflow",
+-        "./skills/campaign-manager",
+-        "./skills/binder-design"
+-      ]
+-    },
+-    {
+-      "name": "boltzgen",
+-      "description": "All-atom protein design using BoltzGen diffusion model",
+-      "source": "./",
+-      "skills": ["./skills/boltzgen"]
+-    },
+-    {
+-      "name": "bindcraft",
+-      "description": "End-to-end binder design using BindCraft hallucination",
+-      "source": "./",
+-      "skills": ["./skills/bindcraft"]
+-    },
+-    {
+-      "name": "rfdiffusion",
+-      "description": "Generate protein backbones using RFdiffusion",
+-      "source": "./",
+-      "skills": ["./skills/rfdiffusion"]
+-    },
+-    {
+-      "name": "mosaic",
+-      "description": "Multi-objective, gradient-based binder design using Mosaic",
+-      "source": "./",
+-      "skills": ["./skills/mosaic"]
+-    },
+-    {
+-      "name": "germinal",
+-      "description": "De novo antibody and nanobody (VHH) design using Germinal",
+-      "source": "./",
+-      "skills": ["./skills/germinal"]
+-    },
+-    {
+-      "name": "protenix",
+-      "description": "Structure prediction using Protenix, an open AlphaFold3 reproduction",
+-      "source": "./",
+-      "skills": ["./skills/protenix"]
+-    },
+-    {
+-      "name": "proteinmpnn",
+-      "description": "Design protein sequences using ProteinMPNN inverse folding",
+-      "source": "./",
+-      "skills": ["./skills/proteinmpnn"]
+-    },
+-    {
+-      "name": "ligandmpnn",
+-      "description": "Ligand-aware protein sequence design using LigandMPNN",
+-      "source": "./",
+-      "skills": ["./skills/ligandmpnn"]
+-    },
+-    {
+-      "name": "solublempnn",
+-      "description": "Solubility-optimized protein sequence design using SolubleMPNN",
+-      "source": "./",
+-      "skills": ["./skills/solublempnn"]
+-    },
+-    {
+-      "name": "chai",
+-      "description": "Structure prediction using Chai-1",
+-      "source": "./",
+-      "skills": ["./skills/chai"]
+-    },
+-    {
+-      "name": "boltz",
+-      "description": "Structure prediction using Boltz-1/Boltz-2",
+-      "source": "./",
+-      "skills": ["./skills/boltz"]
+-    },
+-    {
+-      "name": "alphafold",
+-      "description": "Validate protein designs using AlphaFold2 structure prediction",
+-      "source": "./",
+-      "skills": ["./skills/alphafold"]
+-    },
+-    {
+-      "name": "esm",
+-      "description": "ESM protein language models (ESM C, ESMFold2, ESM2) for embeddings, scoring, structure prediction, and binder design",
+-      "source": "./",
+-      "skills": ["./skills/esm"]
+-    },
+-    {
+-      "name": "protein-qc",
+-      "description": "Quality control metrics and filtering thresholds for protein design",
+-      "source": "./",
+-      "skills": ["./skills/protein-qc"]
+-    },
+-    {
+-      "name": "ipsae",
+-      "description": "Binder design ranking using ipSAE",
+-      "source": "./",
+-      "skills": ["./skills/ipsae"]
+-    },
+-    {
+-      "name": "pdb",
+-      "description": "Fetch and analyze protein structures from RCSB PDB",
+-      "source": "./",
+-      "skills": ["./skills/pdb"]
+-    },
+-    {
+-      "name": "uniprot",
+-      "description": "Access UniProt for protein sequence and annotation retrieval",
+-      "source": "./",
+-      "skills": ["./skills/uniprot"]
+-    },
+-    {
+-      "name": "foldseek",
+-      "description": "Structure similarity search with Foldseek",
+-      "source": "./",
+-      "skills": ["./skills/foldseek"]
+-    },
+-    {
+-      "name": "setup",
+-      "description": "First-time setup for protein design tools",
+-      "source": "./",
+-      "skills": ["./skills/setup"]
+-    },
+-    {
+-      "name": "cell-free-expression",
+-      "description": "Guidance for cell-free protein synthesis (CFPS) optimization",
+-      "source": "./",
+-      "skills": ["./skills/cell-free-expression"]
+-    },
+-    {
+-      "name": "binding-characterization",
+-      "description": "Guidance for SPR and BLI binding characterization experiments",
+-      "source": "./",
+-      "skills": ["./skills/binding-characterization"]
+-    },
+-    {
+-      "name": "protein-design-workflow",
+-      "description": "End-to-end guidance for protein design pipelines",
+-      "source": "./",
+-      "skills": ["./skills/protein-design-workflow"]
+-    },
+-    {
+-      "name": "campaign-manager",
+-      "description": "Goal-oriented binder design campaign planning and health assessment",
+-      "source": "./",
+-      "skills": ["./skills/campaign-manager"]
+-    },
+-    {
+-      "name": "binder-design",
+-      "description": "Guidance for choosing the right protein binder design tool",
+-      "source": "./",
+-      "skills": ["./skills/binder-design"]
++      "source": "./"
+     }
+   ]
+ }
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 17c5a77..8723717 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -40,6 +40,14 @@
+ - Measured compute cost per accepted design (averaged across 7 internal benchmark
+   targets) added to binder-design and the relevant tool skills
+ 
++### Fixed (follow-up)
++- Marketplace now ships a single `adaptyv` plugin (all 24 skills). The previous
++  category and single-skill plugins all loaded every skill anyway, since a plugin's
++  skills are discovered by scanning its source directory and cannot be subset per entry
++  in a flat repo. Docs updated to match.
++- Corrected stale README and asset SVGs: skill count 21 to 24, design-tools count to 13,
++  the install command (`adaptyv@`, not `all@`)
++
+ ## [2.0.0] - 2026-01-16
+ 
+ ### Added
+diff --git a/assets/install_skills.svg b/assets/install_skills.svg
+index bcf647b..69a0538 100644
+--- a/assets/install_skills.svg
++++ b/assets/install_skills.svg
+@@ -28,13 +28,13 @@
+     <!-- Command 2 -->
+     <text x="0" y="88" fill="#36B7F6" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" font-size="13">&gt;</text>
+     <text x="16" y="88" fill="#F8FAFC" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" font-size="13">/plugin install </text>
+-    <text x="140" y="88" fill="#F59E0B" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" font-size="13">all</text>
+-    <text x="165" y="88" fill="#F8FAFC" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" font-size="13">@protein-design-skills</text>
++    <text x="140" y="88" fill="#F59E0B" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" font-size="13">adaptyv</text>
++    <text x="195" y="88" fill="#F8FAFC" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" font-size="13">@protein-design-skills</text>
+ 
+     <!-- Output 2 -->
+     <text x="0" y="112" fill="#10B981" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" font-size="13">&#10003;</text>
+     <text x="16" y="112" fill="#94A3B8" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" font-size="13">Installed </text>
+-    <text x="88" y="112" fill="#36B7F6" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" font-size="13">21 skills</text>
++    <text x="88" y="112" fill="#36B7F6" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" font-size="13">24 skills</text>
+ 
+     <!-- Output 3 -->
+     <text x="0" y="136" fill="#10B981" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" font-size="13">&#10003;</text>
+diff --git a/assets/skill_categories.svg b/assets/skill_categories.svg
+index 2747fc5..63945ba 100644
+--- a/assets/skill_categories.svg
++++ b/assets/skill_categories.svg
+@@ -50,13 +50,13 @@
+ 
+     <!-- Title -->
+     <text x="38" y="18" fill="#94A3B8" font-family="system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="15" font-weight="600" letter-spacing="0.1em">PROTEIN DESIGN SKILLS</text>
+-    <text x="280" y="18" fill="#64748B" font-family="system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="13">21 skills across 5 categories</text>
++    <text x="280" y="18" fill="#64748B" font-family="system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="13">24 skills across 5 categories</text>
+   </g>
+ 
+   <!-- Categories grid -->
+   <g transform="translate(36, 70)">
+     <!-- Row 1 -->
+-    <!-- design tools - 10 -->
++    <!-- design tools - 13 -->
+     <g transform="translate(0, 0)">
+       <text x="0" y="20" fill="#475569" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" font-size="16" font-weight="600">
+         design tools
+@@ -64,7 +64,7 @@
+         <animate attributeName="filter" values="none;url(#glow-blue);url(#glow-blue);none;none" dur="10s" keyTimes="0;0.02;0.15;0.18;1" repeatCount="indefinite"/>
+       </text>
+       <rect x="125" y="6" width="32" height="20" rx="10" fill="rgba(100, 116, 139, 0.15)"/>
+-      <text x="141" y="20" fill="#64748B" font-family="system-ui, sans-serif" font-size="13" text-anchor="middle">10</text>
++      <text x="141" y="20" fill="#64748B" font-family="system-ui, sans-serif" font-size="13" text-anchor="middle">13</text>
+     </g>
+ 
+     <!-- evaluation - 2 -->
+diff --git a/assets/terminal_demo.svg b/assets/terminal_demo.svg
+index 65a0b50..cbc5324 100644
+--- a/assets/terminal_demo.svg
++++ b/assets/terminal_demo.svg
+@@ -27,7 +27,7 @@
+ 
+       <!-- Title -->
+       <text x="48" y="18" fill="#36B7F6" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" font-size="16" font-weight="600">Protein Design Skills</text>
+-      <text x="215" y="18" fill="#64748B" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" font-size="11">v2.0.0</text>
++      <text x="215" y="18" fill="#64748B" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" font-size="11">v2.1.0</text>
+     </g>
+ 
+     <!-- Command -->
+@@ -37,7 +37,7 @@
+     <!-- Output -->
+     <text x="16" y="98" fill="#10B981" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" font-size="12">&#10003;</text>
+     <text x="30" y="98" fill="#94A3B8" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" font-size="12">Loaded </text>
+-    <text x="82" y="98" fill="#36B7F6" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" font-size="12">21 skills</text>
++    <text x="82" y="98" fill="#36B7F6" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" font-size="12">24 skills</text>
+     <text x="155" y="98" fill="#94A3B8" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" font-size="12"> from protein-design-skills</text>
+ 
+     <!-- Section header -->
+@@ -47,7 +47,7 @@
+     <g transform="translate(16, 150)">
+       <!-- design -->
+       <text x="0" y="0" fill="#36B7F6" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" font-size="12">design</text>
+-      <text x="100" y="0" fill="#94A3B8" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" font-size="12">boltzgen, bindcraft, rfdiffusion, chai, boltz</text>
++      <text x="100" y="0" fill="#94A3B8" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" font-size="12">boltzgen, mosaic, bindcraft, germinal, protenix, …</text>
+ 
+       <!-- evaluation -->
+       <text x="0" y="22" fill="#10B981" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" font-size="12">evaluation</text>
+@@ -63,7 +63,7 @@
+ 
+       <!-- orchestration -->
+       <text x="0" y="88" fill="#EC4899" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" font-size="12">orchestration</text>
+-      <text x="100" y="88" fill="#94A3B8" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" font-size="12">binder-design, campaign-manager</text>
++      <text x="100" y="88" fill="#94A3B8" font-family="ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace" font-size="12">binder-design, campaign-manager, protein-design-workflow</text>
+     </g>
+ 
+     <!-- Prompt with user input -->
+diff --git a/docs/getting-started.md b/docs/getting-started.md
+index ee3d4e3..eb7424b 100644
+--- a/docs/getting-started.md
++++ b/docs/getting-started.md
+@@ -13,10 +13,10 @@ In Claude Code, run:
+ 
+ ```
+ /plugin marketplace add adaptyvbio/protein-design-skills
+-/plugin install design-tools@protein-design-skills
++/plugin install adaptyv@protein-design-skills
+ ```
+ 
+-**Available plugins:** `design-tools`, `evaluation`, `utilities`, `experimental`, `orchestration`
++This installs all 24 skills.
+ 
+ ## Step 2: Set up Modal
+ 
+diff --git a/docs/skills.md b/docs/skills.md
+index 05199c0..b08d386 100644
+--- a/docs/skills.md
++++ b/docs/skills.md
+@@ -9,16 +9,8 @@ All 24 skills available in Protein Design Skills.
+ /plugin install adaptyv@protein-design-skills
+ ```
+ 
+-Or install specific categories:
+-
+-| Command | Skills | Description |
+-|---------|--------|-------------|
+-| `/plugin install adaptyv@protein-design-skills` | 24 | Everything |
+-| `/plugin install design-tools@protein-design-skills` | 13 | BoltzGen, BindCraft, RFdiffusion, Mosaic, Germinal, Protenix, Chai, etc. |
+-| `/plugin install evaluation@protein-design-skills` | 2 | protein-qc, ipsae |
+-| `/plugin install utilities@protein-design-skills` | 4 | pdb, uniprot, foldseek, setup |
+-| `/plugin install experimental@protein-design-skills` | 2 | cell-free-expression, binding-characterization |
+-| `/plugin install orchestration@protein-design-skills` | 3 | binder-design, protein-design-workflow, campaign-manager |
++This installs all 24 skills. The categories below organize them for reference; they are
++not separate installs.
+ 
+ ---
+ 

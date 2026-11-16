@@ -1,0 +1,67 @@
+version = "1.0"
+
+[task]
+name = "default/OATML-Markslab__ProteinNPT-19"
+description = "Various fixes"
+
+[metadata]
+difficulty = "large"
+category = "bugfix"
+keywords = [
+    "ProteinNPT",
+    "pr_diff",
+]
+
+[metadata.repo2env]
+pipeline = "pr_diff"
+pipeline_version = "0.3.0"
+repo = "OATML-Markslab/ProteinNPT"
+ref = "a51858bc33a3858eb0b7b7a83359ab85e9a7aad2"
+reference = "https://github.com/OATML-Markslab/ProteinNPT/pull/19"
+source_access = "auto"
+built_at = "2026-11-16T04:25:14.572034+00:00"
+reward_kinds = [
+    "diff_similarity",
+]
+spec_version = "0.2.0"
+content_hash = "sha256:cf49ddc10b173813692460ec91ca2253c7f9b81d616d1b0aa8f2da51dd422030"
+
+[metadata.repo2env.pr_diff]
+pr_merged_at = "2024-11-07T04:06:49Z"
+diff_format = "unified"
+context_files = [
+    "proteinnpt/baselines/model.py",
+    "proteinnpt/baselines/model_configs/OHE_DeepSequence_final.json",
+    "proteinnpt/proteinnpt/model.py",
+    "proteinnpt/utils/data_utils.py",
+    "proteinnpt/utils/model_utils.py",
+    "scripts/train.py",
+]
+
+[metadata.repo2env.reward_calibration]
+baseline_reward = 0.0
+loc_changed = 83
+difficulty = "large"
+
+[metadata.repo2env.evaluation]
+schema_version = "1"
+status = "unverified"
+stage = "generation"
+reason_codes = [
+    "validation_not_run",
+]
+detail = "Generated task; validation has not been established."
+provenance = "unknown"
+evidence = []
+
+[metadata.repo2env.reproducibility]
+mode = "local_only"
+image_ref = "python:3.12-slim"
+image_tag = "python:3.12-slim"
+image_visibility = "private"
+
+[agent]
+timeout_sec = 1800.0
+
+[verifier]
+timeout_sec = 300.0

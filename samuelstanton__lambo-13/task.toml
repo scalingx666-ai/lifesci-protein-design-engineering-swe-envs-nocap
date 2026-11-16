@@ -1,0 +1,67 @@
+version = "1.0"
+
+[task]
+name = "default/samuelstanton__lambo-13"
+description = "Correcting Acquisition Function Calculation"
+
+[metadata]
+difficulty = "medium"
+category = "bugfix"
+keywords = [
+    "lambo",
+    "pr_diff",
+]
+
+[metadata.repo2env]
+pipeline = "pr_diff"
+pipeline_version = "0.3.0"
+repo = "samuelstanton/lambo"
+ref = "431b052ad0e54a1ba4519272725310127c6377f1"
+reference = "https://github.com/samuelstanton/lambo/pull/13"
+source_access = "auto"
+built_at = "2026-11-16T05:52:05.121807+00:00"
+reward_kinds = [
+    "diff_similarity",
+]
+spec_version = "0.2.0"
+content_hash = "sha256:2476292a3a1c00215967cdecfcc08178dc99fade2d42e950082178b48592f326"
+
+[metadata.repo2env.pr_diff]
+pr_merged_at = "2024-04-20T05:59:53Z"
+diff_format = "unified"
+context_files = [
+    "lambo/acquisitions/monte_carlo.py",
+    "lambo/candidate.py",
+    "lambo/models/base_surrogate.py",
+    "lambo/optimizers/lambo.py",
+    "lambo/tasks/surrogate_task.py",
+    "lambo/utils.py",
+]
+
+[metadata.repo2env.reward_calibration]
+baseline_reward = 0.0
+loc_changed = 37
+difficulty = "medium"
+
+[metadata.repo2env.evaluation]
+schema_version = "1"
+status = "unverified"
+stage = "generation"
+reason_codes = [
+    "validation_not_run",
+]
+detail = "Generated task; validation has not been established."
+provenance = "unknown"
+evidence = []
+
+[metadata.repo2env.reproducibility]
+mode = "local_only"
+image_ref = "python:3.12-slim"
+image_tag = "python:3.12-slim"
+image_visibility = "private"
+
+[agent]
+timeout_sec = 1800.0
+
+[verifier]
+timeout_sec = 300.0

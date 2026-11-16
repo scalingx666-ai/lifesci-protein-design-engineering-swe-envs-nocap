@@ -1,0 +1,64 @@
+diff --git a/flexs/baselines/explorers/cbas_dbas.py b/flexs/baselines/explorers/cbas_dbas.py
+index be999bc..d2b9cc6 100644
+--- a/flexs/baselines/explorers/cbas_dbas.py
++++ b/flexs/baselines/explorers/cbas_dbas.py
+@@ -154,7 +154,6 @@ def propose_sequences(
+                 all_samples_and_weights[0],
+                 all_samples_and_weights[1],
+             )
+-            print(self.model.cost - previous_model_cost, len(proposals))
+ 
+             # calculate the scores of the new samples using the model
+             scores = self.model.get_fitness(proposals)
+diff --git a/flexs/baselines/explorers/genetic_algorithm.py b/flexs/baselines/explorers/genetic_algorithm.py
+index 29729d1..0786c75 100644
+--- a/flexs/baselines/explorers/genetic_algorithm.py
++++ b/flexs/baselines/explorers/genetic_algorithm.py
+@@ -99,7 +99,7 @@ def propose_sequences(
+     ) -> Tuple[np.ndarray, np.ndarray]:
+         """Propose top `sequences_batch_size` sequences for evaluation."""
+         # Set the torch seed by generating a random integer from the pre-seeded self.rng
+-        torch.manual_seed(self.rng.integers(-(2 ** 31), 2 ** 31))
++        torch.manual_seed(self.rng.integers(-(2**31), 2**31))
+ 
+         measured_sequence_set = set(measured_sequences["sequence"])
+ 
+diff --git a/flexs/baselines/models/noisy_abstract_model.py b/flexs/baselines/models/noisy_abstract_model.py
+index 766998e..0010f45 100644
+--- a/flexs/baselines/models/noisy_abstract_model.py
++++ b/flexs/baselines/models/noisy_abstract_model.py
+@@ -90,7 +90,7 @@ def _fitness_function(self, sequences):
+             else:
+                 noise = np.random.choice(list(self.cache.values()))
+ 
+-            alpha = self.ss ** distance
++            alpha = self.ss**distance
+             new_fitnesses.append(alpha * signal + (1 - alpha) * noise)
+ 
+         fitnesses[~cached] = new_fitnesses
+diff --git a/flexs/utils/replay_buffers.py b/flexs/utils/replay_buffers.py
+index e51d9e9..6b8b562 100644
+--- a/flexs/utils/replay_buffers.py
++++ b/flexs/utils/replay_buffers.py
+@@ -212,8 +212,8 @@ def store(self, obs: np.ndarray, act: int, rew: float, next_obs: np.ndarray):
+         """Store experience and priority."""
+         super().store(obs, act, rew, next_obs)
+ 
+-        self.sum_tree[self.tree_ptr] = self.max_priority ** self.alpha
+-        self.min_tree[self.tree_ptr] = self.max_priority ** self.alpha
++        self.sum_tree[self.tree_ptr] = self.max_priority**self.alpha
++        self.min_tree[self.tree_ptr] = self.max_priority**self.alpha
+         self.tree_ptr = (self.tree_ptr + 1) % self.max_size
+ 
+     def sample_batch(self, beta: float = 0.4) -> Dict[str, np.ndarray]:
+@@ -246,8 +246,8 @@ def update_priorities(self, indices: List[int], priorities: np.ndarray):
+             assert priority > 0
+             assert 0 <= idx < len(self)
+ 
+-            self.sum_tree[idx] = priority ** self.alpha
+-            self.min_tree[idx] = priority ** self.alpha
++            self.sum_tree[idx] = priority**self.alpha
++            self.min_tree[idx] = priority**self.alpha
+ 
+             self.max_priority = max(self.max_priority, priority)
+ 

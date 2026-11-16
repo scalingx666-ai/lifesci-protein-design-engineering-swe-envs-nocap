@@ -1,0 +1,64 @@
+version = "1.0"
+
+[task]
+name = "default/moritztng__tt-bio-13"
+description = "Surface a worker's native stderr on failure instead of /dev/null"
+
+[metadata]
+difficulty = "large"
+category = "bugfix"
+keywords = [
+    "tt-bio",
+    "pr_diff",
+]
+
+[metadata.repo2env]
+pipeline = "pr_diff"
+pipeline_version = "0.3.0"
+repo = "moritztng/tt-bio"
+ref = "d55d08fb98e69ae8c098d3488705d9ed3b2704aa"
+reference = "https://github.com/moritztng/tt-bio/pull/13"
+source_access = "auto"
+built_at = "2026-11-16T04:26:51.273482+00:00"
+reward_kinds = [
+    "diff_similarity",
+]
+spec_version = "0.2.0"
+content_hash = "sha256:e7e5412112b48e4cd78e1486d3ee476956eda7d7981634ec8d331896d5f462ff"
+
+[metadata.repo2env.pr_diff]
+pr_merged_at = "2026-09-11T17:06:06Z"
+diff_format = "unified"
+context_files = [
+    "tests/test_worker_liveness.py",
+    "tt_bio/main.py",
+    "tt_bio/worker.py",
+]
+
+[metadata.repo2env.reward_calibration]
+baseline_reward = 0.0
+loc_changed = 108
+difficulty = "large"
+
+[metadata.repo2env.evaluation]
+schema_version = "1"
+status = "unverified"
+stage = "generation"
+reason_codes = [
+    "validation_not_run",
+]
+detail = "Generated task; validation has not been established."
+provenance = "unknown"
+evidence = []
+
+[metadata.repo2env.reproducibility]
+mode = "local_only"
+image_ref = "python:3.12-slim"
+image_tag = "python:3.12-slim"
+image_visibility = "private"
+
+[agent]
+timeout_sec = 1800.0
+
+[verifier]
+timeout_sec = 300.0

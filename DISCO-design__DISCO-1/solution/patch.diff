@@ -1,0 +1,13 @@
+diff --git a/configs/base.yaml b/configs/base.yaml
+index 701e361..61f8119 100644
+--- a/configs/base.yaml
++++ b/configs/base.yaml
+@@ -11,7 +11,7 @@ defaults:
+   - structure_encoder: default
+   - sequence_sampling_strategy: default
+   - experiment: null
+-  - effort: fast
++  - effort: max
+   - _self_
+ 
+ load_checkpoint_path: null

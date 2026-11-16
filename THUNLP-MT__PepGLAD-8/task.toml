@@ -1,0 +1,68 @@
+version = "1.0"
+
+[task]
+name = "default/THUNLP-MT__PepGLAD-8"
+description = "Update for dependencies, peptide restype, and support for openmm8.2.0"
+
+[metadata]
+difficulty = "large"
+category = "bugfix"
+keywords = [
+    "PepGLAD",
+    "pr_diff",
+]
+
+[metadata.repo2env]
+pipeline = "pr_diff"
+pipeline_version = "0.3.0"
+repo = "THUNLP-MT/PepGLAD"
+ref = "2474da017cc6c7341e3472c7cf7d2922511f76d6"
+reference = "https://github.com/THUNLP-MT/PepGLAD/pull/8"
+source_access = "auto"
+built_at = "2026-11-16T04:25:24.153629+00:00"
+reward_kinds = [
+    "diff_similarity",
+]
+spec_version = "0.2.0"
+content_hash = "sha256:c7ad8b5a90ee5927bc8b87d1ba0c8768d035bf2cdd21efd650bd805494b17c69"
+
+[metadata.repo2env.pr_diff]
+pr_merged_at = "2025-04-16T02:46:49Z"
+diff_format = "unified"
+context_files = [
+    ".gitignore",
+    "2025_env.yml",
+    "api/run.py",
+    "data/converter/blocks_interface.py",
+    "data/converter/pdb_to_list_blocks.py",
+    "data/format.py",
+    "evaluation/dG/openmm_relaxer.py",
+]
+
+[metadata.repo2env.reward_calibration]
+baseline_reward = 0.0
+loc_changed = 228
+difficulty = "large"
+
+[metadata.repo2env.evaluation]
+schema_version = "1"
+status = "unverified"
+stage = "generation"
+reason_codes = [
+    "validation_not_run",
+]
+detail = "Generated task; validation has not been established."
+provenance = "unknown"
+evidence = []
+
+[metadata.repo2env.reproducibility]
+mode = "local_only"
+image_ref = "python:3.12-slim"
+image_tag = "python:3.12-slim"
+image_visibility = "private"
+
+[agent]
+timeout_sec = 1800.0
+
+[verifier]
+timeout_sec = 300.0

@@ -1,0 +1,30 @@
+diff --git a/source/tools/build/options.settings b/source/tools/build/options.settings
+index e73130c1645..d6325486328 100644
+--- a/source/tools/build/options.settings
++++ b/source/tools/build/options.settings
+@@ -190,9 +190,9 @@ options = {
+ 	# BCL
+ 	"bcl",
+ 
+-	# PyTorch
+-	"pytorch",
+-	"pytorch_gpu",
++	# LibTorch
++	"torch",
++	"torch_gpu",
+     ],
+ 
+ 
+diff --git a/source/version.py b/source/version.py
+index 9a41ec0e574..e99928302c7 100755
+--- a/source/version.py
++++ b/source/version.py
+@@ -343,7 +343,7 @@ def generate_version_files():
+         r.push_back("tensorflow");
+       #endif
+ 
+-      #ifdef USE_PYTORCH
++      #ifdef USE_TORCH
+         r.push_back("torch");
+       #endif
+ 

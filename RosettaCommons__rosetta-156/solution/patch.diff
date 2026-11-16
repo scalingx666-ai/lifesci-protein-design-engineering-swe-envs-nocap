@@ -1,0 +1,66 @@
+diff --git a/source/src/python/PyRosetta/binder b/source/src/python/PyRosetta/binder
+index f8aeced37f6..51096f53f06 160000
+--- a/source/src/python/PyRosetta/binder
++++ b/source/src/python/PyRosetta/binder
+@@ -1 +1 @@
+-Subproject commit f8aeced37f6a84d77216268fe42633d9412422a0
++Subproject commit 51096f53f06259cb0a40734a45b74e4462dbdc57
+diff --git a/source/src/python/PyRosetta/build.py b/source/src/python/PyRosetta/build.py
+index 5c938e0d3e9..6f9eb4cd063 100755
+--- a/source/src/python/PyRosetta/build.py
++++ b/source/src/python/PyRosetta/build.py
+@@ -492,7 +492,7 @@ def key(k):
+ 
+     all_libs.sort(key=key, reverse=True)
+ 
+-    if Options.skip_namespaces:
++    if Options.skip_namespaces >= 0:
+         for l in all_libs[:]:
+             if (5 - Options.skip_namespaces ) - int(key(l)[0]) < 0: all_libs.remove(l)
+ 
+diff --git a/source/src/python/PyRosetta/rosetta.config b/source/src/python/PyRosetta/rosetta.config
+index 4130c0a0a00..ebd29ff392d 100644
+--- a/source/src/python/PyRosetta/rosetta.config
++++ b/source/src/python/PyRosetta/rosetta.config
+@@ -659,8 +659,9 @@
+ -function basic::Tracer::create_impl
+ -function basic::MemTracer::create_impl
+ 
+-# Bad/Ambiguous Overloads
+--function core::select:residue_selector::NotResidueSelector::NotResidueSelector(const NotResidueSelector &)
++# Bad/Ambiguous Overloads of copy-constructor, see test T121_core.ResidueSelector.test_residue_selector_ctors for a test case
++-function core::select::residue_selector::NotResidueSelector::NotResidueSelector(const class core::select::residue_selector::NotResidueSelector &)
++
+ 
+ # problem with bool specialization? error: address of overloaded function 'swap' does not match required type 'void (core::id::DOF_ID_Map<bool> &, core::id::DOF_ID_Map<bool> &)'
+ -function core::id::swap
+diff --git a/source/src/python/PyRosetta/src/test/T121_core.ResidueSelector.py b/source/src/python/PyRosetta/src/test/T121_core.ResidueSelector.py
+index a6f9251cfc2..de6521338e2 100644
+--- a/source/src/python/PyRosetta/src/test/T121_core.ResidueSelector.py
++++ b/source/src/python/PyRosetta/src/test/T121_core.ResidueSelector.py
+@@ -33,7 +33,7 @@ def test_residue_selectors(self):
+         chA = ChainSelector("A")
+         chB = ChainSelector("B")
+         chC = ChainSelector("C")
+-        
++
+         # Test AndResidueSelector
+         chA_and_chB = AndResidueSelector(chA, chB)
+         chA_and_chB_test = chA & chB
+@@ -120,7 +120,7 @@ def test_residue_selectors(self):
+ 
+         # Test in-place OrResidueSelector
+         chA_or_chC = OrResidueSelector(chA, chC)
+-        chA_or_chC_test = chA 
++        chA_or_chC_test = chA
+         chA_or_chC_test |= chC
+         self.assertListEqual(chA_or_chC.get_residues(pose), chA_or_chC_test.get_residues(pose))
+ 
+@@ -132,7 +132,6 @@ def test_residue_selectors(self):
+         self.assertListEqual([1, 2, 9, 10], xor_selector_test.get_residues(pose))
+ 
+     def test_residue_selector_ctors(self):
+-        return
+         pose = pyrosetta.pose_from_sequence("TESTING/MANY/CHAINS")
+         #Not
+         primary_selector = ResidueIndexSelector("2,4,6")

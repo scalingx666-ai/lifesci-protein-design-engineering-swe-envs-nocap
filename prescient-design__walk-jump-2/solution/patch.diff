@@ -1,0 +1,213 @@
+diff --git a/.gitignore b/.gitignore
+new file mode 100644
+index 0000000..b202efd
+--- /dev/null
++++ b/.gitignore
+@@ -0,0 +1,10 @@
++# python
++__pycache__
++*.py[cx]
++*.egg-info
++dist/
++build/
++.coverage*
++.mypy_cache/
++.pytest_cache/
++_skbuild
+\ No newline at end of file
+diff --git a/assets/conformity_example.png b/assets/conformity_example.png
+new file mode 100644
+index 0000000..1d9d6e3
+Binary files /dev/null and b/assets/conformity_example.png differ
+diff --git a/src/walkjump/conformity/README.md b/src/walkjump/conformity/README.md
+new file mode 100644
+index 0000000..242e9e2
+--- /dev/null
++++ b/src/walkjump/conformity/README.md
+@@ -0,0 +1,106 @@
++# Distributional Conformity Score
++
++The Distributional Conformity Score (DCS) is a measure of similarity between a generated sample and a reference distribution. DCS can be interpreted as the fraction of examples in the validation set of a reference distribution that are more dissimilar from the reference distribution than the evaluated data point, based on a similarity metric. A higher DCS score indicates greater conformity to the reference distribution.
++
++In the context of antibody design, DCS is used to evaluate the biological similarity of newly generated designs to a set of known expressing antibodies.
++
++## Computing features for antibodies
++To obtain features for DCS, you can use any relevant metrics such as labels derived from the AA sequence with Biopython (Cock et al., 2009) or ab-likeness. These can then be used as tabular data for density estimation and DCS computation (shown below).
++
++
++
++## Example
++This simplified example shows how to compute DCS. It assumes that features for the reference distribution and test data have been previously calculated.
++
++To keep things simple, we simulate the features of a reference distribution using a normal distribution and compute DCS on two sets of samples: one drawn from the same distribution and another from a distinct, uniform distribution [-2.5, 2.5].
++
++```python
++import torch
++
++# Pick some reference distribution
++mu = torch.zeros(5) 
++covariance_matrix = torch.eye(5)  
++reference_distribution = torch.distributions.MultivariateNormal(mu, covariance_matrix)
++
++X_train = reference_distribution.sample((1000,))
++X_val = reference_distribution.sample((200,))
++
++# Evaluate on samples from uniform distribution
++X_test_1 = reference_distribution.sample((100,))
++X_test_2 = torch.rand(100, 5) * 5 - 2.5
++
++```
++
++
++```python
++# Fit a density estimator to the training data
++
++from sklearn.neighbors import KernelDensity
++
++kde = KernelDensity(kernel='gaussian', bandwidth=0.2)
++kde.fit(X_train)
++```
++
++
++
++```python
++# Get log probability of validation data and test data
++log_prob_val = torch.from_numpy(kde.score_samples(X_val))
++
++log_prob_test_1 = torch.from_numpy(kde.score_samples(X_test_1))
++log_prob_test_2 = torch.from_numpy(kde.score_samples(X_test_2))
++```
++
++
++```python
++# Use validation log probabilities to compute conformity scores
++from walkjump.conformity import conformity_score
++
++conformity_test_1 = conformity_score(
++    log_prob_test_1,
++    log_prob_val
++)
++
++conformity_test_2 = conformity_score(
++    log_prob_test_2,
++    log_prob_val
++)
++```
++
++
++```python
++# Plot distribution of conformity scores for each evaluated set
++
++import matplotlib.pyplot as plt
++
++plt.violinplot([conformity_test_1, conformity_test_2])
++plt.ylabel("Conformity (p-value)")
++plt.xticks([1, 2], ["#1 normal distribution (0, I)", "#2 uniform distribution [-2.5, 2.5]", ])
++plt.show()
++```
++
++
++    
++![png](../../../assets/conformity_example.png)
++    
++
++
++
++```python
++# Mean conformity as a single statistic 
++
++#    - > 0.5: higher conformity, more similar to training data than validation data
++#    - 0.5: optimal conformity, as on average, the test and validation data are equally likely under the reference distribution
++#    - < 0.5: lower conformity, validation is more similar to training data than test data
++
++
++mean_conformity_test_1 = conformity_test_1.mean()
++mean_conformity_test_2 = conformity_test_2.mean()
++
++print(f"Mean conformity for #1: {mean_conformity_test_1:.2f}")
++print(f"Mean conformity for #2: {mean_conformity_test_2:.2f}")
++```
++
++    Mean conformity for #1: 0.53
++    Mean conformity for #2: 0.19
++
+diff --git a/src/walkjump/conformity/__init__.py b/src/walkjump/conformity/__init__.py
+new file mode 100644
+index 0000000..f8dcd35
+--- /dev/null
++++ b/src/walkjump/conformity/__init__.py
+@@ -0,0 +1 @@
++from ._conformity_score import conformity_score
+\ No newline at end of file
+diff --git a/src/walkjump/conformity/_conformity_score.py b/src/walkjump/conformity/_conformity_score.py
+new file mode 100644
+index 0000000..6aa831f
+--- /dev/null
++++ b/src/walkjump/conformity/_conformity_score.py
+@@ -0,0 +1,42 @@
++import torch
++from torch import Tensor
++
++
++def conformity_score(log_prob: Tensor, val_log_prob: Tensor) -> Tensor:
++    """Returns the conformity test statistic.
++
++    For each test likelihood value, compute the proportion of validation likelihoods
++    that are less than or equal to it. Between 0 and 1, where:
++
++    - > 0.5: higher conformity, more similar to training data than validation data
++    - 0.5: optimal conformity, as similar to training data as validation data 
++    - < 0.5: lower conformity, validation is more similar to training data than test data
++
++
++    References
++    * [A Tutorial on Conformal Prediction](https://jmlr.csail.mit.edu/papers/volume9/shafer08a/shafer08a.pdf)
++    * [Criteria of efficiency for conformal prediction](https://arxiv.org/pdf/1603.04416.pdf)
++
++
++    Parameters
++    ----------
++    log_prob : Tensor
++        The log probability of data to compute conformity scores for, shape (n)
++    val_log_prob : Tensor
++        The log probability of the validation data, shape (n_val)
++    Returns
++    -------
++    Tensor
++        The conformity test statistic, shape (n, )
++
++    """
++    n_val = val_log_prob.shape[0]
++
++    p_value = Tensor(
++        [
++            float("nan") if torch.isnan(s) else (val_log_prob <= s).sum().item() / (n_val + 1)
++            for s in log_prob
++        ]
++    )
++
++    return p_value
+diff --git a/tests/test_conformity.py b/tests/test_conformity.py
+new file mode 100644
+index 0000000..39e17f7
+--- /dev/null
++++ b/tests/test_conformity.py
+@@ -0,0 +1,17 @@
++from walkjump.conformity import conformity_score
++
++import pytest
++import torch
++
++def test_conformity_score():
++    log_prob = torch.tensor([1,2,4])
++    val_log_prob = torch.tensor([3,3,3,3])
++
++    output = conformity_score(log_prob, val_log_prob)
++
++    expected = torch.tensor([
++        0.0,
++        0.0,
++        0.8
++    ])
++    assert torch.allclose(output, expected)
+\ No newline at end of file

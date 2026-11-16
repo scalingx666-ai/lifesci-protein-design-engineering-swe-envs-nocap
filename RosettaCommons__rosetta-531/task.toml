@@ -1,0 +1,75 @@
+version = "1.0"
+
+[task]
+name = "default/RosettaCommons__rosetta-531"
+description = "Adding dask security to PyRosettaCluster"
+
+[metadata]
+difficulty = "large"
+category = "bugfix"
+keywords = [
+    "rosetta",
+    "pr_diff",
+]
+
+[metadata.repo2env]
+pipeline = "pr_diff"
+pipeline_version = "0.3.0"
+repo = "RosettaCommons/rosetta"
+ref = "2e0fc4e2c273ac181d92bd28b478afe808a306ea"
+reference = "https://github.com/RosettaCommons/rosetta/pull/531"
+source_access = "auto"
+built_at = "2026-11-15T22:36:29.208553+00:00"
+reward_kinds = [
+    "diff_similarity",
+]
+spec_version = "0.2.0"
+content_hash = "sha256:ffc4d12ec96142c79f5d7c2e50db213f4c5ec7b2f314ff570257e20f6543762d"
+
+[metadata.repo2env.pr_diff]
+pr_merged_at = "2025-10-10T19:25:43Z"
+diff_format = "unified"
+context_files = [
+    "source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/__init__.py",
+    "source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/core.py",
+    "source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/hkdf.py",
+    "source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/io.py",
+    "source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/logging_listeners.py",
+    "source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/logging_support.py",
+    "source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/multiprocessing.py",
+    "source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/security.py",
+    "source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/serialization.py",
+    "source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/toolkit.py",
+    "source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/utilities.py",
+    "source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/worker_plugins.py",
+    "source/src/python/PyRosetta/src/pyrosetta/tests/distributed/cluster/test_smoke.py",
+    "tests/benchmark/tests/__init__.py",
+]
+
+[metadata.repo2env.reward_calibration]
+baseline_reward = 0.0
+loc_changed = 1107
+difficulty = "large"
+
+[metadata.repo2env.evaluation]
+schema_version = "1"
+status = "unverified"
+stage = "generation"
+reason_codes = [
+    "validation_not_run",
+]
+detail = "Generated task; validation has not been established."
+provenance = "unknown"
+evidence = []
+
+[metadata.repo2env.reproducibility]
+mode = "local_only"
+image_ref = "python:3.12-slim"
+image_tag = "python:3.12-slim"
+image_visibility = "private"
+
+[agent]
+timeout_sec = 1800.0
+
+[verifier]
+timeout_sec = 300.0

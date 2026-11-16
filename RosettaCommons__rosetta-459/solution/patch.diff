@@ -1,0 +1,811 @@
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/__init__.py b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/__init__.py
+index 2c7f1623d87..1b8cbc9de3c 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/__init__.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/__init__.py
+@@ -23,6 +23,7 @@
+     produce,
+     recreate_environment,
+     reproduce,
++    requires_packed_pose,
+     reserve_scores,
+     run,
+     update_scores,
+@@ -43,11 +44,12 @@
+     "produce",
+     "recreate_environment",
+     "reproduce",
++    "requires_packed_pose",
+     "reserve_scores",
+     "run",
+     "update_scores",
+ ]
+-__version__: str = "2.0.0"
++__version__: str = "2.1.0"
+ 
+ _print_conda_warnings()
+ 
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/converter_tasks.py b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/converter_tasks.py
+index c6b85250b49..ed2e62ca184 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/converter_tasks.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/converter_tasks.py
+@@ -422,9 +422,17 @@ def _parse_dict(obj: Dict[Any, Any]) -> Dict[Any, Any]:
+     for k in obj.keys():
+         if k in ["client", "clients", "input_packed_pose"]:
+             raise NotImplementedError(
+-                f"The parameter '{k}' must be passed directly to reproduce(), "
++                f"The parameter '{k}' must be passed directly to `reproduce()`, "
+                 + "not as a member of the 'instance_kwargs' dictionary."
+             )
++        elif k == "filter_results":
++            raise ValueError(
++                f"The parameter '{k}' cannot be set as a PyRosettaCluster attribute "
++                + "in `reproduce()` because the saved 'decoy_ids' attribute from the "
++                + "original simulation depends on the original decoy output order from "
++                + "each protocol, so results must be filtered identically. Please remove "
++                + "this keyword argument to run `reproduce()`."
++            )
+     return obj
+ 
+ 
+@@ -433,6 +441,21 @@ def _default_none(obj: None) -> Dict[Any, Any]:
+     return {}
+ 
+ 
++@singledispatch
++def is_empty(obj: Any) -> NoReturn:
++    """Test whether a `PackedPose` object is empty."""
++    raise NotImplementedError(type(obj))
++
++@is_empty.register(type(None))
++def _from_none(obj: None) -> bool:
++    # Protocol results return a `None` object when a segmentation fault occurs with `ignore_errors=True`
++    return False
++
++@is_empty.register(PackedPose)
++def _from_packed(obj: PackedPose) -> bool:
++    return obj.empty()
++
++
+ def is_bytes(obj: Any) -> bool:
+     return isinstance(obj, bytes)
+ 
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/converters.py b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/converters.py
+index 59be8e6eb18..aef810c10d7 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/converters.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/converters.py
+@@ -30,6 +30,7 @@
+ import pyrosetta
+ import sys
+ import types
++import warnings
+ 
+ from functools import singledispatch
+ from pyrosetta.distributed.cluster.converter_tasks import (
+@@ -37,6 +38,7 @@
+     get_yml,
+     is_bytes,
+     is_dict,
++    is_empty,
+     is_packed,
+     parse_input_packed_pose as _parse_input_packed_pose,
+     to_int,
+@@ -63,6 +65,38 @@
+ S = TypeVar("S", bound=Serialization)
+ 
+ 
++def _parse_filter_results(obj: Any) -> Union[bool, NoReturn]:
++    """Parse the input `filter_results` attribute of PyRosettaCluster."""
++    _issue_future_warning = True
++
++    @singledispatch
++    def converter(obj: Any) -> NoReturn:
++        raise ValueError("'filter_results' must be of type `bool` or `NoneType`!")
++
++    @converter.register(type(None))
++    def _parse_none(obj: None) -> bool:
++        if _issue_future_warning:
++            warnings.warn(
++                (
++                    "As of PyRosettaCluster version 2.1.0, the 'filter_results' instance attribute "
++                    "is enabled by default, which automatically filters empty `PackedPose` objects between "
++                    "user-provided PyRosetta protocols to help reduce compute overhead. Please explicitly set "
++                    "either `filter_results=True` (the currently enabled, new setting) or `filter_results=False` "
++                    "(to revert to legacy behavior before version 2.1.0) to silence this notice. This notice "
++                    "will disappear in a future version of PyRosettaCluster."
++                ),
++                FutureWarning,
++                stacklevel=5,
++            )
++        return True
++
++    @converter.register(bool)
++    def _parse_bool(obj: bool) -> bool:
++        return obj
++
++    return converter(obj)
++
++
+ def _parse_decoy_ids(objs: Any) -> List[int]:
+     """
+     Normalize user-provided PyRosetta 'decoy_ids' to a `list` object containing `int` objects.
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/core.py b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/core.py
+index 392b8cbd5da..f6755976538 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/core.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/core.py
+@@ -206,6 +206,16 @@
+         It's recommended to set this option to at least 1 second, but longer times may
+         be used as a safety throttle in cases of overwhelmed dask scheduler processes.
+         Default: 3.0
++    filter_results: A `bool` object specifying whether or not to filter out empty
++        `PackedPose` objects between user-provided PyRosetta protocols. When a protocol
++        returns or yields `NoneType`, PyRosettaCluster converts it to an empty `PackedPose`
++        object that gets passed to the next protocol. If `True`, then filter out any empty
++        `PackedPose` objects where there are no residues in the conformation as given by
++        `Pose.empty()`, otherwise if `False` then continue to pass empty `PackedPose` objects
++        to the next protocol. This is used for filtering out decoys mid-trajectory through
++        user-provided PyRosetta protocols if protocols return or yield any `None`, empty
++        `Pose`, or empty `PackedPose` objects.
++        Default: True
+     save_all: A `bool` object specifying whether or not to save all of the returned
+         or yielded `Pose` and `PackedPose` objects from all user-provided
+         PyRosetta protocols. This option may be used for checkpointing trajectories.
+@@ -257,7 +267,9 @@
+ from datetime import datetime
+ from pyrosetta.distributed.cluster.base import TaskBase, _get_residue_type_set
+ from pyrosetta.distributed.cluster.converters import (
++    is_empty as _is_empty,
+     _parse_decoy_ids,
++    _parse_filter_results,
+     _parse_environment,
+     _parse_input_packed_pose,
+     _parse_logging_address,
+@@ -567,6 +579,12 @@ class PyRosettaCluster(IO[G], LoggingSupport[G], SchedulerManager[G], TaskBase[G
+         validator=[_validate_float, attr.validators.instance_of((float, int))],
+         converter=attr.converters.default_if_none(default=3.0),
+     )
++    filter_results = attr.ib(
++        type=bool,
++        default=None,
++        validator=attr.validators.instance_of(bool),
++        converter=_parse_filter_results,
++    )
+     save_all = attr.ib(
+         type=bool,
+         default=False,
+@@ -822,6 +840,8 @@ def _run(
+                             compressed_packed_pose,
+                             self.serializer.deepcopy_kwargs(kwargs),
+                         )
++                    if self.filter_results and _is_empty(self.serializer.decompress_packed_pose(compressed_packed_pose)):
++                        continue
+                     compressed_kwargs, pyrosetta_init_kwargs, protocol, clients_index, resource = self._setup_kwargs(
+                         kwargs, clients_indices, resources
+                     )
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/exceptions.py b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/exceptions.py
+index f297000467d..746b5563822 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/exceptions.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/exceptions.py
+@@ -133,6 +133,8 @@ def wrapper(
+                 + WorkerError._get_msg(protocol_name, ignore_errors)
+             )
+             if ignore_errors:
++                # Return a `NoneType` object to be converted to an empty `PackedPose` object
++                # when a non-system-exiting Python exception is raised
+                 result = None
+             else:
+                 raise
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/toolkit.py b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/toolkit.py
+index d7902fea6de..6407505e58b 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/toolkit.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/toolkit.py
+@@ -21,6 +21,7 @@
+     produce,
+     recreate_environment,
+     reproduce,
++    requires_packed_pose,
+     reserve_scores,
+     run,
+     update_scores,
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/tools.py b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/tools.py
+index 9e0ecb79e04..1de30d12698 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/tools.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/tools.py
+@@ -34,6 +34,7 @@
+ from functools import wraps
+ from pyrosetta.distributed.cluster.converters import _parse_protocols, _parse_yield_results
+ from pyrosetta.distributed.cluster.converter_tasks import (
++    is_empty,
+     get_protocols_list_of_str,
+     get_yml,
+     parse_client,
+@@ -427,6 +428,53 @@ def wrapper(packed_pose, **kwargs):
+     return cast(P, wrapper)
+ 
+ 
++def requires_packed_pose(func: P) -> Union[PackedPose, None, P]:
++    """
++    Use this as a Python decorator of any user-provided PyRosetta protocol.
++    If a user-provided PyRosetta protocol requires that the first argument
++    parameter be a non-empty `PackedPose` object, then return any received empty
++    `PackedPose` objects or `NoneType` objects and skip the decorated protocol,
++    otherwise run the decorated protocol.
++
++    If using `PyRosettaCluster(filter_results=False)` and the preceding protocol
++    returns or yields either `None`, an empty `Pose` object, or an empty `PackedPose`
++    object, then an empty `PackedPose` object is distributed to the next user-provided
++    PyRosetta protocol, in which case the next protocol and/or any downstream
++    protocols are skipped if they are decorated with this decorator. If using
++    `PyRosettaCluster(ignore_errors=True)` and an error is raised in the preceding
++    protocol, then a `NoneType` object is distributed to the next user-provided
++    PyRosetta protocol, in which case the next protocol and/or any downstream
++    protocols are skipped if they are decorated with this decorator.
++
++    For example:
++
++    @requires_packed_pose
++    def my_pyrosetta_protocol(packed_pose, **kwargs):
++        assert packed_pose.pose.size() > 0
++        return packed_pose
++
++    Args:
++        A user-provided PyRosetta function.
++
++    Returns:
++        The input `packed_pose` argument parameter if it is an empty `PackedPose` object
++        or a `NoneType` object, otherwise the results from the decorated protocol.
++    """
++    @wraps(func)
++    def wrapper(packed_pose, **kwargs):
++        _msg = "User-provided PyRosetta protocol '{0}' received and is duly returning {1} object."
++        if is_empty(packed_pose):
++            logging.info(_msg.format(func.__name__, "an empty `PackedPose`"))
++            return packed_pose
++        elif packed_pose is None:
++            logging.info(_msg.format(func.__name__, "a `NoneType`"))
++            return packed_pose
++        else:
++            return func(packed_pose, **kwargs)
++
++    return cast(P, wrapper)
++
++
+ def reproduce(
+     input_file: Optional[str] = None,
+     scorefile: Optional[str] = None,
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/distributed/packed_pose/core.py b/source/src/python/PyRosetta/src/pyrosetta/distributed/packed_pose/core.py
+index b43280acd9d..1a96917c9cf 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/distributed/packed_pose/core.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/distributed/packed_pose/core.py
+@@ -74,6 +74,9 @@ def clone(self):
+         result.scores = pickle.loads(pickle.dumps(self.scores))
+         return result
+ 
++    def empty(self):
++        return self.pose.empty()
++
+ 
+ def pack_result(func):
+     @functools.wraps(func)
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/tests/distributed/cluster/test_logging.py b/source/src/python/PyRosetta/src/pyrosetta/tests/distributed/cluster/test_logging.py
+index edc438f429e..7dc8b5f7a57 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/tests/distributed/cluster/test_logging.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/tests/distributed/cluster/test_logging.py
+@@ -147,6 +147,7 @@ def my_pyrosetta_protocol_2(packed_pose, **kwargs):
+                 save_all=False,
+                 system_info=None,
+                 pyrosetta_build=None,
++                filter_results=None,
+                 max_delay_time=3.0,
+             )
+             cluster.distribute(my_pyrosetta_protocol_1, my_pyrosetta_protocol_2)
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/tests/distributed/cluster/test_reproducibility.py b/source/src/python/PyRosetta/src/pyrosetta/tests/distributed/cluster/test_reproducibility.py
+index dd17f769d65..a9e4f5d14b9 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/tests/distributed/cluster/test_reproducibility.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/tests/distributed/cluster/test_reproducibility.py
+@@ -20,11 +20,16 @@
+ import tempfile
+ import unittest
+ 
+-from pyrosetta.distributed.cluster import PyRosettaCluster, reserve_scores, reproduce
++from pyrosetta.distributed.cluster import (
++    PyRosettaCluster,
++    requires_packed_pose,
++    reserve_scores,
++    reproduce,
++)
+ 
+ 
+ class TestReproducibility(unittest.TestCase):
+-    def test_reproducibility_packer_nstruct(self):
++    def test_reproducibility_packer_nstruct(self, filter_results=False):
+         """Test for PyRosettaCluster decoy reproducibility with an nstruct of 2."""
+         pyrosetta.distributed.init(
+             options="-run:constant_seed 1 -multithreading:total_threads 1",
+@@ -50,7 +55,7 @@ def my_pyrosetta_protocol(packed_pose, **kwargs):
+                 pose, "SEQUENCE", pose.sequence()
+             )
+             self.assertEqual(type(pose), type(pyrosetta.Pose()))
+-            return io.to_packed(pose)
++            return io.to_packed(pose), None, pyrosetta.Pose(), io.to_packed(pyrosetta.Pose())
+ 
+         with tempfile.TemporaryDirectory() as workdir:
+             nstruct = 2
+@@ -90,12 +95,13 @@ def my_pyrosetta_protocol(packed_pose, **kwargs):
+                 logs_dir_name="logs",
+                 ignore_errors=True,
+                 timeout=1.0,
+-                max_delay_time=3.0,
+                 sha1=None,
+                 dry_run=False,
+                 save_all=False,
+                 system_info=None,
+                 pyrosetta_build=None,
++                max_delay_time=0.0 if filter_results else 1.0,
++                filter_results=filter_results,
+             )
+ 
+             cluster.distribute(protocols=[my_pyrosetta_protocol])
+@@ -113,7 +119,7 @@ def my_pyrosetta_protocol(packed_pose, **kwargs):
+                 data[0]["instance"]["seeds"], data[1]["instance"]["seeds"]
+             )
+ 
+-    def test_reproducibility_minimizer_nstruct(self):
++    def test_reproducibility_minimizer_nstruct(self, filter_results=False):
+         """Test for PyRosettaCluster decoy reproducibility with an nstruct of 2."""
+         pyrosetta.distributed.init(
+             options="-run:constant_seed 1 -multithreading:total_threads 1",
+@@ -165,6 +171,8 @@ def test_reproducibility_minimizer_nstruct(self):
+                 save_all=False,
+                 system_info=None,
+                 pyrosetta_build=None,
++                max_delay_time=0.0 if filter_results else 1.0,
++                filter_results=filter_results,
+             )
+ 
+             def my_pyrosetta_protocol(packed_pose, **kwargs):
+@@ -220,7 +228,7 @@ def my_pyrosetta_protocol(packed_pose, **kwargs):
+ 
+                 scorefxn(pose)
+ 
+-                return pose
++                return pose, None, pyrosetta.Pose(), io.to_packed(pyrosetta.Pose())
+ 
+             cluster.distribute(my_pyrosetta_protocol,)
+ 
+@@ -237,7 +245,7 @@ def my_pyrosetta_protocol(packed_pose, **kwargs):
+                 data[0]["instance"]["seeds"], data[1]["instance"]["seeds"]
+             )
+ 
+-    def test_reproducibility_packer_separate(self):
++    def test_reproducibility_packer_separate(self, filter_results=False):
+         """
+         Test for PyRosettaCluster decoy reproducibility from two
+         separate PyRosettaCluster instantiations.
+@@ -273,7 +281,7 @@ def my_custom_protocol(packed_pose, **kwargs):
+                 pose, "SEQUENCE", pose.sequence()
+             )
+ 
+-            return pose
++            return pose, None, pyrosetta.Pose(), io.to_packed(pyrosetta.Pose())
+ 
+         with tempfile.TemporaryDirectory() as workdir:
+ 
+@@ -314,6 +322,8 @@ def my_custom_protocol(packed_pose, **kwargs):
+                 save_all=False,
+                 system_info=None,
+                 pyrosetta_build=None,
++                max_delay_time=0.0 if filter_results else 1.0,
++                filter_results=filter_results,
+             )
+ 
+             def sample_func(packed_pose, **kwargs):
+@@ -353,6 +363,8 @@ def sample_func(packed_pose, **kwargs):
+                 save_all=False,
+                 system_info=None,
+                 pyrosetta_build=None,
++                max_delay_time=0.0 if filter_results else 1.0,
++                filter_results=filter_results,
+             )
+ 
+             independent_cluster_instance.distribute(sample_func)
+@@ -370,9 +382,18 @@ def sample_func(packed_pose, **kwargs):
+                 data[0]["instance"]["seeds"], data[1]["instance"]["seeds"]
+             )
+ 
++    def test_reproducibility_packer_nstruct_filter_results(self, filter_results=True):
++        return self.test_reproducibility_packer_nstruct(filter_results=filter_results)
++
++    def test_reproducibility_minimizer_nstruct_filter_results(self, filter_results=True):
++        return self.test_reproducibility_minimizer_nstruct(filter_results=filter_results)
++
++    def test_reproducibility_packer_separate_filter_results(self, filter_results=True):
++        return self.test_reproducibility_packer_separate(filter_results=filter_results)
++
+ 
+ class TestReproducibilityMulti(unittest.TestCase):
+-    def test_reproducibility_packer_nstruct_multi(self):
++    def test_reproducibility_packer_nstruct_multi(self, filter_results=False):
+         """
+         Test for PyRosettaCluster decoy reproducibility with an nstruct of 2
+          with multiple protocols.
+@@ -408,9 +429,10 @@ def my_first_protocol(packed_pose, **kwargs):
+             )
+             pack_rotamers.apply(pose)
+ 
+-            return pose
++            return pose, None, pyrosetta.Pose(), io.to_packed(pyrosetta.Pose())
+ 
+         @reserve_scores
++        @requires_packed_pose
+         def my_second_protocol(packed_pose, **kwargs):
+             import pyrosetta
+             import pyrosetta.distributed.io as io
+@@ -418,6 +440,12 @@ def my_second_protocol(packed_pose, **kwargs):
+                 PackRotamersMover,
+             )
+ 
++            if packed_pose.pose.empty() or packed_pose is None:
++                raise ValueError(
++                    "The user-provided PyRosetta protocol is decorated with `@requires_packed_pose`."
++                )
++            assert packed_pose.pose.size() >= 1
++
+             self.assertEqual(
+                 dict(packed_pose.scores),
+                 {**dict(packed_pose.scores), **{"test_setPoseExtraScore": 123}},
+@@ -433,7 +461,7 @@ def my_second_protocol(packed_pose, **kwargs):
+             )
+             pack_rotamers.apply(pose)
+ 
+-            return pose
++            return pose, None, pyrosetta.Pose(), io.to_packed(pyrosetta.Pose())
+ 
+         def my_third_protocol(packed_pose, **kwargs):
+             import pyrosetta
+@@ -442,6 +470,10 @@ def my_third_protocol(packed_pose, **kwargs):
+                 PackRotamersMover,
+             )
+ 
++            if packed_pose.pose.empty():
++                assert filter_results == False
++                return None
++
+             self.assertEqual(
+                 dict(packed_pose.scores),
+                 {**dict(packed_pose.scores), **{"test_setPoseExtraScore": 123}},
+@@ -456,7 +488,7 @@ def my_third_protocol(packed_pose, **kwargs):
+             pyrosetta.rosetta.core.pose.setPoseExtraScore(
+                 pose, "SEQUENCE", pose.sequence()
+             )
+-            return pose
++            return pose, None, pyrosetta.Pose(), io.to_packed(pyrosetta.Pose())
+ 
+         with tempfile.TemporaryDirectory() as workdir:
+ 
+@@ -501,6 +533,8 @@ def my_third_protocol(packed_pose, **kwargs):
+                     save_all=False,
+                     system_info=None,
+                     pyrosetta_build=None,
++                    max_delay_time=0.0 if filter_results else 1.0,
++                    filter_results=filter_results,
+                 ).generate(*protocols)
+             )
+ 
+@@ -517,7 +551,7 @@ def my_third_protocol(packed_pose, **kwargs):
+                 data[0]["instance"]["seeds"], data[1]["instance"]["seeds"]
+             )
+ 
+-    def test_reproducibility_packer_nstruct_multi_decoy_ids(self):
++    def test_reproducibility_packer_nstruct_multi_decoy_ids(self, filter_results=False):
+         """Test for PyRosettaCluster decoy reproducibility with an nstruct of 2
+         with multiple protocols and a fixed decoy_ids list."""
+         pyrosetta.distributed.init(
+@@ -550,8 +584,16 @@ def my_first_protocol(packed_pose, **kwargs):
+             pack_rotamers.apply(pose)
+             dummy_pose = io.to_pose(io.pose_from_sequence("W" * 6))
+ 
+-            return pose.clone(), dummy_pose.clone(), dummy_pose.clone()
++            return (
++                pose.clone(),
++                dummy_pose.clone(),
++                dummy_pose.clone(),
++                None,
++                pyrosetta.Pose(),
++                io.to_packed(pyrosetta.Pose()),
++            )
+ 
++        @requires_packed_pose
+         def my_second_protocol(packed_pose, **kwargs):
+             """In my_second_protocol, the desired decoy_id to keep is 1."""
+             import pyrosetta
+@@ -559,6 +601,12 @@ def my_second_protocol(packed_pose, **kwargs):
+             from pyrosetta.rosetta.protocols.simple_moves import VirtualRootMover
+             from pyrosetta.rosetta.protocols.rosetta_scripts import XmlObjects
+ 
++            if packed_pose.empty() or packed_pose is None:
++                raise ValueError(
++                    "The user-provided PyRosetta protocol is decorated with `@requires_packed_pose`."
++                )
++            assert packed_pose.pose.size() >= 1
++
+             pose = io.to_pose(packed_pose)
+             scorefxn = pyrosetta.create_score_function("ref2015_cst.wts")
+             scorefxn(pose)
+@@ -614,7 +662,14 @@ def my_second_protocol(packed_pose, **kwargs):
+             scorefxn(pose)
+             dummy_pose = io.to_pose(io.pose_from_sequence("W" * 6))
+ 
+-            return dummy_pose.clone(), pose, dummy_pose.clone()
++            return (
++                dummy_pose.clone(),
++                pose,
++                dummy_pose.clone(),
++                None,
++                pyrosetta.Pose(),
++                io.to_packed(pyrosetta.Pose()),
++            )
+ 
+         def my_third_protocol(packed_pose, **kwargs):
+             """In my_third_protocol, the desired decoy_id to keep is 2."""
+@@ -624,6 +679,11 @@ def my_third_protocol(packed_pose, **kwargs):
+                 PackRotamersMover,
+             )
+ 
++            if packed_pose.empty():
++                assert packed_pose.pose.empty()
++                assert filter_results == False
++                return None
++
+             pose = io.to_pose(packed_pose)
+             pack_rotamers = PackRotamersMover(
+                 scorefxn=pyrosetta.create_score_function("ref2015.wts"),
+@@ -683,6 +743,8 @@ def my_third_protocol(packed_pose, **kwargs):
+                 save_all=False,
+                 system_info=None,
+                 pyrosetta_build=None,
++                max_delay_time=0.0 if filter_results else 1.0,
++                filter_results=filter_results,
+             ).distribute(protocols=protocols)
+ 
+             with open(os.path.join(output_path, "scores.json"), "r") as f:
+@@ -701,7 +763,7 @@ def my_third_protocol(packed_pose, **kwargs):
+                 data[0]["instance"]["decoy_ids"], data[1]["instance"]["decoy_ids"]
+             )
+ 
+-    def test_reproducibility_from_reproduce(self):
++    def test_reproducibility_from_reproduce(self, filter_results=False):
+         """Test for PyRosettaCluster decoy reproducibility from instance kwargs."""
+         pyrosetta.distributed.init(
+             options="-run:constant_seed 1 -multithreading:total_threads 1",
+@@ -733,7 +795,14 @@ def my_first_protocol(packed_pose, **kwargs):
+             pack_rotamers.apply(pose)
+             dummy_pose = io.to_pose(io.pose_from_sequence("W" * 6))
+ 
+-            return pose.clone(), dummy_pose.clone(), dummy_pose.clone()
++            return (
++                pose.clone(),
++                dummy_pose.clone(),
++                None,
++                pyrosetta.Pose(),
++                io.to_packed(pyrosetta.Pose()),
++                dummy_pose.clone(),
++            )
+ 
+         def my_second_protocol(packed_pose, **kwargs):
+             """In my_second_protocol, the desired decoy_id to keep is 1."""
+@@ -742,6 +811,10 @@ def my_second_protocol(packed_pose, **kwargs):
+             from pyrosetta.rosetta.protocols.simple_moves import VirtualRootMover
+             from pyrosetta.rosetta.protocols.rosetta_scripts import XmlObjects
+ 
++            if packed_pose.pose.empty():
++                assert filter_results == False
++                return None
++
+             pose = io.to_pose(packed_pose)
+             scorefxn = pyrosetta.create_score_function("ref2015_cst.wts")
+             scorefxn(pose)
+@@ -797,8 +870,16 @@ def my_second_protocol(packed_pose, **kwargs):
+             scorefxn(pose)
+             dummy_pose = io.to_pose(io.pose_from_sequence("W" * 6))
+ 
+-            return dummy_pose.clone(), pose, dummy_pose.clone()
++            return (
++                dummy_pose.clone(),
++                pose,
++                dummy_pose.clone(),
++                None,
++                pyrosetta.Pose(),
++                io.to_packed(pyrosetta.Pose()),
++            )
+ 
++        @requires_packed_pose
+         def my_third_protocol(packed_pose, **kwargs):
+             """In my_third_protocol, the desired decoy_id to keep is 2."""
+             import pyrosetta
+@@ -807,6 +888,12 @@ def my_third_protocol(packed_pose, **kwargs):
+                 PackRotamersMover,
+             )
+ 
++            if packed_pose.pose.empty() or packed_pose is None:
++                raise ValueError(
++                    "The user-provided PyRosetta protocol is decorated with `@requires_packed_pose`."
++                )
++            assert packed_pose.pose.size() >= 1
++
+             pose = io.to_pose(packed_pose)
+             pack_rotamers = PackRotamersMover(
+                 scorefxn=pyrosetta.create_score_function("ref2015.wts"),
+@@ -867,6 +954,8 @@ def my_third_protocol(packed_pose, **kwargs):
+                 save_all=False,
+                 system_info=None,
+                 pyrosetta_build=None,
++                max_delay_time=0.0 if filter_results else 1.0,
++                filter_results=filter_results,
+             ).distribute(*protocols)
+ 
+             scorefile_path = os.path.join(output_path, scorefile_name)
+@@ -958,6 +1047,15 @@ def my_third_protocol(packed_pose, **kwargs):
+                 reproduce2_record["instance"]["decoy_ids"],
+             )
+ 
++    def test_reproducibility_packer_nstruct_multi_filter_results(self):
++        return self.test_reproducibility_packer_nstruct_multi(filter_results=True)
++
++    def test_reproducibility_packer_nstruct_multi_decoy_ids_filter_results(self):
++        return self.test_reproducibility_packer_nstruct_multi_decoy_ids(filter_results=True)
++
++    def test_reproducibility_from_reproduce_filter_results(self):
++        return self.test_reproducibility_from_reproduce(filter_results=True)
++
+ 
+ if __name__ == "__main__":
+     unittest.main(verbosity=2)
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/tests/distributed/cluster/test_smoke.py b/source/src/python/PyRosetta/src/pyrosetta/tests/distributed/cluster/test_smoke.py
+index 24e5a3914d2..202b7ad676b 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/tests/distributed/cluster/test_smoke.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/tests/distributed/cluster/test_smoke.py
+@@ -125,6 +125,7 @@ def my_pyrosetta_protocol(packed_pose, **kwargs):
+                 save_all=False,
+                 system_info=None,
+                 pyrosetta_build=None,
++                filter_results=True,
+             )
+             cluster = PyRosettaCluster(**instance_kwargs)
+             cluster.distribute(
+@@ -189,6 +190,7 @@ def protocol_with_error(packed_pose, **kwargs):
+                 save_all=False,
+                 system_info=None,
+                 pyrosetta_build=None,
++                filter_results=False,
+             )
+             cluster = PyRosettaCluster(**instance_kwargs)
+             cluster.distribute(protocol_with_error)
+@@ -228,6 +230,7 @@ def protocol_with_error(packed_pose, **kwargs):
+                 save_all=False,
+                 system_info=None,
+                 pyrosetta_build=None,
++                filter_results=False,
+             )
+             cluster = PyRosettaCluster(**instance_kwargs)
+             with self.assertRaises(WorkerError):
+@@ -522,6 +525,7 @@ def my_tenth_protocol(packed_pose, **kwargs):
+                 save_all=False,
+                 system_info=None,
+                 pyrosetta_build=None,
++                filter_results=False,
+             ).distribute(
+                 protocols=(
+                     my_first_protocol,
+@@ -616,6 +620,7 @@ def my_third_protocol(packed_pose, **kwargs):
+                 save_all=False,
+                 system_info=None,
+                 pyrosetta_build=None,
++                filter_results=True,
+             ).distribute(protocols=(my_first_protocol, my_second_protocol, my_third_protocol))
+ 
+             cluster = PyRosettaCluster(
+@@ -654,6 +659,7 @@ def my_third_protocol(packed_pose, **kwargs):
+                 save_all=False,
+                 system_info=None,
+                 pyrosetta_build=None,
++                filter_results=True,
+             )
+ 
+             cluster.distribute(protocols=[my_first_protocol, my_second_protocol, my_third_protocol])
+@@ -718,6 +724,7 @@ def my_pyrosetta_protocol(input_packed_pose, **kwargs):
+                 save_all=True,
+                 system_info=None,
+                 pyrosetta_build=None,
++                filter_results=True,
+             )
+             protocol_args = [my_pyrosetta_protocol] * _total_protocols
+             cluster.distribute(*protocol_args)
+@@ -795,6 +802,7 @@ def my_pyrosetta_protocol(input_packed_pose, **kwargs):
+                 save_all=True,
+                 system_info=None,
+                 pyrosetta_build=None,
++                filter_results=True,
+             ).distribute(protocols=[my_pyrosetta_protocol] * _total_protocols)
+ 
+             self.assertFalse(os.path.exists(os.path.join(output_path, scorefile_name)))
+@@ -1001,15 +1009,14 @@ def my_pyrosetta_protocol_2(packed_pose, **kwargs):
+                 save_all=False,
+                 system_info=None,
+                 pyrosetta_build=None,
++                filter_results=False,
+             )
+             produce(**instance_kwargs)
+ 
+-            for worker in cluster_1.workers.values():
+-                worker.close_gracefully()
+             client_1.close()
+-            for worker in cluster_2.workers.values():
+-                worker.close_gracefully()
++            cluster_1.close()
+             client_2.close()
++            cluster_2.close()
+ 
+ 
+ class ResourcesTest(unittest.TestCase):
+@@ -1098,12 +1105,12 @@ def my_pyrosetta_protocol_2(packed_pose, **kwargs):
+                 save_all=False,
+                 system_info=None,
+                 pyrosetta_build=None,
++                filter_results=True,
+             )
+             produce(**instance_kwargs)
+ 
+-            for worker in cluster.workers.values():
+-                worker.close_gracefully()
+             client.close()
++            cluster.close()
+ 
+             decoy_files = glob.glob(os.path.join(output_path, decoy_dir_name, "*", "*.bz2"))
+             self.assertEqual(len(decoy_files), 3)
+@@ -1227,6 +1234,7 @@ def my_pyrosetta_protocol_2(packed_pose, **kwargs):
+                 save_all=False,
+                 system_info=None,
+                 pyrosetta_build=None,
++                filter_results=True,
+             )
+             produce(**instance_kwargs)
+ 
+@@ -1236,12 +1244,10 @@ def my_pyrosetta_protocol_2(packed_pose, **kwargs):
+                 scores_dict = get_scores_dict(decoy_file)
+                 self.assertEqual(scores_dict["scores"]["sequence"], sequence)
+ 
+-            for worker in cluster_1.workers.values():
+-                worker.close_gracefully()
+             client_1.close()
+-            for worker in cluster_2.workers.values():
+-                worker.close_gracefully()
++            cluster_1.close()
+             client_2.close()
++            cluster_2.close()
+ 
+ 
+ class ScoresTest(unittest.TestCase):
+@@ -1288,6 +1294,7 @@ def setUpClass(cls):
+             save_all=False,
+             system_info=None,
+             pyrosetta_build=None,
++            filter_results=True,
+         )
+ 
+     @classmethod
+@@ -1510,6 +1517,7 @@ def setUp(self):
+             pyrosetta_build=None,
+             dry_run=False,
+             save_all=False,
++            filter_results=True,
+         )
+ 
+     def tearDown(self):
+@@ -1915,6 +1923,7 @@ def test_timing_multi_instance(self):
+             **self.instance_kwargs,
+             **setup_kwargs,
+             "client": self.clients[1],
++            "simulation_name": "test_timing_multi_instance",
+         }
+         for k in ("protocols", "clients_indices", "resources"):
+             instance_kwargs_2.pop(k, None)

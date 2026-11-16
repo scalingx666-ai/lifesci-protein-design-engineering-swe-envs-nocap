@@ -1,0 +1,70 @@
+version = "1.0"
+
+[task]
+name = "default/NVIDIA-BioNeMo__BioNeMo-Inference-Runtime-1"
+description = "ci: gate PRs on Actions and bridge to Blossom"
+
+[metadata]
+difficulty = "large"
+category = "bugfix"
+keywords = [
+    "BioNeMo-Inference-Runtime",
+    "pr_diff",
+]
+
+[metadata.repo2env]
+pipeline = "pr_diff"
+pipeline_version = "0.3.0"
+repo = "NVIDIA-BioNeMo/BioNeMo-Inference-Runtime"
+ref = "6e7caa01e1d25eab763fbf3873b69992beb473ab"
+reference = "https://github.com/NVIDIA-BioNeMo/BioNeMo-Inference-Runtime/pull/1"
+source_access = "auto"
+built_at = "2026-11-16T05:04:58.087807+00:00"
+reward_kinds = [
+    "diff_similarity",
+]
+spec_version = "0.2.0"
+content_hash = "sha256:3e172dcef86ae284b4200dc57f4d8dc9046f25176626953d81b7414acacabd83"
+
+[metadata.repo2env.pr_diff]
+pr_merged_at = "2026-08-19T16:58:02Z"
+diff_format = "unified"
+context_files = [
+    ".github/actions/cubin-packs/action.yml",
+    ".github/actions/prek/action.yml",
+    ".github/actions/python/action.yml",
+    ".github/scripts/check-dco.sh",
+    ".github/scripts/check-pr-title.sh",
+    ".github/workflows/blossom-ci.yml",
+    ".github/workflows/ci.yml",
+    ".github/workflows/pr.yml",
+    ".github/workflows/wheel.yml",
+]
+
+[metadata.repo2env.reward_calibration]
+baseline_reward = 0.0
+loc_changed = 720
+difficulty = "large"
+
+[metadata.repo2env.evaluation]
+schema_version = "1"
+status = "unverified"
+stage = "generation"
+reason_codes = [
+    "validation_not_run",
+]
+detail = "Generated task; validation has not been established."
+provenance = "unknown"
+evidence = []
+
+[metadata.repo2env.reproducibility]
+mode = "local_only"
+image_ref = "python:3.12-slim"
+image_tag = "python:3.12-slim"
+image_visibility = "private"
+
+[agent]
+timeout_sec = 1800.0
+
+[verifier]
+timeout_sec = 300.0

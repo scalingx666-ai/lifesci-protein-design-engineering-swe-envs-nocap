@@ -1,0 +1,73 @@
+version = "1.0"
+
+[task]
+name = "default/cytokineking__FreeBindCraft-36"
+description = "Use unchunked Metal execution by default"
+
+[metadata]
+difficulty = "large"
+category = "bugfix"
+keywords = [
+    "FreeBindCraft",
+    "pr_diff",
+]
+
+[metadata.repo2env]
+pipeline = "pr_diff"
+pipeline_version = "0.3.0"
+repo = "cytokineking/FreeBindCraft"
+ref = "056ff605371ce46174f2cffb7ea44e7337df4ee5"
+reference = "https://github.com/cytokineking/FreeBindCraft/pull/36"
+source_access = "auto"
+built_at = "2026-11-16T03:23:42.610031+00:00"
+reward_kinds = [
+    "diff_similarity",
+]
+spec_version = "0.2.0"
+content_hash = "sha256:05a7236b93961369e3780dea6fd4898c722ae5b9de672871e5f9b74941fdad1e"
+
+[metadata.repo2env.pr_diff]
+pr_merged_at = "2026-10-29T04:13:26Z"
+diff_format = "unified"
+context_files = [
+    "APPLE_SILICON.md",
+    "README.md",
+    "installation/apply_colabdesign_metal.py",
+    "installation/colabdesign-metal/.gitattributes",
+    "installation/colabdesign-metal/README.md",
+    "installation/colabdesign-metal/manifest.json",
+    "installation/colabdesign-metal/metal_execution_policy.py",
+    "installation/colabdesign-metal/unchunked-preparation.patch",
+    "installation/install_apple_python.py",
+    "tests/test_colabdesign_metal_installer.py",
+    "tests/test_metal_execution_policy.py",
+    "tests/test_metal_prep_integration.py",
+]
+
+[metadata.repo2env.reward_calibration]
+baseline_reward = 0.0
+loc_changed = 1127
+difficulty = "large"
+
+[metadata.repo2env.evaluation]
+schema_version = "1"
+status = "unverified"
+stage = "generation"
+reason_codes = [
+    "validation_not_run",
+]
+detail = "Generated task; validation has not been established."
+provenance = "unknown"
+evidence = []
+
+[metadata.repo2env.reproducibility]
+mode = "local_only"
+image_ref = "python:3.12-slim"
+image_tag = "python:3.12-slim"
+image_visibility = "private"
+
+[agent]
+timeout_sec = 1800.0
+
+[verifier]
+timeout_sec = 300.0

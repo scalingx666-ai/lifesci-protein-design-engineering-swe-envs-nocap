@@ -1,0 +1,1866 @@
+diff --git a/config.json b/config.json
+index dabce20..57b4891 100644
+--- a/config.json
++++ b/config.json
+@@ -60,7 +60,8 @@
+         "ProtSSN_k30_h512":{"input_score_name":"ProtSSN_k30_h512", "location":"ProtSSN", "directionality": 1, "key": "mutant","model_type":"Hybrid - Structure & PLM"},
+         "ProtSSN_k30_h768":{"input_score_name":"ProtSSN_k30_h768", "location":"ProtSSN", "directionality": 1, "key": "mutant","model_type":"Hybrid - Structure & PLM"},
+         "ProtSSN_k30_h1280":{"input_score_name":"ProtSSN_k30_h1280", "location":"ProtSSN", "directionality": 1, "key": "mutant","model_type":"Hybrid - Structure & PLM"},
+-        "ProtSSN_ensemble":{"input_score_name":"ProtSSN_ensemble", "location":"ProtSSN", "directionality": 1, "key": "mutant","model_type":"Hybrid - Structure & PLM"}
++        "ProtSSN_ensemble":{"input_score_name":"ProtSSN_ensemble", "location":"ProtSSN", "directionality": 1, "key": "mutant","model_type":"Hybrid - Structure & PLM"},
++        "MULAN_small":{"input_score_name":"MULAN_score", "location":"MULAN/MULAN_small", "directionality": 1, "key": "mutant", "model_type":"Protein language model"}
+     },
+     "model_list_zero_shot_indels_DMS":{
+         "Unirep":{"input_score_name":"Unirep_score", "location":"UniRep", "directionality": -1, "key": "mutated_sequence","model_type":"Protein language model"},
+diff --git a/proteingym/baselines/mulan/.DS_Store b/proteingym/baselines/mulan/.DS_Store
+new file mode 100644
+index 0000000..26d7e70
+Binary files /dev/null and b/proteingym/baselines/mulan/.DS_Store differ
+diff --git a/proteingym/baselines/mulan/compute_fitness.py b/proteingym/baselines/mulan/compute_fitness.py
+new file mode 100644
+index 0000000..8287c43
+--- /dev/null
++++ b/proteingym/baselines/mulan/compute_fitness.py
+@@ -0,0 +1,261 @@
++import os
++os.environ["HF_HOME"] = '/workspace/data/transformers_cache'
++os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
++os.environ['CUDA_VISIBLE_DEVICES'] = '7'
++import warnings
++warnings.filterwarnings('ignore')
++
++import numpy as np
++import torch
++from torch.utils.data import DataLoader, Subset
++
++from mulan.dataset import ProteinDataset, data_collate_fn_dynamic
++from mulan.model import StructEsmForMaskedLM
++from mulan.model_utils import auto_detect_base_tokenizer
++
++import os
++import argparse
++
++import numpy as np
++import pandas as pd
++
++import torch
++from tqdm import tqdm
++
++
++
++def predict_mut(model, esm_tokenizer, dataloader, use_foldseek, mut_info: str) -> float:
++    """
++    Predict the mutational effect of a given mutation
++    Args:
++        seq: The wild type sequence
++
++        mut_info: The mutation information in the format of "A123B", where A is the original amino acid, 123 is the
++                  position and B is the mutated amino acid. If multiple mutations are provided, they should be
++                  separated by colon, e.g. "A123B:C124D".
++
++    Returns:
++        The predicted mutational effect
++    """
++    foldseek_struc_vocab = "pynwrqhgdlvtmfsaeikc#"
++
++    with torch.no_grad():
++        for batch in dataloader:
++            batch['input_ids'], batch['struct_inputs'] = mask_mutated_positions(
++                batch['input_ids'], 
++                batch['struct_inputs'], 
++                esm_tokenizer, 
++                mut_info,
++            )
++            struct_inputs = [struct_input.to(model.device) for struct_input in batch['struct_inputs']]
++            logits = model(
++                input_ids=batch['input_ids'].to(model.device),
++                attention_mask=batch['attention_mask'].to(model.device),
++                struct_inputs=struct_inputs,
++                output_hidden_states=False,
++            )["logits"]["scores"]
++
++            probs = logits.softmax(dim=-1)
++        
++            score = 0
++            for single in mut_info.split(":"):
++                ori_aa, pos, mut_aa = single[0], int(single[1:-1]), single[-1]
++                if use_foldseek:
++                    ori_st = esm_tokenizer.get_vocab()[ori_aa + foldseek_struc_vocab[0]]
++                    mut_st = esm_tokenizer.get_vocab()[mut_aa + foldseek_struc_vocab[0]]
++                    
++                    ori_prob = probs[0, pos, ori_st: ori_st + len(foldseek_struc_vocab)].sum()
++                    mut_prob = probs[0, pos, mut_st: mut_st + len(foldseek_struc_vocab)].sum()
++                else:
++                    ori_st = esm_tokenizer.get_vocab()[ori_aa]
++                    mut_st = esm_tokenizer.get_vocab()[mut_aa]
++                    
++                    ori_prob = probs[0, pos, ori_st]
++                    mut_prob = probs[0, pos, mut_st]                
++                score += torch.log(mut_prob / ori_prob)
++
++    return score
++
++
++def calc_fitness(model, dataloader, DMS_data, esm_tokenizer, use_foldseek, mutation_col='mutant', 
++                 offset_idx=1):
++    log_proba_list = []
++    for mut_info in tqdm(DMS_data[mutation_col]):
++        mutations = []
++        for row in mut_info.split(":"):
++            ori, pos, mut = row[0], row[1: -1], row[-1]
++            pos = int(pos) - offset_idx + 1
++            mutations.append(f"{ori}{pos}{mut}")
++
++        all_mut = ":".join(mutations)
++        score = predict_mut(model, esm_tokenizer, dataloader, use_foldseek, all_mut).item()
++        log_proba_list.append(score)
++    
++    return np.array(log_proba_list)
++
++
++def get_mutated_sequence(focus_seq, mutant, start_idx=1, AA_vocab="ACDEFGHIKLMNPQRSTVWY"):
++    """
++    Helper function that mutates an input sequence (focus_seq) via an input mutation triplet (substitutions only).
++    Mutation triplet are typically based on 1-indexing: start_idx is used for switching to 0-indexing.
++    """
++    mutated_seq = list(focus_seq)
++    for mutation in mutant.split(":"):
++        try:
++            from_AA, position, to_AA = mutation[0], int(mutation[1:-1]), mutation[-1]
++        except:
++            print("Issue with mutant: " + str(mutation))
++        relative_position = position - start_idx
++        assert (from_AA == focus_seq[relative_position]), "Invalid from_AA or mutant position: " + str(
++            mutation) + " from_AA: " + str(from_AA) + " relative pos: " + str(relative_position) + " focus_seq: " + str(
++            focus_seq)
++        assert (to_AA in AA_vocab), "Mutant to_AA is invalid: " + str(mutation)
++        mutated_seq[relative_position] = to_AA
++    return "".join(mutated_seq)
++
++
++def mask_mutated_positions(inputs, struct_inputs, esm_tokenizer, mut_info):
++    positions = np.array([int(single[1:-1]) for single in mut_info.split(":")])
++
++    masked_indices = torch.zeros_like(inputs, dtype=bool, device=inputs.device)
++    masked_indices[0, positions] = True
++
++    inputs[masked_indices] = esm_tokenizer.mask_token_id
++    struct_inputs[0].masked_fill_(masked_indices.unsqueeze(-1), value=-4.)
++
++    return inputs, struct_inputs
++
++
++def main():
++    """
++    Main script to score sets of mutated protein sequences (substitutions or indels) with MULAN.
++    """
++    parser = argparse.ArgumentParser(description='MULAN scoring')
++    parser.add_argument('--MULAN_model_name_or_path',
++                        default="DFrolova/MULAN-small",
++                        type=str, help='Name of or path to MULAN model')
++    parser.add_argument('--DMS_reference_file_path',
++                        default='reference_files/DMS_substitutions.csv',
++                        type=str, help='Path of DMS_substitutions.csv file')
++    parser.add_argument('--DMS_data_folder',
++                        default='/workspace/data/docking/downstream_tasks/ProteinGym_data/DMS_ProteinGym_substitutions',
++                        type=str, help='Path of DMS data folder')
++    parser.add_argument('--structure_data_folder', 
++                        default='/workspace/data/docking/downstream_tasks/ProteinGym_data/ProteinGym_AF2_structures/', 
++                        type=str, help='Path of structure folder')
++    parser.add_argument('--DMS_index', type=int, help='DMS index')
++    parser.add_argument('--use_foldseek', type=bool, help='Whether the model uses foldseek sequences')
++    parser.add_argument('--foldseek_path', 
++                        default='bin/foldseek', 
++                        type=str, help='Path of foldseek binary file')
++    parser.add_argument('--output_scores_folder', 
++                        default='/workspace/data/docking/downstream_tasks/ProteinGym_results/sub_results/MULAN/MULAN_small/', type=str,
++                        help='Name of folder to write model scores to')
++    parser.add_argument('--output_dataset_folder', 
++                        default='/workspace/data/docking/downstream_tasks/ProteinGym_results/DMS_substitution_dataset/', type=str,
++                        help='Name of folder to save preprocessed MULAN dataset to')
++    parser.add_argument('--indel_mode', action='store_true',
++                        help='Whether to score sequences with insertions and deletions')
++    args = parser.parse_args()
++
++    use_foldseek_sequences = args.use_foldseek
++
++    # preprocess the dataset
++    dataset = ProteinDataset(
++        protein_data_path=args.structure_data_folder, 
++        saved_dataset_path=args.output_dataset_folder,
++        use_foldseek_sequences=use_foldseek_sequences,
++        is_experimental_structure=False,
++        extract_foldseek_in_tokenizer=use_foldseek_sequences,
++        foldseek_path=args.foldseek_path,
++    )
++
++    # load model
++    model = StructEsmForMaskedLM.from_pretrained(
++        args.MULAN_model_name_or_path,
++        device_map="auto",
++    )
++    device = 'cuda' if torch.cuda.is_available() else 'cpu'
++    print('device', device)
++    model.to(device)
++
++    # prepare the dataloader
++    esm_tokenizer = auto_detect_base_tokenizer(model.config, use_foldseek_sequences)
++
++    # Initialize dataloader
++    def data_collator(x): 
++        if use_foldseek_sequences:
++            one_letter_aas = esm_tokenizer.all_tokens[5:]
++        else: 
++            one_letter_aas = dataset.tokenizer.one_letter_aas
++
++        return data_collate_fn_dynamic(x, 
++            esm_tokenizer=esm_tokenizer,
++            nan_value=np.deg2rad(dataset.tokenizer.nan_fill_value),
++            mask_inputs=False,
++            all_amino_acids=one_letter_aas,
++            use_foldseek_sequences=use_foldseek_sequences)
++
++    # read DMS data    
++    mapping_protein_seq_DMS = pd.read_csv(args.DMS_reference_file_path)
++    list_DMS = mapping_protein_seq_DMS["DMS_id"]
++
++    # for DMS_index in range(217):
++    DMS_index = args.DMS_index
++    DMS_id = list_DMS[DMS_index]
++    scoring_filename = args.output_scores_folder + os.sep + DMS_id + '.csv'
++    if os.path.exists(scoring_filename):
++        print("Scores already computed for: {}".format(DMS_id))
++        # continue
++    
++    else:
++        print("Computing scores for: {}, {} with MULAN: {}".format(DMS_index, DMS_id, args.MULAN_model_name_or_path))
++        DMS_file_name = mapping_protein_seq_DMS["DMS_filename"][mapping_protein_seq_DMS["DMS_id"] == DMS_id].values[0]
++        target_seq = mapping_protein_seq_DMS["target_seq"][mapping_protein_seq_DMS["DMS_id"] == DMS_id].values[0].upper()
++        
++        DMS_data = pd.read_csv(args.DMS_data_folder + os.sep + DMS_file_name, low_memory=False)
++        DMS_data['mutated_sequence'] = DMS_data['mutant'].apply(
++            lambda x: get_mutated_sequence(target_seq, x)) if not args.indel_mode else DMS_data['mutant']
++            
++        pdb_filenames = mapping_protein_seq_DMS["pdb_file"][mapping_protein_seq_DMS["DMS_id"] == DMS_id].values[
++            0].split('|')  # if sequence is large (eg., BRCA2_HUMAN) the structure is split in several chunks
++        pdb_ranges = mapping_protein_seq_DMS["pdb_range"][mapping_protein_seq_DMS["DMS_id"] == DMS_id].values[0].split(
++            '|')
++
++        print('pdb_filenames', pdb_filenames)
++        print('pdb_ranges', pdb_ranges)
++        model_scores = []
++        for pdb_index, pdb_filename in enumerate(pdb_filenames):
++            dataset_id_index = [i for i, name in enumerate(dataset.protein_names) if name[0] == pdb_filename[:-4]]
++            dataset_id_index = dataset_id_index[0]
++            id_dataset = Subset(dataset, [dataset_id_index])
++
++            dataloader = DataLoader(id_dataset, batch_size=1, shuffle=False, collate_fn=data_collator)
++
++            pdb_file = args.structure_data_folder + os.sep + pdb_filename
++            print(pdb_file)
++            pdb_range = [int(x) for x in pdb_ranges[pdb_index].split("-")]
++
++            # fix for this ID because of the shift in pdb sequence and target_seq_split
++            if DMS_id == 'POLG_HCVJF_Qi_2014':
++                print(pdb_range)
++                pdb_range[0] = pdb_range[0] + 1
++                print(pdb_range)
++
++            target_seq_split = target_seq[pdb_range[0] - 1:pdb_range[1]]  # pdb_range is 1-indexed
++            DMS_data["mutated_position"] = DMS_data['mutant'].apply(lambda x: int(x.split(':')[0][1:-1])) #if multiple mutant, will extract position of first mutant
++            filtered_DMS_data = DMS_data[
++                (DMS_data["mutated_position"] >= pdb_range[0]) & (DMS_data["mutated_position"] <= pdb_range[1])]
++            model_scores.append(calc_fitness(model=model, dataloader=dataloader, DMS_data=filtered_DMS_data,
++                                                use_foldseek=use_foldseek_sequences,
++                                                esm_tokenizer=esm_tokenizer, offset_idx=pdb_range[0]))
++        
++        model_scores = np.concatenate(model_scores)
++        
++        DMS_data['MULAN_score'] = model_scores
++        scoring_filename = args.output_scores_folder + os.sep + DMS_id + '.csv'
++        DMS_data[['mutant', 'MULAN_score', 'DMS_score']].to_csv(scoring_filename, index=False)
++
++
++if __name__ == '__main__':
++    main()
+\ No newline at end of file
+diff --git a/proteingym/baselines/mulan/mulan/__init__.py b/proteingym/baselines/mulan/mulan/__init__.py
+new file mode 100644
+index 0000000..add6835
+--- /dev/null
++++ b/proteingym/baselines/mulan/mulan/__init__.py
+@@ -0,0 +1 @@
++from .__version__ import *
+\ No newline at end of file
+diff --git a/proteingym/baselines/mulan/mulan/__version__.py b/proteingym/baselines/mulan/mulan/__version__.py
+new file mode 100644
+index 0000000..99c4176
+--- /dev/null
++++ b/proteingym/baselines/mulan/mulan/__version__.py
+@@ -0,0 +1 @@
++__version__ = '0.0.1'
+\ No newline at end of file
+diff --git a/proteingym/baselines/mulan/mulan/dataset.py b/proteingym/baselines/mulan/mulan/dataset.py
+new file mode 100644
+index 0000000..edb4ec5
+--- /dev/null
++++ b/proteingym/baselines/mulan/mulan/dataset.py
+@@ -0,0 +1,323 @@
++from tqdm.auto import tqdm
++import random
++
++import numpy as np
++import scipy
++import torch
++from torch.utils.data import Dataset
++from deli import load_json
++
++from mulan.tokenizer import Tokenizer
++
++
++class ProteinDataset(Dataset):
++    def __init__(self, protein_data_path, 
++                 saved_dataset_path=None,
++                 split_ids_file=None, 
++                 split='test', 
++                 min_protein_length=1, 
++                 max_protein_length=100000000000, # dummy big number for unlimited length 
++                 use_sorted_batching=False, 
++                 # aka batch size (number of tokens per batch), 
++                 # can be reduced up to the maximum protein length used
++                 batch_limit=5000, 
++                 predict_contacts='none',
++                 use_foldseek_sequences=False,
++                 extract_foldseek_in_tokenizer=True,
++                 is_experimental_structure=False,
++                 foldseek_path=None,
++                 ):
++
++        self.tokenizer = Tokenizer(use_foldseek_sequences=use_foldseek_sequences)
++        self.nan_value = np.deg2rad(self.tokenizer.nan_fill_value)
++        self.pad_value = self.tokenizer.pad_value
++        self.use_foldseek_sequences = use_foldseek_sequences
++
++        self.split = split
++
++        self.predict_contacts = predict_contacts
++
++        self.sequences, self.angles, self.protein_names = self.tokenizer.load_dataset(saved_dataset_path, 
++                                                                                      split)
++        print('INIT ANGLES', self.angles)
++        if self.sequences is None:
++            if split_ids_file is not None:
++                protein_ids = load_json(split_ids_file)[split]
++            else:
++                protein_ids = None
++            self.tokenizer.save_dataset(protein_data_path, saved_dataset_path, split,
++                                        is_experimental_structure=is_experimental_structure, 
++                                        extract_foldseek=extract_foldseek_in_tokenizer, 
++                                        protein_ids=protein_ids,
++                                        foldseek_path=foldseek_path)
++            self.sequences, self.angles, self.protein_names = self.tokenizer.load_dataset(saved_dataset_path, 
++                                                                                          split)
++        
++        self.get_protein_length = lambda seq: int(len(seq) / 2) if self.use_foldseek_sequences else len(seq)
++
++        lengths = [self.get_protein_length(seq) for seq in self.sequences]
++        cumsum = np.cumsum(lengths)
++        self.angles = [self.angles[start:end] for start, end in tqdm(zip(np.insert(cumsum, 0, 0)[:-1], cumsum))]
++
++        print('Protein lengths before:', min(lengths), max(lengths))
++        if max_protein_length == -1:
++            max_protein_length = max(lengths)
++
++        self.protein_names = [name for name, seq in zip(self.protein_names, self.sequences) 
++                              if self.get_protein_length(seq) >= min_protein_length 
++                              and self.get_protein_length(seq) <= max_protein_length]
++        self.angles = [angle for angle, seq in zip(self.angles, self.sequences) 
++                              if self.get_protein_length(seq) >= min_protein_length 
++                              and self.get_protein_length(seq) <= max_protein_length]
++        self.sequences = [seq for seq in self.sequences 
++                         if self.get_protein_length(seq) >= min_protein_length 
++                         and self.get_protein_length(seq) <= max_protein_length]
++        
++        lengths = [self.get_protein_length(seq) for seq in self.sequences]
++        print('Protein lengths after:', min(lengths), max(lengths))
++        print('Check for lengths', len(self.sequences[0]), lengths[0], self.sequences[0])
++
++        print('self.angles', len(self.angles), self.angles[0].shape)
++        self.use_sorted_batching = use_sorted_batching
++        print('use_sorted_batching', use_sorted_batching)
++
++        self.form_batches(batch_limit)
++        self.sampling_indices = list(range(len(self.sequences)))
++
++        print('self.angles', len(self.angles), self.angles[0].shape)
++        print('self.plddts', len(self.plddts), self.plddts[0].shape) 
++        print(self.plddts[0])
++        print()
++
++    def get_sorted_batches(self, lengths, batch_limit):
++        batch_indices = []
++        cur_batch = []
++        if self.use_sorted_batching:
++            for i, cur_len in enumerate(lengths[self.sorted_indices]):
++                if (len(cur_batch) + 1) * cur_len <= batch_limit:
++                    cur_batch.append(i)
++                else:
++                    batch_indices.append(cur_batch)
++                    if cur_len <= batch_limit:
++                        cur_batch = [i]
++                    else:
++                        print('Protein too long', i, cur_len, cur_len ** 2)
++                        break
++
++            if len(cur_batch) * cur_len <= batch_limit:
++                print('append the last batch')
++                batch_indices.append(cur_batch)
++        else:
++            batch_indices = [[i] for i, cur_len in enumerate(lengths[self.sorted_indices])]
++        return batch_indices
++
++    def init_sorted_indices(self):
++        # save the order of sorted lengths for sorted batching
++        lengths = np.array([self.get_protein_length(seq) for seq in self.sequences])
++        self.sorted_indices = np.argsort(lengths)
++        return lengths
++    
++    def rearrange_data(self, data, batch_indices):
++        return [[data[self.sorted_indices[i]] for i in batch] for batch in batch_indices]
++
++    def form_batches(self, batch_limit):
++
++        lengths = self.init_sorted_indices()
++        print(len(self.sequences), len(lengths), len(self.sorted_indices))
++
++        batch_indices = self.get_sorted_batches(lengths, batch_limit)
++
++        self.sequences = self.rearrange_data(self.sequences, batch_indices)
++        self.protein_names = self.rearrange_data(self.protein_names, batch_indices)
++        self.angles = self.rearrange_data(self.angles, batch_indices)
++
++        batched_angles = []
++        self.plddts = []
++        self.coords = []
++        for batch_angles in tqdm(self.angles, desc='Preproc angles'):
++            tensor_batch_angles = np.ones((len(batch_angles), batch_angles[-1].shape[0] + 2,
++                                           batch_angles[-1].shape[-1]), 
++                                           dtype=np.float32) * self.pad_value
++            for i, seq_angles in enumerate(batch_angles):
++                tensor_batch_angles[i, 1:len(seq_angles)+1] = seq_angles
++                
++            if tensor_batch_angles.shape[-1] == 11:
++                batched_angles.append(tensor_batch_angles[:, :, 4:])
++            else:
++                batched_angles.append(tensor_batch_angles)
++
++            self.plddts.append(tensor_batch_angles[:, 1:-1, 0]) 
++            self.coords.append(tensor_batch_angles[:, 1:-1, 1:4]) 
++
++        self.angles = batched_angles
++
++    def __len__(self):
++        return len(self.sampling_indices)
++
++    def __getitem__(self, ind):
++        i = self.sampling_indices[ind]
++
++        output = (self.sequences[i], torch.tensor(self.angles[i]), self.protein_names[i])
++        output += (torch.tensor(self.plddts[i]), )
++        if self.predict_contacts != 'none':
++            output += (torch.tensor(self.coords[i]), )
++        else:
++            output += ([], )
++        return output
++
++
++def mask_inputs_(inputs, labels, special_tokens_mask, struct_inputs, 
++                esm_tokenizer, mlm_probability, struct_labels, 
++                all_amino_acid_ids, use_foldseek_sequences):
++
++    probability_matrix = torch.full(labels.shape, mlm_probability)
++    probability_matrix.masked_fill_(special_tokens_mask.bool(), value=0.0)
++    masked_indices = torch.bernoulli(probability_matrix).bool()
++    labels[~masked_indices] = -100  # We only compute loss on masked tokens
++
++    # 80% of the time, we replace masked input tokens with tokenizer.mask_token ([MASK])
++    indices_replaced = torch.bernoulli(torch.full(
++        labels.shape, 0.8)).bool() & masked_indices
++    
++    if use_foldseek_sequences:
++        to_replace = []
++        for token_id in inputs[indices_replaced]:
++            token = esm_tokenizer.id_to_token(int(token_id))
++            token = "#" + token[-1]
++            to_replace.append(esm_tokenizer.token_to_id(token))
++        inputs[indices_replaced] = torch.tensor(to_replace) #esm_tokenizer.mask_token_id
++    else:
++        inputs[indices_replaced] = esm_tokenizer.mask_token_id
++
++    # 10% of the time, we replace masked input tokens with random word
++    indices_random = torch.bernoulli(torch.full(
++        labels.shape, 0.5)).bool() & masked_indices & ~indices_replaced
++    random_word_indices = torch.randint(
++        len(all_amino_acid_ids), labels.shape, dtype=torch.long)
++    random_words = all_amino_acid_ids[random_word_indices]
++
++    inputs[indices_random] = random_words[indices_random]
++    # The rest of the time (10% of the time) we keep the masked input tokens unchanged
++
++    # mask the same angles and letters
++    angle_masked_indices = masked_indices.clone()
++    angle_indices_replaced = indices_replaced.clone()
++    angle_indices_random = indices_random.clone()
++        
++    ok_angles_mask = (~special_tokens_mask & ~angle_masked_indices).bool()
++    random_indices = random.sample(range(ok_angles_mask.sum()), angle_indices_random.sum())
++    random_indices = torch.tensor(random_indices)
++    replaced_angles = struct_inputs[ok_angles_mask][random_indices].clone()
++
++    struct_inputs.masked_fill_(angle_indices_replaced.unsqueeze(-1), value=-4.)
++    struct_inputs[angle_indices_random] = replaced_angles
++
++    return inputs, labels, struct_inputs, struct_labels
++
++
++def data_collate_fn_dynamic(protein_parts_tuple, esm_tokenizer, nan_value, 
++                         mask_inputs, 
++                         all_amino_acids,
++                         use_foldseek_sequences,
++                         mask_angle_inputs_with_plddt=True, 
++                         max_prot_len=100000000000000,
++                         predict_contacts='none',
++                         mlm_probability=0.15):
++    
++    get_protein_length = lambda seq: int(len(seq) / 2) if use_foldseek_sequences else len(seq)
++
++    protein_parts_tuple = protein_parts_tuple[0]
++    sequences = protein_parts_tuple[0]
++
++    struct_inputs = protein_parts_tuple[1]
++    plddts = protein_parts_tuple[3]
++    batch_coords = protein_parts_tuple[4]
++
++    if use_foldseek_sequences:
++        crop_multiplier = 2
++    else:
++        crop_multiplier = 1
++
++    # crop long proteins
++    if get_protein_length(sequences[-1]) > max_prot_len:
++        start_indices = [np.random.randint(get_protein_length(seq) - max_prot_len + 1)
++                         if get_protein_length(seq) > max_prot_len else 0 for seq in sequences]
++        sequences = [seq[start_ind * crop_multiplier: (start_ind + max_prot_len) * crop_multiplier] 
++                     for seq, start_ind in zip(sequences, start_indices)]
++
++        start_struct_padding = struct_inputs[:, :1].clone()
++        end_struct_padding = struct_inputs[:, -1:].clone()
++        struct_inputs = torch.stack([struct_inputs[i, 1 + start_indices[i]:1 + start_indices[i] + max_prot_len] 
++                                     for i in range(len(sequences))])
++        struct_inputs = torch.cat([start_struct_padding, struct_inputs, end_struct_padding], dim=1)
++        plddts = torch.stack([plddts[i, start_indices[i]:start_indices[i] + max_prot_len] 
++                                     for i in range(len(sequences))])
++        if predict_contacts != 'none':
++            batch_coords = torch.stack([batch_coords[i, start_indices[i]:start_indices[i] + max_prot_len] 
++                                        for i in range(len(sequences))])
++
++    encoded = esm_tokenizer.batch_encode_plus(sequences, return_special_tokens_mask=True, 
++                                              padding=True, return_tensors='pt')
++
++    if not use_foldseek_sequences:
++        unk_token_id = esm_tokenizer.token_to_id('X')
++        # fill X tokens as special tokens
++        encoded['special_tokens_mask'][encoded['input_ids'] == unk_token_id] = 1
++
++    distance_matrices = []
++    if predict_contacts != 'none' and not predict_contacts.startswith('eval'):
++        distance_matrices = np.linalg.norm(batch_coords[:, None] - batch_coords[:, :, None], axis=-1)
++
++        bad_plddt_mask = plddts <= 70.
++
++        if predict_contacts == 'contact':
++            bin_value = 8.
++            distance_matrices = (distance_matrices < bin_value).astype(np.float32)
++        elif predict_contacts == 'bin_distance':
++            boundaries = np.array([5., 8., 16., 32.])
++            distance_matrices = np.digitize(distance_matrices, boundaries)
++
++        # mask bad plddts regions with -1
++        distance_matrices[bad_plddt_mask] = -1
++        distance_matrices = distance_matrices.transpose((0, 2, 1))
++        distance_matrices[bad_plddt_mask] = -1
++    
++    ignore_index = -100.
++    pad_value = 4.
++
++    struct_labels = struct_inputs[:, :, :7].clone()
++    struct_labels = (struct_labels + torch.pi) / (2 * torch.pi)
++    struct_labels.masked_fill_(struct_inputs[:, :, :7] == nan_value, value=ignore_index)
++    struct_labels.masked_fill_(struct_inputs[:, :, :7] == pad_value, value=ignore_index)
++
++    aa_mapping_edges = {esm_tokenizer.token_to_id(token): i for i, token in enumerate(all_amino_acids)}
++    all_amino_acid_ids = torch.tensor([uid for uid in aa_mapping_edges.keys() 
++                                        if uid != esm_tokenizer.token_to_id('X')])
++    aa_mapping_edges[esm_tokenizer.mask_token_id] = len(aa_mapping_edges)
++
++    inputs = encoded['input_ids']
++    labels = None
++    if mask_inputs:
++        inputs, labels, struct_inputs, struct_labels = mask_inputs_(
++            encoded['input_ids'], encoded['input_ids'].clone(), encoded['special_tokens_mask'], 
++            struct_inputs, esm_tokenizer, mlm_probability, struct_labels, 
++            all_amino_acid_ids, use_foldseek_sequences)
++        
++    # pad plddts
++    padded_plddts = torch.ones_like(inputs) * pad_value
++    padded_plddts[:, 1:-1] = plddts
++
++    if mask_angle_inputs_with_plddt:
++        bad_plddt_mask = padded_plddts <= 70.
++        struct_inputs[bad_plddt_mask] = pad_value
++
++    struct_inputs = (struct_inputs, padded_plddts)
++
++    labels = (labels, torch.tensor(distance_matrices), struct_labels)
++    ret_dict = {'input_ids': inputs, 
++                'labels': labels,
++                'attention_mask': encoded['attention_mask'], 
++                'struct_inputs': struct_inputs,
++                }
++            
++    return ret_dict
+diff --git a/proteingym/baselines/mulan/mulan/downstream_task_embeddings.py b/proteingym/baselines/mulan/mulan/downstream_task_embeddings.py
+new file mode 100644
+index 0000000..ddd095d
+--- /dev/null
++++ b/proteingym/baselines/mulan/mulan/downstream_task_embeddings.py
+@@ -0,0 +1,159 @@
++import os
++
++import numpy as np
++import torch
++from torch.utils.data import DataLoader
++from tqdm.auto import tqdm
++
++from deli import save_json, save
++
++from mulan.dataset import ProteinDataset, data_collate_fn_dynamic
++
++
++def flatten_list(dataset_list):
++    flattened_list = []
++    for protein_list in dataset_list:
++        flattened_list += list(protein_list)
++    return flattened_list
++
++
++def get_downstream_datasets(saved_dataset_path, dataset_names, 
++                            batch_limit, use_foldseek_sequences, is_experimental_structure):
++    min_protein_length = 1
++    max_protein_length = -1
++    split_ids_file = None
++    protein_data_path = None
++    use_sorted_batching = True
++    predict_contacts = 'none'
++
++    print('saved_dataset_path', saved_dataset_path)
++    print('Chunks:', dataset_names)
++    all_datasets = {}
++    for chunk_id in dataset_names:
++        dataset = ProteinDataset(
++            protein_data_path=protein_data_path, 
++            saved_dataset_path=saved_dataset_path,
++            split_ids_file=split_ids_file,
++            split=chunk_id, 
++            min_protein_length=min_protein_length, 
++            max_protein_length=max_protein_length,
++            use_sorted_batching=use_sorted_batching,
++            batch_limit=batch_limit,
++            predict_contacts=predict_contacts,
++            use_foldseek_sequences=use_foldseek_sequences,
++            is_experimental_structure=is_experimental_structure,
++            )
++        all_datasets[chunk_id] = dataset
++    return all_datasets
++
++
++def get_embeddings(dataset, model, esm_tokenizer,
++                   protein_level, required_positions, 
++                   mask_angle_inputs_with_plddt, use_foldseek_sequences):    
++    mean_embeddings = []
++    protein_embeddings = []
++    all_names = []
++
++    def data_collator(x): 
++        if use_foldseek_sequences:
++            one_letter_aas = esm_tokenizer.all_tokens[5:]
++        else: 
++            one_letter_aas = dataset.tokenizer.one_letter_aas
++
++        return data_collate_fn_dynamic(x, esm_tokenizer=esm_tokenizer,
++                          nan_value=np.deg2rad(dataset.tokenizer.nan_fill_value),
++                          predict_contacts='none',
++                          max_prot_len=100000000000000, # big number equals to no protein cropping
++                          mask_inputs=False,
++                          mask_angle_inputs_with_plddt=mask_angle_inputs_with_plddt,
++                          all_amino_acids=one_letter_aas,
++                          use_foldseek_sequences=use_foldseek_sequences)
++
++    dataloader = DataLoader(dataset, batch_size=1, shuffle=False, collate_fn=data_collator)
++    device = model.device
++    
++    with torch.no_grad():
++        for i, batch in enumerate(tqdm(dataloader)):
++            struct_inputs = [struct_inp.to(device) for struct_inp in batch['struct_inputs']]
++            res = model(
++                input_ids=batch['input_ids'].to(device), 
++                attention_mask=batch['attention_mask'].to(device),
++                struct_inputs=struct_inputs,
++                output_hidden_states=True
++            )['hidden_states'][-1]
++
++            get_protein_length = lambda seq: int(len(seq) / 2) if use_foldseek_sequences else len(seq)
++            lengths = [get_protein_length(seq) for seq in dataset.sequences[i]]
++
++            if protein_level:
++                for p_ind in range(len(lengths)):
++                    mean_embeddings.append(res[p_ind, 1:lengths[p_ind] + 1].mean(dim=0).cpu())
++
++            else:
++                for p_ind in range(len(lengths)):
++                    if required_positions is not None:
++                        cur_positions = required_positions[i][p_ind] - 1
++                    else:
++                        cur_positions = range(lengths[p_ind])
++                    mean_embeddings.extend(res[p_ind, 1:lengths[p_ind] + 1][cur_positions].cpu())
++                
++                for p_ind in range(len(lengths)):
++                    all_names.append([f'{dataset.protein_names[i][p_ind]}_{pos}' for pos in range(lengths[p_ind])])
++
++    if protein_level:          
++        mean_embeddings = torch.stack(mean_embeddings).numpy()
++        ret_data = (mean_embeddings, protein_embeddings)
++    else:
++        mean_embeddings = torch.stack(mean_embeddings).numpy()
++        ret_data = (mean_embeddings, all_names)
++
++    return ret_data
++
++
++def evaluate_downstream_task(model, esm_tokenizer, saved_dataset_path, 
++                             downstream_dataset_path,
++                             batch_limit, mask_angle_inputs_with_plddt,
++                             protein_level, use_foldseek_sequences,
++                             is_experimental_structure=False,
++                             dataset_names=['valid', 'test', 'train']):
++
++    all_datasets = get_downstream_datasets(
++        saved_dataset_path=saved_dataset_path, 
++        dataset_names=dataset_names,
++        batch_limit=batch_limit,
++        use_foldseek_sequences=use_foldseek_sequences,
++        is_experimental_structure=is_experimental_structure,
++    )
++
++    device = 'cuda' if torch.cuda.is_available() else 'cpu'
++    model.eval()
++    model.to(device)
++
++    print('downstream_dataset_path', downstream_dataset_path)
++    os.makedirs(downstream_dataset_path, exist_ok=True)
++    
++    for dataset_name in all_datasets.keys():
++        ret_embeddings = get_embeddings(
++            dataset=all_datasets[dataset_name],
++            model=model,
++            esm_tokenizer=esm_tokenizer,
++            protein_level=protein_level,
++            use_foldseek_sequences=use_foldseek_sequences,
++            required_positions=None,
++            mask_angle_inputs_with_plddt=mask_angle_inputs_with_plddt,
++        )
++
++        if protein_level:
++            mean_embeddings, _ = ret_embeddings
++            names = []
++            for batch_names in all_datasets[dataset_name].protein_names:
++                names += batch_names
++        else:
++            mean_embeddings, all_names = ret_embeddings
++            names = flatten_list(all_names)
++            
++        save_json(names, 
++                os.path.join(downstream_dataset_path, f'{dataset_name}_names.json'))
++        print(len(names), type(mean_embeddings), mean_embeddings.shape)
++        save(mean_embeddings, os.path.join(downstream_dataset_path, 
++                                        f'{dataset_name}_avg_embeddings.npy.gz'), compression=1)
+\ No newline at end of file
+diff --git a/proteingym/baselines/mulan/mulan/foldseek_utils.py b/proteingym/baselines/mulan/mulan/foldseek_utils.py
+new file mode 100644
+index 0000000..8e1bda8
+--- /dev/null
++++ b/proteingym/baselines/mulan/mulan/foldseek_utils.py
+@@ -0,0 +1,105 @@
++import os
++import re
++import numpy as np
++import sys
++sys.path.append(".")
++
++
++'''
++Taken from the SaProt repository https://github.com/westlake-repl/SaProt
++'''
++
++# Get structural seqs from pdb file
++def get_struc_seq(foldseek,
++                  path,
++                  chains: list = None,
++                  process_id: int = 0,
++                  plddt_mask: bool = False,
++                  plddt_threshold: float = 70.) -> dict:
++    """
++
++    Args:
++        foldseek: Binary executable file of foldseek
++        path: Path to pdb file
++        chains: Chains to be extracted from pdb file. If None, all chains will be extracted.
++        process_id: Process ID for temporary files. This is used for parallel processing.
++        plddt_mask: If True, mask regions with plddt < plddt_threshold. plddt scores are from the pdb file.
++        plddt_threshold: Threshold for plddt. If plddt is lower than this value, the structure will be masked.
++
++    Returns:
++        seq_dict: A dict of structural seqs. The keys are chain IDs. The values are tuples of
++        (seq, struc_seq, combined_seq).
++    """
++    assert os.path.exists(foldseek), f"Foldseek not found: {foldseek}"
++    assert os.path.exists(path), f"Pdb file not found: {path}"
++
++    tmp_save_path = f"tmp_get_struc_seq_{process_id}.tsv"
++    cmd = f"{foldseek} structureto3didescriptor -v 0 --threads 1 --chain-name-mode 1 {path} {tmp_save_path}"
++    os.system(cmd)
++
++    seq_dict = {}
++    name = os.path.basename(path)
++    with open(tmp_save_path, "r") as r:
++        for i, line in enumerate(r):
++            desc, seq, struc_seq = line.split("\t")[:3]
++
++            # Mask low plddt
++            if plddt_mask:
++                plddts = extract_plddt(path)
++                assert len(plddts) == len(
++                    struc_seq), f"Length mismatch: {len(plddts)} != {len(struc_seq)}"
++
++                # Mask regions with plddt < threshold
++                indices = np.where(plddts < plddt_threshold)[0]
++                np_seq = np.array(list(struc_seq))
++                np_seq[indices] = "#"
++                struc_seq = "".join(np_seq)
++
++            name_chain = desc.split(" ")[0]
++            chain = name_chain.replace(name, "").split("_")[-1]
++
++            if chains is None or chain in chains:
++                if chain not in seq_dict:
++                    combined_seq = "".join([a + b.lower()
++                                           for a, b in zip(seq, struc_seq)])
++                    seq_dict[chain] = (seq, struc_seq, combined_seq)
++
++    os.remove(tmp_save_path)
++    os.remove(tmp_save_path + ".dbtype")
++    return seq_dict
++
++
++def extract_plddt(pdb_path: str) -> np.ndarray:
++    """
++    Extract plddt scores from pdb file.
++    Args:
++        pdb_path: Path to pdb file.
++
++    Returns:
++        plddts: plddt scores.
++    """
++    with open(pdb_path, "r") as r:
++        plddt_dict = {}
++        for line in r:
++            line = re.sub(' +', ' ', line).strip()
++            splits = line.split(" ")
++
++            if splits[0] == "ATOM":
++                # If position < 1000
++                if len(splits[4]) == 1:
++                    pos = int(splits[5])
++
++                # If position >= 1000, the blank will be removed, e.g. "A 999" -> "A1000"
++                # So the length of splits[4] is not 1
++                else:
++                    pos = int(splits[4][1:])
++
++                plddt = float(splits[-2])
++
++                if pos not in plddt_dict:
++                    plddt_dict[pos] = [plddt]
++                else:
++                    plddt_dict[pos].append(plddt)
++
++    plddts = np.array([np.mean(v) for v in plddt_dict.values()])
++    return plddts
+diff --git a/proteingym/baselines/mulan/mulan/model.py b/proteingym/baselines/mulan/mulan/model.py
+new file mode 100644
+index 0000000..419495b
+--- /dev/null
++++ b/proteingym/baselines/mulan/mulan/model.py
+@@ -0,0 +1,163 @@
++from typing import Optional, Union, Tuple
++
++import torch
++from torch.nn import CrossEntropyLoss, BCEWithLogitsLoss, MSELoss
++
++from transformers import EsmForMaskedLM
++from transformers.modeling_outputs import MaskedLMOutput
++from transformers.models.esm.modeling_esm import EsmLMHead
++from mulan.model_utils import StructEsmModel, NonLinearHead, ContactPredictionHead
++
++
++
++class StructEsmForMaskedLM(EsmForMaskedLM):
++    _tied_weights_keys = ["lm_head.decoder.weight"]
++
++    def __init__(self, config, num_struct_embeddings_layers=1, struct_data_dim=7, 
++                 use_struct_embeddings=True,
++                 predict_contacts='none', 
++                 predict_angles=False,
++                 mask_angle_inputs_with_plddt=True):
++        super().__init__(config)
++
++        self.esm = StructEsmModel(config, num_struct_embeddings_layers=num_struct_embeddings_layers, 
++                                  struct_data_dim=struct_data_dim, 
++                                  use_struct_embeddings=use_struct_embeddings, 
++                                  add_pooling_layer=False,
++                                  mask_angle_inputs_with_plddt=mask_angle_inputs_with_plddt)
++        self.lm_head = EsmLMHead(config)
++        self.predict_contacts = predict_contacts
++        self.predict_angles = predict_angles
++        self.mask_angle_inputs_with_plddt = mask_angle_inputs_with_plddt
++
++        if self.predict_angles:
++            self.angle_regression_head = NonLinearHead(
++                input_dim=config.hidden_size,
++                output_dim=7, # number of angles to predict
++                layer_norm_eps=config.layer_norm_eps,
++                )
++
++        if self.predict_contacts != 'none':
++            self.contact_head = ContactPredictionHead(
++                in_features=config.num_hidden_layers * config.num_attention_heads, 
++                out_features=1 if self.predict_contacts == 'contact' else 5,
++                bias=True,
++            )
++
++        self.init_weights()
++
++    def forward(
++        self,
++        input_ids: Optional[torch.LongTensor] = None,
++        struct_inputs: Optional[Union[Tuple, torch.LongTensor]] = None,
++        attention_mask: Optional[torch.Tensor] = None,
++        position_ids: Optional[torch.LongTensor] = None,
++        head_mask: Optional[torch.Tensor] = None,
++        inputs_embeds: Optional[torch.FloatTensor] = None,
++        encoder_hidden_states: Optional[torch.FloatTensor] = None,
++        encoder_attention_mask: Optional[torch.Tensor] = None,
++        labels: Optional[Union[Tuple, torch.LongTensor]] = None,
++        output_attentions: Optional[bool] = None,
++        output_hidden_states: Optional[bool] = None,
++        return_dict: Optional[bool] = None,
++    ) -> Union[Tuple, MaskedLMOutput]:
++        
++        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
++
++        predicted_contacts = None
++        if self.predict_contacts != 'none':
++            outputs = self.esm(
++                input_ids,
++                struct_inputs=struct_inputs,
++                attention_mask=attention_mask,
++                position_ids=position_ids,
++                head_mask=head_mask,
++                inputs_embeds=inputs_embeds,
++                encoder_hidden_states=encoder_hidden_states,
++                encoder_attention_mask=encoder_attention_mask,
++                output_attentions=True,
++                output_hidden_states=output_hidden_states,
++                return_dict=True,
++            )
++
++            attns = torch.stack(outputs['attentions'], dim=1)  # Matches the original model layout
++            # In the original model, attentions for padding tokens are completely zeroed out.
++            # This makes no difference most of the time because the other tokens won't attend to them,
++            # but it does for the contact prediction task, which takes attentions as input,
++            # so we have to mimic that here.
++            attns *= attention_mask.unsqueeze(1).unsqueeze(2).unsqueeze(3)
++            attns *= attention_mask.unsqueeze(1).unsqueeze(2).unsqueeze(4)
++
++            predicted_contacts = self.contact_head(input_ids, attentions=attns)
++
++        else:
++            outputs = self.esm(
++                input_ids,
++                struct_inputs=struct_inputs,
++                attention_mask=attention_mask,
++                position_ids=position_ids,
++                head_mask=head_mask,
++                inputs_embeds=inputs_embeds,
++                encoder_hidden_states=encoder_hidden_states,
++                encoder_attention_mask=encoder_attention_mask,
++                output_attentions=output_attentions,
++                output_hidden_states=output_hidden_states,
++                return_dict=return_dict,
++            )
++        sequence_output = outputs[0]
++
++        masked_lm_loss = None
++        prediction_angles = None
++
++        prediction_scores = self.lm_head(sequence_output)
++        prediction_scores = {'scores': prediction_scores}
++
++        if self.predict_angles:
++            prediction_angles = self.angle_regression_head(sequence_output)
++            prediction_angles = torch.sigmoid(prediction_angles)
++            prediction_scores['angles'] = prediction_angles
++
++        if self.predict_contacts != 'none':
++            prediction_scores[self.predict_contacts] = predicted_contacts
++
++        if labels is not None and labels[0] is not None:
++            ce_loss_fn = CrossEntropyLoss()
++            labels, distance_matrices, angle_labels = labels
++            masked_lm_loss = ce_loss_fn(prediction_scores.view(-1, self.config.vocab_size), 
++                                        labels.view(-1))
++            
++            if self.predict_angles:
++                angle_mask = angle_labels > -99.
++                mse_loss = torch.abs(angle_labels[angle_mask] - prediction_angles[angle_mask])
++                mse_loss[mse_loss > 0.5] = 1 - mse_loss[mse_loss > 0.5]
++                mse_loss = (mse_loss ** 2).mean()
++
++                mse_weight = 5 #5
++                masked_lm_loss += mse_weight * mse_loss
++ 
++            if self.predict_contacts != 'none':
++                contact_mask = distance_matrices != -1
++
++                if self.predict_contacts == 'contact':
++                    contact_loss_fn = BCEWithLogitsLoss()
++                elif self.predict_contacts == 'distance':
++                    contact_loss_fn = MSELoss()
++                else:
++                    contact_loss_fn = CrossEntropyLoss()
++
++                contact_loss = contact_loss_fn(predicted_contacts[contact_mask], 
++                                               distance_matrices[contact_mask])
++
++                contact_weight = 0.5 #0.5 
++                masked_lm_loss += contact_weight * contact_loss
++
++        ret_attns = None
++        if output_attentions:
++            ret_attns = outputs.attentions
++
++        return MaskedLMOutput(
++            loss=masked_lm_loss,
++            logits=prediction_scores,
++            hidden_states=outputs.hidden_states,
++            attentions=ret_attns,
++        )
+diff --git a/proteingym/baselines/mulan/mulan/model_utils.py b/proteingym/baselines/mulan/mulan/model_utils.py
+new file mode 100644
+index 0000000..6ff23b9
+--- /dev/null
++++ b/proteingym/baselines/mulan/mulan/model_utils.py
+@@ -0,0 +1,504 @@
++from typing import Optional, List, Union, Tuple
++import math
++
++import torch
++from torch import nn
++
++from transformers import EsmModel, EsmConfig, AutoTokenizer
++from transformers.modeling_outputs import BaseModelOutputWithPoolingAndCrossAttentions
++from transformers.models.esm.modeling_esm import (
++    create_position_ids_from_input_ids, 
++    EsmEmbeddings,
++    EsmPooler, 
++    EsmEncoder,
++    symmetrize,
++    RotaryEmbedding,
++    )
++
++
++
++def get_extended_attention_mask(attention_mask, input_shape, dtype):
++    """
++    Makes broadcastable attention and causal masks so that future and masked tokens are ignored.
++
++    Arguments:
++        attention_mask (`torch.Tensor`):
++            Mask with ones indicating tokens to attend to, zeros for tokens to ignore.
++        input_shape (`Tuple[int]`):
++            The shape of the input to the model.
++
++    Returns:
++        `torch.Tensor` The extended attention mask, with a the same dtype as `attention_mask.dtype`.
++    """
++
++    # We can provide a self-attention mask of dimensions [batch_size, from_seq_length, to_seq_length]
++    # ourselves in which case we just need to make it broadcastable to all heads.
++    if attention_mask.dim() == 3:
++        extended_attention_mask = attention_mask[:, None, :, :]
++    elif attention_mask.dim() == 2:
++        # Provided a padding mask of dimensions [batch_size, seq_length]
++        # - if the model is a decoder, apply a causal mask in addition to the padding mask
++        # - if the model is an encoder, make the mask broadcastable to [batch_size, num_heads, seq_length, seq_length]
++        extended_attention_mask = attention_mask[:, None, None, :]
++    else:
++        raise ValueError(
++            f"Wrong shape for input_ids (shape {input_shape}) or attention_mask (shape {attention_mask.shape})"
++        )
++
++    # Since attention_mask is 1.0 for positions we want to attend and 0.0 for
++    # masked positions, this operation will create a tensor which is 0.0 for
++    # positions we want to attend and the dtype's smallest value for masked positions.
++    # Since we are adding it to the raw scores before the softmax, this is
++    # effectively the same as removing these entirely.
++    extended_attention_mask = extended_attention_mask.to(dtype=dtype)  # fp16 compatibility
++    extended_attention_mask = (1.0 - extended_attention_mask) * torch.finfo(dtype).min
++    return extended_attention_mask
++
++
++# MLP
++class StructEmbeddings(nn.Module):
++    def __init__(self, input_dim, hidden_dim, num_hidden_layers, num_attention_heads, 
++                 dtype, mask_angle_inputs_with_plddt):
++        super().__init__()
++        self.MLP = nn.Linear(input_dim, hidden_dim)
++        esm_config = EsmConfig(
++            hidden_size=hidden_dim,
++            num_hidden_layers=num_hidden_layers,
++            num_attention_heads=num_attention_heads,
++            intermediate_size=hidden_dim * 4,
++            hidden_dropout_prob=0.0,
++            attention_probs_dropout_prob=0.0,
++            layer_norm_eps=1e-05,
++            emb_layer_norm_before=False,
++            token_dropout=True,
++            esmfold_config=None,
++            vocab_list=None,
++        )
++        self.encoder = EsmEncoder(esm_config)
++        self.dtype = dtype
++        self.mask_angle_inputs_with_plddt = mask_angle_inputs_with_plddt
++
++    def forward(
++        self, struct_inputs, attention_mask=None,
++    ):
++        struct_inputs, plddts = struct_inputs
++        # struct_inputs = struct_inputs[0]
++        embeddings = self.MLP(struct_inputs.view((-1, struct_inputs.shape[-1])))        
++        embeddings = embeddings.reshape((struct_inputs.shape[0], struct_inputs.shape[1], 
++                                         embeddings.shape[-1]))
++
++        input_shape = embeddings.size()[:-1]
++        extended_attention_mask = get_extended_attention_mask(attention_mask, input_shape, self.dtype)
++
++        embeddings = self.encoder(embeddings,
++                                  attention_mask=extended_attention_mask,)
++        
++        embeddings = embeddings['last_hidden_state']
++        return embeddings
++
++
++class StructEsmEmbeddings(EsmEmbeddings):
++    """
++    Same as EsmEmbeddings with extra structural positional embeddings.
++    """
++
++    def __init__(self, config, num_struct_embeddings_layers, struct_data_dim, 
++                 use_struct_embeddings, dtype, 
++                 mask_angle_inputs_with_plddt):
++        super().__init__(config)
++        self.word_embeddings = nn.Embedding(config.vocab_size, config.hidden_size, 
++                                            padding_idx=config.pad_token_id)
++
++        if config.emb_layer_norm_before:
++            self.layer_norm = nn.LayerNorm(config.hidden_size, eps=config.layer_norm_eps)
++        else:
++            self.layer_norm = None
++        self.dropout = nn.Dropout(config.hidden_dropout_prob)
++        # position_ids (1, len position emb) is contiguous in memory and exported when serialized
++        self.position_embedding_type = getattr(config, "position_embedding_type", "absolute")
++        self.register_buffer(
++            "position_ids", torch.arange(config.max_position_embeddings).expand((1, -1)), persistent=False
++        )
++
++        self.padding_idx = config.pad_token_id
++        self.position_embeddings = nn.Embedding(
++            config.max_position_embeddings, config.hidden_size, padding_idx=self.padding_idx
++        )
++        self.token_dropout = config.token_dropout
++        self.mask_token_id = config.mask_token_id
++
++        self.use_struct_embeddings = use_struct_embeddings
++
++        if self.use_struct_embeddings:
++            self.struct_embeddings = StructEmbeddings(
++                input_dim=struct_data_dim, 
++                hidden_dim=config.hidden_size, 
++                num_hidden_layers=num_struct_embeddings_layers, 
++                num_attention_heads=config.num_attention_heads,
++                dtype=dtype,
++                mask_angle_inputs_with_plddt=mask_angle_inputs_with_plddt)
++                        
++    def forward(
++        self, input_ids=None, attention_mask=None, 
++        struct_inputs=None, position_ids=None, 
++        inputs_embeds=None, past_key_values_length=0
++    ):
++        if position_ids is None:
++            if input_ids is not None:
++                # Create the position ids from the input token ids. Any padded tokens remain padded.
++                position_ids = create_position_ids_from_input_ids(input_ids, self.padding_idx, past_key_values_length)
++            else:
++                position_ids = self.create_position_ids_from_inputs_embeds(inputs_embeds)
++
++        if inputs_embeds is None:
++            inputs_embeds = self.word_embeddings(input_ids)
++
++        embeddings = inputs_embeds
++
++        if self.use_struct_embeddings:
++            struct_embeddings = self.struct_embeddings(struct_inputs, attention_mask)
++            embeddings += struct_embeddings
++
++        # Matt: ESM has the option to handle masking in MLM in a slightly unusual way. If the token_dropout
++        # flag is False then it is handled in the same was as BERT/RoBERTa. If it is set to True, however,
++        # masked tokens are treated as if they were selected for input dropout and zeroed out.
++        # This "mask-dropout" is compensated for when masked tokens are not present, by scaling embeddings by
++        # a factor of (fraction of unmasked tokens during training) / (fraction of unmasked tokens in sample).
++        # This is analogous to the way that dropout layers scale down outputs during evaluation when not
++        # actually dropping out values (or, equivalently, scale up their un-dropped outputs in training).
++        if self.token_dropout:
++            embeddings = embeddings.masked_fill((input_ids == self.mask_token_id).unsqueeze(-1), 0.0)
++            mask_ratio_train = 0.15 * 0.8  # Hardcoded as the ratio used in all ESM model training runs
++            src_lengths = attention_mask.sum(-1)
++            mask_ratio_observed = (input_ids == self.mask_token_id).sum(-1).float() / src_lengths
++            embeddings = (embeddings * (1 - mask_ratio_train) / (1 - mask_ratio_observed)[:, None, None]).to(
++                embeddings.dtype
++            )
++
++        if self.position_embedding_type == "absolute":
++            position_embeddings = self.position_embeddings(position_ids)
++            embeddings = embeddings + position_embeddings
++            print('added position embeddings')
++
++        if self.layer_norm is not None:
++            embeddings = self.layer_norm(embeddings)
++        if attention_mask is not None:
++            embeddings = (embeddings * attention_mask.unsqueeze(-1)).to(embeddings.dtype)
++
++        return embeddings
++    
++
++class EsmSelfAttentionWithContacts(nn.Module):
++    def __init__(self, config, position_embedding_type=None):
++        super().__init__()
++        if config.hidden_size % config.num_attention_heads != 0 and not hasattr(config, "embedding_size"):
++            raise ValueError(
++                f"The hidden size ({config.hidden_size}) is not a multiple of the number of attention "
++                f"heads ({config.num_attention_heads})"
++            )
++
++        self.num_attention_heads = config.num_attention_heads
++        self.attention_head_size = int(config.hidden_size / config.num_attention_heads)
++        self.all_head_size = self.num_attention_heads * self.attention_head_size
++
++        self.query = nn.Linear(config.hidden_size, self.all_head_size)
++        self.key = nn.Linear(config.hidden_size, self.all_head_size)
++        self.value = nn.Linear(config.hidden_size, self.all_head_size)
++
++        self.dropout = nn.Dropout(config.attention_probs_dropout_prob)
++        self.position_embedding_type = position_embedding_type or getattr(
++            config, "position_embedding_type", "absolute"
++        )
++        self.rotary_embeddings = None
++        if self.position_embedding_type == "rotary":
++            self.rotary_embeddings = RotaryEmbedding(dim=self.attention_head_size)
++
++    def transpose_for_scores(self, x: torch.Tensor) -> torch.Tensor:
++        new_x_shape = x.size()[:-1] + (self.num_attention_heads, self.attention_head_size)
++        x = x.view(new_x_shape)
++        return x.permute(0, 2, 1, 3)
++
++    def forward(
++        self,
++        hidden_states: torch.Tensor,
++        attention_mask: Optional[torch.FloatTensor] = None,
++        head_mask: Optional[torch.FloatTensor] = None,
++        encoder_hidden_states: Optional[torch.FloatTensor] = None,
++        encoder_attention_mask: Optional[torch.FloatTensor] = None,
++        past_key_value: Optional[Tuple[Tuple[torch.FloatTensor]]] = None,
++        output_attentions: Optional[bool] = False,
++        attention_bias: Optional[torch.FloatTensor] = None,
++    ) -> Tuple[torch.Tensor]:
++        mixed_query_layer = self.query(hidden_states)
++
++        key_layer = self.transpose_for_scores(self.key(hidden_states))
++        value_layer = self.transpose_for_scores(self.value(hidden_states))
++        query_layer = self.transpose_for_scores(mixed_query_layer)
++
++        # Matt: Our BERT model (which this code was derived from) scales attention logits down by sqrt(head_dim).
++        # ESM scales the query down by the same factor instead. Modulo numerical stability these are equivalent,
++        # but not when rotary embeddings get involved. Therefore, we scale the query here to match the original
++        # ESM code and fix rotary embeddings.
++        query_layer = query_layer * self.attention_head_size**-0.5
++
++        if self.position_embedding_type == "rotary":
++            query_layer, key_layer = self.rotary_embeddings(query_layer, key_layer)
++
++        # Take the dot product between "query" and "key" to get the raw attention scores.
++        attention_scores = torch.matmul(query_layer, key_layer.transpose(-1, -2))
++
++        if attention_mask is not None:
++            # Apply the attention mask is (precomputed for all layers in EsmModel forward() function)
++            attention_scores += attention_mask # was not inplace earlier
++
++        # Normalize the attention scores to probabilities.
++        attention_probs = nn.functional.softmax(attention_scores, dim=-1)
++
++        # This is actually dropping out entire tokens to attend to, which might
++        # seem a bit unusual, but is taken from the original Transformer paper.
++        attention_probs = self.dropout(attention_probs)
++
++        # Mask heads if we want to
++        if head_mask is not None:
++            attention_probs = attention_probs * head_mask
++
++        context_layer = torch.matmul(attention_probs, value_layer)
++
++        context_layer = context_layer.permute(0, 2, 1, 3).contiguous()
++        new_context_layer_shape = context_layer.size()[:-2] + (self.all_head_size,)
++        context_layer = context_layer.view(new_context_layer_shape)
++
++        outputs = (context_layer, attention_probs) if output_attentions else (context_layer,)
++
++        return outputs
++    
++
++@torch.jit.script
++def gaussian(x, mean, std):
++    pi = 3.14159
++    a = (2 * pi) ** 0.5
++    return torch.exp(-0.5 * (((x - mean) / std) ** 2)) / (a * std)
++
++
++class GaussianLayer(nn.Module):
++    def __init__(self, K, edge_types):
++        super().__init__()
++        self.K = K
++        self.means = nn.Embedding(1, K)
++        self.stds = nn.Embedding(1, K)
++        self.mul = nn.Embedding(edge_types, 1)
++        self.bias = nn.Embedding(edge_types, 1)
++        nn.init.uniform_(self.means.weight, 0, 3)
++        nn.init.uniform_(self.stds.weight, 0, 3)
++        nn.init.constant_(self.bias.weight, 0)
++        nn.init.constant_(self.mul.weight, 1)
++
++    def forward(self, x, edge_type):
++        mul = self.mul(edge_type).type_as(x)
++        bias = self.bias(edge_type).type_as(x)
++        x = mul * x.unsqueeze(-1) + bias
++        x = x.expand(-1, -1, -1, self.K)
++        mean = self.means.weight.float().view(-1)
++        std = self.stds.weight.float().view(-1).abs() + 1e-5
++        return gaussian(x.float(), mean, std).type_as(self.means.weight)
++
++
++def gelu(x):
++    """
++    This is the gelu implementation from the original ESM repo. Using F.gelu yields subtly wrong results.
++    """
++    return x * 0.5 * (1.0 + torch.erf(x / math.sqrt(2.0)))
++
++
++class NonLinearHead(nn.Module):
++    """ESM Head for angle regression."""
++
++    def __init__(self, input_dim, output_dim, layer_norm_eps):
++        super().__init__()
++        self.dense = nn.Linear(input_dim, input_dim)
++        self.layer_norm = nn.LayerNorm(input_dim, eps=layer_norm_eps)
++
++        self.decoder = nn.Linear(input_dim, output_dim)
++
++    def forward(self, features, **kwargs):
++        x = self.dense(features)
++        x = gelu(x)
++        x = self.layer_norm(x)
++
++        x = self.decoder(x)
++        return x
++    
++
++def average_product_correct(x):
++    "Perform average product correct, used for contact prediction."
++    avg = x.sum(-1, keepdims=True) * x.sum(-2, keepdims=True)
++    avg.div_(x.sum((-1, -2), keepdims=True))  # in-place to reduce memory
++    x -= avg # normalize
++    return x
++    
++
++class ContactPredictionHead(nn.Module):
++    """Performs symmetrization, apc, and computes a logistic regression on the output features"""
++
++    def __init__(
++        self,
++        in_features: int,
++        out_features: int,
++        bias=True,
++        eos_idx: int = 2,
++    ):
++        super().__init__()
++        self.in_features = in_features
++        self.eos_idx = eos_idx
++        self.regression = nn.Linear(in_features, out_features, bias)
++
++    def forward(self, tokens, attentions):
++        # remove eos token attentions
++        eos_mask = tokens.ne(self.eos_idx).to(attentions)
++        eos_mask = eos_mask.unsqueeze(1) * eos_mask.unsqueeze(2)
++        attentions = attentions * eos_mask[:, None, None, :, :]
++        attentions = attentions[..., :-1, :-1]
++        # remove cls token attentions
++        attentions = attentions[..., 1:, 1:]
++        batch_size, layers, heads, seqlen, _ = attentions.size()
++        attentions = attentions.view(batch_size, layers * heads, seqlen, seqlen)
++
++        # features: batch x channels x tokens x tokens (symmetric)
++        attentions = attentions.to(
++            self.regression.weight.device
++        )  # attentions always float32, may need to convert to float16
++        attentions = average_product_correct(symmetrize(attentions))
++        attentions = attentions.permute(0, 2, 3, 1)
++        return self.regression(attentions).squeeze(3)
++    
++
++class StructEsmModel(EsmModel):
++    def __init__(self, config, num_struct_embeddings_layers, struct_data_dim, 
++                 use_struct_embeddings,
++                 mask_angle_inputs_with_plddt,
++                 add_pooling_layer=True):
++        super().__init__(config)
++        self.config = config
++
++        self.embeddings = StructEsmEmbeddings(config, 
++                                              num_struct_embeddings_layers=num_struct_embeddings_layers, 
++                                              struct_data_dim=struct_data_dim, 
++                                              use_struct_embeddings=use_struct_embeddings,
++                                              dtype=self.dtype,
++                                              mask_angle_inputs_with_plddt=mask_angle_inputs_with_plddt)
++        self.encoder = EsmEncoder(config)
++        self.pooler = EsmPooler(config) if add_pooling_layer else None
++
++        # Initialize weights and apply final processing
++        self.post_init()
++
++    def forward(
++        self,
++        input_ids: Optional[torch.Tensor] = None,
++        struct_inputs: Optional[List[torch.Tensor]] = None,
++        attention_mask: Optional[torch.Tensor] = None,
++        position_ids: Optional[torch.Tensor] = None,
++        head_mask: Optional[torch.Tensor] = None,
++        inputs_embeds: Optional[torch.Tensor] = None,
++        encoder_hidden_states: Optional[torch.Tensor] = None,
++        encoder_attention_mask: Optional[torch.Tensor] = None,
++        past_key_values: Optional[List[torch.FloatTensor]] = None,
++        use_cache: Optional[bool] = None,
++        output_attentions: Optional[bool] = None,
++        output_hidden_states: Optional[bool] = None,
++        return_dict: Optional[bool] = None,
++    ) -> Union[Tuple[torch.Tensor], BaseModelOutputWithPoolingAndCrossAttentions]:
++
++        output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
++        output_hidden_states = (
++            output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
++        )
++        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
++
++        use_cache = False
++
++        if input_ids is not None and inputs_embeds is not None:
++            raise ValueError("You cannot specify both input_ids and inputs_embeds at the same time")
++        elif input_ids is not None:
++            self.warn_if_padding_and_no_attention_mask(input_ids, attention_mask)
++            input_shape = input_ids.size()
++        elif inputs_embeds is not None:
++            input_shape = inputs_embeds.size()[:-1]
++        else:
++            raise ValueError("You have to specify either input_ids or inputs_embeds")
++
++        batch_size, seq_length = input_shape
++        device = input_ids.device if input_ids is not None else inputs_embeds.device
++
++        # past_key_values_length
++        past_key_values_length = past_key_values[0][0].shape[2] if past_key_values is not None else 0
++
++        if attention_mask is None:
++            attention_mask = torch.ones(((batch_size, seq_length + past_key_values_length)), device=device)
++
++        # We can provide a self-attention mask of dimensions [batch_size, from_seq_length, to_seq_length]
++        # ourselves in which case we just need to make it broadcastable to all heads.
++        extended_attention_mask: torch.Tensor = self.get_extended_attention_mask(attention_mask, input_shape)
++
++        # If a 2D or 3D attention mask is provided for the cross-attention
++        # we need to make broadcastable to [batch_size, num_heads, seq_length, seq_length]
++        encoder_extended_attention_mask = None
++
++        # Prepare head mask if needed
++        # 1.0 in head_mask indicate we keep the head
++        # attention_probs has shape bsz x n_heads x N x N
++        # input head_mask has shape [num_heads] or [num_hidden_layers x num_heads]
++        # and head_mask is converted to shape [num_hidden_layers x batch x num_heads x seq_length x seq_length]
++        head_mask = self.get_head_mask(head_mask, self.config.num_hidden_layers)
++
++        struct_inputs, plddts = struct_inputs
++            
++        embedding_output = self.embeddings(
++            input_ids=input_ids,
++            struct_inputs=(struct_inputs, plddts),
++            position_ids=position_ids,
++            attention_mask=attention_mask,
++            inputs_embeds=inputs_embeds,
++            past_key_values_length=past_key_values_length,
++        )
++
++        encoder_outputs = self.encoder(
++            embedding_output,
++            attention_mask=extended_attention_mask,
++            head_mask=head_mask,
++            encoder_hidden_states=encoder_hidden_states,
++            encoder_attention_mask=encoder_extended_attention_mask,
++            past_key_values=past_key_values,
++            use_cache=use_cache,
++            output_attentions=output_attentions,
++            output_hidden_states=output_hidden_states,
++            return_dict=return_dict,
++        )
++        sequence_output = encoder_outputs[0]
++        pooled_output = self.pooler(sequence_output) if self.pooler is not None else None
++
++        if not return_dict:
++            return (sequence_output, pooled_output) + encoder_outputs[1:]
++
++        return BaseModelOutputWithPoolingAndCrossAttentions(
++            last_hidden_state=sequence_output,
++            pooler_output=pooled_output,
++            past_key_values=encoder_outputs.past_key_values,
++            hidden_states=encoder_outputs.hidden_states,
++            attentions=encoder_outputs.attentions,
++            cross_attentions=encoder_outputs.cross_attentions,
++        )
++    
++def auto_detect_base_tokenizer(config, use_foldseek_sequences):
++    if config.num_hidden_layers == 6:
++        base_checkpoint = 'facebook/esm2_t6_8M_UR50D'
++    elif config.num_hidden_layers == 12:
++        if use_foldseek_sequences:
++            base_checkpoint = 'westlake-repl/SaProt_35M_AF2'
++        else:
++            base_checkpoint = 'facebook/esm2_t12_35M_UR50D'
++    else:
++        base_checkpoint = None
++    assert base_checkpoint is not None, 'The base PLM undefined'
++    esm_tokenizer = AutoTokenizer.from_pretrained(base_checkpoint)
++    return esm_tokenizer
+diff --git a/proteingym/baselines/mulan/mulan/pdb_utils.py b/proteingym/baselines/mulan/mulan/pdb_utils.py
+new file mode 100644
+index 0000000..258eced
+--- /dev/null
++++ b/proteingym/baselines/mulan/mulan/pdb_utils.py
+@@ -0,0 +1,70 @@
++#!/usr/bin/env python
++
++from Bio.PDB.PDBParser import PDBParser
++from Bio.PDB.internal_coords import *
++from Bio.PDB.ic_rebuild import structure_rebuild_test
++from Bio.PDB import MMCIFParser
++from Bio.PDB.PDBIO import PDBIO
++
++import numpy as np
++import pandas as pd
++import os
++
++
++cif_parser = MMCIFParser(QUIET=True)
++pdb_parser = PDBParser(QUIET=True)
++io=PDBIO()
++angles_names = ['phi', "psi", "omg", "tau", "chi1", "chi2", "chi3", "chi4", "chi5"]
++# default 1.4. 1.8 is less than a single amino acid chain break and accounts for a freak bond 
++# (pdb outliers and disordered AF regions)
++IC_Chain.MaxPeptideBond = 1.8 
++        
++        
++def getStructureObject(pdb_file, chain='A'): # if you supply the structure from processPdb, the chain is always A
++    '''
++    Creates structure object specifically for angles extraction.
++    Бывает, что atom_to_internal_coordinates что-то не нравится (resultDict['pass'] == False), но я с этим не разбиралась ещё.
++    '''
++    # parse pdb file as structure object
++    structure = pdb_parser.get_structure('', pdb_file)
++    structure = structure[0][chain] 
++    
++    # format structure for angles retrieval
++    structure.atom_to_internal_coordinates(verbose=True)
++    resultDict = structure_rebuild_test(structure)
++    if resultDict['pass'] == False:
++        print('atom_to_internal_coordinates went wrong :(')
++    return structure # returns structure anyway
++
++
++def AnglesFromStructure(structure):
++    '''
++    Computes angles from structure object and returns a dataframe with amino acid, residue number and all angles
++    '''
++    aa_lst, resnum_lst, angles_lst, bfactors_lst, coords_lst = [], [], [], [], []
++    residues = [i for i in structure.get_residues()]
++
++    # compute angles
++    for residue in residues:
++        R = ''.join([f'{residue.get_full_id()[3][i]}' for i in range(1,3) if residue.get_full_id()[3][i] != ' ']) # in case residue number contains letters in residue.get_full_id()[3][2]
++        resnum_lst.append(R)
++        aa_lst.append(residue.get_resname())
++        # https://biopython.org/docs/dev/api/Bio.PDB.internal_coords.html
++        if residue.internal_coord != None:
++            angles_tuple = tuple([residue.internal_coord.get_angle(angle) for angle in angles_names])
++            angles_lst.append(angles_tuple)
++        else:
++            angles_lst.append(tuple(len(angles_names)*[None])) 
++            
++        bfactors_lst.append(residue['CA'].bfactor)
++        coords_lst.append(residue['CA'].coord)
++            
++    # make a dataframe
++    angles_df = pd.DataFrame(np.around(np.array(angles_lst, dtype=np.float64),2))
++    angles_df.columns = angles_names
++    df = pd.DataFrame({'aa':aa_lst, 'residue_number':resnum_lst})
++    df = pd.concat([df, angles_df], axis=1)
++    df['bfactor'] = bfactors_lst
++    coords = np.array(coords_lst)
++    df[['x', 'y', 'z']] = coords
++    return df
+diff --git a/proteingym/baselines/mulan/mulan/tokenizer.py b/proteingym/baselines/mulan/mulan/tokenizer.py
+new file mode 100644
+index 0000000..7e71433
+--- /dev/null
++++ b/proteingym/baselines/mulan/mulan/tokenizer.py
+@@ -0,0 +1,149 @@
++import os
++
++import numpy as np
++from deli import load_json, save_json, save, load
++from tqdm.auto import tqdm
++import torch
++
++from Bio.PDB.Polypeptide import protein_letters_3to1
++
++from mulan.pdb_utils import AnglesFromStructure, getStructureObject
++from mulan.foldseek_utils import get_struc_seq
++
++
++def preproc_df(data, rot_len, all_amino_acids):
++    # drop unknown amino acids
++    data = data[data.aa.isin(all_amino_acids + ['MSE'])]
++    data['aa'] = [protein_letters_3to1[cur_aa] if cur_aa in all_amino_acids 
++                  else 'X' for cur_aa in data['aa']]
++
++    data['max_len'] = data.aa.map(rot_len)
++    data = data[~np.isnan(data.max_len)]
++    data['max_len'] = data['max_len'].astype(int)
++
++    return data
++
++
++class Tokenizer():
++    def __init__(self, use_foldseek_sequences):
++        self.all_amino_acids = ['ASN', 'TRP', 'GLY', 'ILE', 'ASP', 'VAL', 'LYS', 'PHE',
++                                'ARG', 'HIS', 'MET', 'THR', 'SER', 'GLN', 'LEU', 'ALA', 'CYS',
++                                'PRO', 'GLU', 'TYR']
++
++        self.rot_len_full = {"N": 2, "W": 2, "G": 0, "I": 2, "D": 2, "V": 1, "K": 4, "F": 2, 
++                             "R": 5, "H": 2, "M": 3, "T": 1, "S": 1, "Q": 3, "L": 2, "A": 0, 
++                             "C": 1, "P": 2, "E": 3, "Y": 2, "X": 5}
++        self.rot_len_full['X'] = 5
++        self.one_letter_aas = list(self.rot_len_full.keys())
++        self.nan_fill_value = 182
++        self.pad_value = 4.
++        self.use_foldseek_sequences = use_foldseek_sequences
++
++    def tokenize_protein(self, data):
++
++        splitted_protein = []
++        data = preproc_df(data, self.rot_len_full, all_amino_acids=self.all_amino_acids)
++        if len(data) == 0:
++            return splitted_protein
++
++        angle_cols = ['phi', 'psi'] + [f'chi{i}' for i in range(1, 6)]
++        data.fillna(self.nan_fill_value, inplace=True)
++        data[angle_cols] = data[angle_cols].apply(np.deg2rad)
++
++        for _, row in data.iterrows():
++            cols_to_save = ['aa', 'bfactor', 'x', 'y', 'z'] + \
++                           angle_cols[:2 + row['max_len']]
++                           
++            splitted_protein.append(row[cols_to_save].values.tolist())
++        
++        return splitted_protein
++    
++    def get_angles_from_pdb(self, pdb_path):
++        angles_df = AnglesFromStructure(
++            getStructureObject(pdb_path, chain='A'))
++        return angles_df
++    
++    def get_foldseek_seq(self, pdb_path, plddt_mask, foldseek_path):
++        # Extract the "A" chain from the pdb file and encode it into a struc_seq
++        # pLDDT is used to mask low-confidence regions if "plddt_mask" is True
++        parsed_seqs = get_struc_seq(foldseek_path, pdb_path, ["A"], plddt_mask=plddt_mask)["A"]
++        seq, foldseek_seq, combined_seq = parsed_seqs
++        return combined_seq
++        
++    def preproc_structural_data(self, proteins, protein_names):
++        result_protein_angles = []
++        result_sequences = []
++        result_protein_names = []
++        for protein, name in tqdm(zip(proteins, protein_names), desc='Preproc structural data'):
++            protein_seq = ''.join([protein_aa[0] for protein_aa in protein])
++            if len(protein_seq) < 1:
++                continue
++            padded_protein = [protein_aa[1:5 + 2 + len(protein_aa) - 5] + 
++                            [self.pad_value] * (12 - len(protein_aa))
++                            for protein_aa in protein]
++
++            padded_protein = np.array(padded_protein)
++            result_protein_angles.append(padded_protein)
++            result_sequences.append(protein_seq)
++            result_protein_names.append(name)
++
++        return result_sequences, result_protein_angles, result_protein_names
++    
++    def save_dataset(self, data_path, dataset_path, split, is_experimental_structure, 
++                     extract_foldseek, protein_ids=None, foldseek_path='bin/foldseek'):
++        if protein_ids is None:
++            protein_ids = [fname for fname in os.listdir(data_path) 
++                           if fname.endswith('.pdb') or fname.endswith('.cif')]
++
++        os.makedirs(dataset_path, exist_ok=True)
++        all_proteins = []
++        protein_names = []
++
++        combined_foldseek_sequences = []
++        for fname in tqdm(protein_ids, desc='Tokenizing data'):
++            preprocessed_pdb_path = os.path.join(data_path, fname)
++            data = self.get_angles_from_pdb(preprocessed_pdb_path)
++
++            # foldseek extraction
++            if extract_foldseek:
++                combined_foldseek_seq = self.get_foldseek_seq(preprocessed_pdb_path, 
++                                                              plddt_mask=not is_experimental_structure,
++                                                              foldseek_path=foldseek_path)
++                combined_foldseek_sequences.append(combined_foldseek_seq)
++                assert int(len(combined_foldseek_seq) / 2) == len(data)
++
++            # set all plddts to 100 in case of the experimental structure
++            if is_experimental_structure:
++                data['bfactor'] = 100.
++                
++            # tokenize protein
++            splitted_protein = self.tokenize_protein(data)
++            all_proteins.append(splitted_protein)
++            protein_names.append(fname[:-4])
++
++        res_sequences, res_angles, res_names = self.preproc_structural_data(all_proteins, protein_names)
++
++        seq_lengths = [len(seq) for seq in res_sequences]
++        res_angles = np.concatenate(res_angles)
++        assert sum(seq_lengths) == res_angles.shape[0]
++
++        save_json(res_names, os.path.join(dataset_path, f'{split}_names.json'))
++        save_json(res_sequences, os.path.join(dataset_path, f'{split}_sequences.json'))
++        save(res_angles, os.path.join(dataset_path, f'{split}_angles.npy.gz'))
++        if extract_foldseek:
++            save(combined_foldseek_sequences, 
++                 os.path.join(dataset_path, f'{split}_foldseek_masked_sequences.json'))
++
++    def load_dataset(self, dataset_path, split):
++        if not os.path.exists(os.path.join(dataset_path, f'{split}_names.json')):
++            return None, None, None
++        
++        res_names = load_json(os.path.join(dataset_path, f'{split}_names.json'))
++        if self.use_foldseek_sequences:
++            print('LOAD FOLDSEEK in tokenizer')
++            res_sequences = load_json(os.path.join(dataset_path, f'{split}_foldseek_masked_sequences.json'))
++        else:
++            res_sequences = load_json(os.path.join(dataset_path, f'{split}_sequences.json'))
++        res_angles = torch.from_numpy(load(os.path.join(dataset_path, f'{split}_angles.npy.gz')))
++
++        return res_sequences, res_angles, res_names
+diff --git a/proteingym/baselines/mulan/requirements.txt b/proteingym/baselines/mulan/requirements.txt
+new file mode 100644
+index 0000000..1802811
+--- /dev/null
++++ b/proteingym/baselines/mulan/requirements.txt
+@@ -0,0 +1,15 @@
++tqdm
++numpy
++pandas
++scipy
++torch
++deli
++transformers
++wandb
++pyyaml
++argparse
++biopython
++hydra-core
++accelerate
++bitsandbytes
++seqeval
+\ No newline at end of file
+diff --git a/scripts/scoring_DMS_zero_shot/scoring_MULAN_substitutions.sh b/scripts/scoring_DMS_zero_shot/scoring_MULAN_substitutions.sh
+new file mode 100644
+index 0000000..b702081
+--- /dev/null
++++ b/scripts/scoring_DMS_zero_shot/scoring_MULAN_substitutions.sh
+@@ -0,0 +1,20 @@
++#!/bin/bash
++
++source ../zero_shot_config.sh
++
++export MULAN_model_path="DFrolova/MULAN-small"
++export use_foldseek=False
++
++#export DMS_index="Experiment index to run (e.g. 0,1,...216)"
++export DMS_index=0
++
++python ../../proteingym/baselines/mulan/compute_fitness.py \
++            --MULAN_model_name_or_path ${MULAN_model_path} \
++            --DMS_reference_file_path ${DMS_reference_file_path_subs} \
++            --DMS_data_folder ${DMS_data_folder_subs} \
++            --structure_data_folder ${DMS_structure_folder} \
++            --DMS_index $DMS_index \
++            --use_foldseek $use_foldseek \
++            # --foldseek_path $foldseek_path \
++            --output_scores_folder ${output_scores_folder}
++            # --output_dataset_folder

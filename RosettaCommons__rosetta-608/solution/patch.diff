@@ -1,0 +1,306 @@
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/__init__.py b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/__init__.py
+index 2f87ba39cf0..8e7592e7233 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/__init__.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/__init__.py
+@@ -50,7 +50,7 @@
+     "run",
+     "update_scores",
+ ]
+-__version__: str = "3.5.0"
++__version__: str = "3.7.0"
+ 
+ 
+ with warnings.catch_warnings() and suppress(NameError):
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/config.py b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/config.py
+index abd3fde7b37..097ad406550 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/config.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/config.py
+@@ -38,7 +38,7 @@ class EnvironmentConfig(Generic[G]):
+     _ENV_MANAGERS: Tuple[str, ...] = ("pixi", "uv", "mamba", "conda")
+     _ENV_EXPORT_CMDS: Dict[str, str] = {
+         "pixi": "pixi lock --check || pixi lock --no-install",
+-        "uv": "uv export --format requirements-txt --frozen",
++        "uv": "uv lock --check || uv lock",
+         "mamba": f"mamba env export --prefix '{sys.prefix}'",
+         "conda": f"conda env export --prefix '{sys.prefix}'",
+     }
+@@ -102,13 +102,14 @@ def env_export_cmd(self) -> str:
+             # https://docs.astral.sh/uv/reference/environment/#uv_project
+             project_dir = os.environ.get("UV_PROJECT")
+             if project_dir:
+-                # Append `--project` flag
++                # Append `--project` flag to both commands in the OR clause
+                 logging.info(
+                     "PyRosettaCluster detected the set 'UV_PROJECT' environment variable, and is "
+-                    + f"setting the flag `--project '{project_dir}'` in the `uv export` command."
++                    + f"setting the flag `--project '{project_dir}'` in the `uv lock` command."
+                 )
+                 return (
+-                    f"uv export --format requirements-txt --frozen --project '{project_dir}'"
++                    f"uv lock --check --project '{project_dir}' || "
++                    f"uv lock --project '{project_dir}'"
+                 )
+ 
+         # Use default environment export command
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/converter_tasks.py b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/converter_tasks.py
+index 02d747e22df..e3845fe9e00 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/converter_tasks.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/converter_tasks.py
+@@ -120,8 +120,8 @@ def maybe_issue_environment_warnings() -> None:
+                         bool(re.search(conda_pyrosetta_pattern, yml)) or
+                         ("name: pyrosetta\n" in yml) # Fallback
+                     )
+-                elif environment_manager == "uv": # Match uv `requirements.txt` format
+-                    has_pinned_pyrosetta = bool(re.search(r"^pyrosetta==", yml, flags=re.MULTILINE))
++                elif environment_manager == "uv": # Match uv `uv.lock` format
++                    has_pinned_pyrosetta = bool(re.search(r'^\[\[package\]\]\s*\n\s*name\s*=\s*"pyrosetta"\s*$', yml, flags=re.MULTILINE))
+                 else: # Match conda/mamba `environment.yml` format
+                     has_pinned_pyrosetta = "- pyrosetta=" in yml
+                 if not has_pinned_pyrosetta:
+@@ -501,12 +501,6 @@ def get_yml() -> str:
+     Export the current environment to a string depending on the environment manager.
+     """
+ 
+-    def remove_comments(text: str) -> str:
+-        """Remove lines starting with '#'."""
+-        return "\n".join(
+-            line for line in text.splitlines() if not line.strip().startswith("#")
+-        )
+-
+     def remove_metadata(text: str) -> str:
+         """Remove 'name:' and 'prefix:' lines."""
+         filtered_lines = [
+@@ -539,26 +533,43 @@ def remove_metadata(text: str) -> str:
+         except Exception:
+             return ""
+ 
+-    # For uv/conda/mamba environment managers, run the export command and process the output
+-    try:
+-        result = subprocess.run(
+-            environment_cmd,
+-            shell=True,
+-            check=True,
+-            stderr=subprocess.DEVNULL,
+-            stdout=subprocess.PIPE,
+-            text=True,
+-        )
+-    except subprocess.CalledProcessError:
+-        return ""
++    # Handle uv separately since it writes a `uv.lock` file
++    if env_manager == "uv":
++        try:
++            subprocess.run(
++                environment_cmd,
++                shell=True,
++                check=True,
++                stderr=subprocess.DEVNULL,
++            )
++            # https://docs.astral.sh/uv/reference/environment/#uv_project
++            project_dir = os.environ.get("UV_PROJECT")
++            lock_path = os.path.join(
++                project_dir if project_dir else os.getcwd(),
++                "uv.lock",
++            )
++            with open(lock_path, encoding="utf-8") as f:
++                return f.read()  # Not sanitized, since uv doesn't use conda channels
++        except Exception:
++            return ""
+ 
+-    raw_yml = result.stdout.strip()
+-    if not raw_yml:
+-        return ""
++    # For conda/mamba environment managers, run the export command and process the output
++    if env_manager in ("conda", "mamba"):
++        try:
++            result = subprocess.run(
++                environment_cmd,
++                shell=True,
++                check=True,
++                stderr=subprocess.DEVNULL,
++                stdout=subprocess.PIPE,
++                text=True,
++            )
++        except subprocess.CalledProcessError:
++            return ""
+ 
+-    if env_manager == "uv":
+-        return remove_comments(raw_yml) # Not sanitized, since uv doesn't use conda channels
+-    elif env_manager in ("conda", "mamba"):
++        raw_yml = result.stdout.strip()
++        if not raw_yml:
++            return ""
+         return sanitize_urls(remove_metadata(raw_yml))
+ 
+     raise RuntimeError(f"Unsupported environment manager: '{env_manager}'")
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/converters.py b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/converters.py
+index 0bcc84221aa..3ab32814b33 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/converters.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/converters.py
+@@ -73,7 +73,7 @@
+ 
+ def _parse_filter_results(obj: Any) -> Union[bool, NoReturn]:
+     """Parse the input `filter_results` attribute of PyRosettaCluster."""
+-    _issue_future_warning = True
++    _issue_future_warning = False
+ 
+     @singledispatch
+     def converter(obj: Any) -> NoReturn:
+@@ -151,8 +151,8 @@ def _parse_none(obj: None) -> str:
+                 logging.warning(
+                     _warning_msg.format(
+                         environment_cmd,
+-                        "uv project requirements",
+-                        f"{environment_cmd} > requirements.txt",
++                        "uv project lock",
++                        environment_cmd,
+                     )
+                 )
+             elif environment_manager == "mamba":
+@@ -191,7 +191,7 @@ def _parse_str(obj: str) -> Union[str, NoReturn]:
+             if environment_manager == "pixi":
+                 logging.warning(_warning_msg.format("pixi lock", "pixi project"))
+             elif environment_manager == "uv":
+-                logging.warning(_warning_msg.format("uv requirements", "uv project"))
++                logging.warning(_warning_msg.format("uv lock", "uv project"))
+             elif environment_manager == "mamba":
+                 logging.warning(_warning_msg.format("YML", "mamba environment"))
+             elif environment_manager == "conda":
+@@ -210,7 +210,7 @@ def _parse_str(obj: str) -> Union[str, NoReturn]:
+                 if environment_manager == "pixi":
+                     raise AssertionError(_err_msg.format("pixi lock", "pixi project"))
+                 elif environment_manager == "uv":
+-                    raise AssertionError(_err_msg.format("uv requirements", "uv project"))
++                    raise AssertionError(_err_msg.format("uv lock", "uv project"))
+                 elif environment_manager == "mamba":
+                     raise AssertionError(_err_msg.format("YML", "mamba environment"))
+                 elif environment_manager == "conda":
+@@ -294,7 +294,7 @@ def _none_to_bool(objs: None) -> bool:
+ 
+ def _parse_norm_task_options(obj: Any) -> Union[bool, NoReturn]:
+     """Parse the input `norm_task_options` attribute of PyRosettaCluster."""
+-    _issue_future_warning = True
++    _issue_future_warning = False
+ 
+     @singledispatch
+     def converter(obj: Any) -> NoReturn:
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/core.py b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/core.py
+index 44a80af032c..2ef1407d990 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/core.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/core.py
+@@ -144,11 +144,11 @@
+         for accounting.
+         Default: `project_name` if not specified, else "PyRosettaCluster" if None
+     environment: A `NoneType` or `str` object specifying either the active conda/mamba environment
+-        YML file string, active uv project `requirements.txt` file string, or active pixi project
++        YML file string, active uv project `uv.lock` file string, or active pixi project
+         `pixi.lock` file string. If a `NoneType` object is provided, then generate an environment file
+         string for the active conda/mamba/uv/pixi environment and save it to the full simulation
+         record. If a non-empty `str` object is provided, then validate it against the active
+-        conda/mamba/uv/pixi environment YML/requirements/lock file string and save it to the
++        conda/mamba/uv/pixi environment YML/lock file string and save it to the
+         full simulation record. This ensures that reproduction simulations use an identical
+         conda/mamba/uv/pixi environment to the original simulation. To bypass conda/mamba/uv/pixi
+         environment validation with a warning message, an empty string ('') may be provided (but
+@@ -852,7 +852,7 @@ class PyRosettaCluster(IO[G], LoggingSupport[G], SchedulerManager[G], SecurityIO
+                         (
+                             "pixi.lock"
+                             if self.environment_manager == "pixi"
+-                            else "requirements.txt"
++                            else "uv.lock"
+                             if self.environment_manager == "uv"
+                             else "environment.yml"
+                         )
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/io.py b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/io.py
+index 354e35f4b38..146f2b0ffc0 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/io.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/io.py
+@@ -432,7 +432,6 @@ def _save_results(self, results: Any, kwargs: Dict[Any, Any]) -> None:
+     def _cache_toml(self) -> None:
+         """Cache the pixi/uv TOML file string and TOML file format."""
+ 
+-        toml_file = "" # Empty as fallback
+         if self.environment_manager == "pixi":
+             # https://pixi.sh/dev/reference/environment_variables/#environment-variables-set-by-pixi
+             toml_file = os.environ.get("PIXI_PROJECT_MANIFEST", "")
+@@ -440,6 +439,7 @@ def _cache_toml(self) -> None:
+                 if os.path.isfile(toml_file):
+                     with open(toml_file, "r") as f:
+                         self.toml = sanitize_urls(f.read())
++                    self.toml_format = os.path.basename(toml_file)
+                 else:
+                     logging.warning(
+                         (
+@@ -450,6 +450,7 @@ def _cache_toml(self) -> None:
+                         )
+                     )
+                     self.toml = ""
++                    self.toml_format = ""
+             else:
+                 # https://pixi.sh/dev/python/tutorial/#pixitoml-and-pyprojecttoml
+                 for filename in ("pixi.toml", "pyproject.toml"):
+@@ -457,6 +458,7 @@ def _cache_toml(self) -> None:
+                     if os.path.isfile(toml_file):
+                         with open(toml_file, "r") as f:
+                             self.toml = sanitize_urls(f.read())
++                        self.toml_format = os.path.basename(toml_file)
+                         break
+                 else:
+                     logging.warning(
+@@ -467,6 +469,7 @@ def _cache_toml(self) -> None:
+                         )
+                     )
+                     self.toml = ""
++                    self.toml_format = ""
+         elif self.environment_manager == "uv":
+             # https://docs.astral.sh/uv/reference/environment/#uv_project
+             project_dir = os.environ.get("UV_PROJECT", None)
+@@ -475,6 +478,7 @@ def _cache_toml(self) -> None:
+                 if os.path.isfile(toml_file):
+                     with open(toml_file, "r") as f:
+                         self.toml = sanitize_urls(f.read())
++                    self.toml_format = os.path.basename(toml_file)
+                 else:
+                     logging.warning(
+                         (
+@@ -485,31 +489,34 @@ def _cache_toml(self) -> None:
+                         )
+                     )
+                     self.toml = ""
++                    self.toml_format = ""
+             else:
+                 toml_file = os.path.join(os.getcwd(), "pyproject.toml")
+                 if os.path.isfile(toml_file):
+                     with open(toml_file, "r") as f:
+                         self.toml = sanitize_urls(f.read())
++                    self.toml_format = os.path.basename(toml_file)
+                 else:
+                     logging.warning(
+                         (
+                             "PyRosettaCluster could not detect the uv `pyproject.toml` file! "
+-                            "It is recommended to commit the uv `pyproject.toml` file to the "
+-                            "git repository to reproduce the uv project later."
++                            "The 'UV_PROJECT' environment variable is not set, and a `pyproject.toml` "
++                            "file does not exist in the current working directory. For environment "
++                            "reproducibility, please set the 'UV_PROJECT' environment variable "
++                            "to the uv project root directory, or run the simulation from the uv project "
++                            "root directory. If continuing with this simulation, it is recommended to commit the "
++                            "uv `pyproject.toml` file to the git repository to reproduce the uv project later."
+                         )
+                     )
+                     self.toml = ""
++                    self.toml_format = ""
+         else:
+             self.toml = ""
+             self.toml_format = ""
+ 
+-        # Cache TOML filename as file format
+-        if self.toml:
+-            self.toml_format = os.path.basename(toml_file)
+-
+     def _write_environment_file(self, filename: str) -> None:
+         """
+-        Write the conda/mamba YML, uv requirements, or pixi lock file string to the input filename.
++        Write the conda/mamba YML or uv/pixi lock file string to the input filename.
+         If pixi/uv is used as the environment manager, also write the TOML file string to a separate filename.
+         """
+ 

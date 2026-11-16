@@ -1,0 +1,73 @@
+version = "1.0"
+
+[task]
+name = "default/RosettaCommons__rosetta-536"
+description = "Supporting mamba, uv, and pixi environment managers in PyRosettaCluster"
+
+[metadata]
+difficulty = "large"
+category = "bugfix"
+keywords = [
+    "rosetta",
+    "pr_diff",
+]
+
+[metadata.repo2env]
+pipeline = "pr_diff"
+pipeline_version = "0.3.0"
+repo = "RosettaCommons/rosetta"
+ref = "b230e431d8ef0bcdea01dbb0065ca62c7dd694ad"
+reference = "https://github.com/RosettaCommons/rosetta/pull/536"
+source_access = "auto"
+built_at = "2026-11-15T22:36:27.554684+00:00"
+reward_kinds = [
+    "diff_similarity",
+]
+spec_version = "0.2.0"
+content_hash = "sha256:81e5fce6ca08e93ae01041c22fbb9c8cdaa42160eb524f445081e0a91e760eb2"
+
+[metadata.repo2env.pr_diff]
+pr_merged_at = "2025-10-27T19:30:56Z"
+diff_format = "unified"
+context_files = [
+    "source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/__init__.py",
+    "source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/config.py",
+    "source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/converter_tasks.py",
+    "source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/converters.py",
+    "source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/core.py",
+    "source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/io.py",
+    "source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/toolkit.py",
+    "source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/tools.py",
+    "source/src/python/PyRosetta/src/pyrosetta/tests/distributed/cluster/recreate_environment_test_runs.py",
+    "source/src/python/PyRosetta/src/pyrosetta/tests/distributed/cluster/setup_pixi_env.py",
+    "source/src/python/PyRosetta/src/pyrosetta/tests/distributed/cluster/test_reproducibility.py",
+    "source/src/python/PyRosetta/src/test/T900_distributed.py",
+]
+
+[metadata.repo2env.reward_calibration]
+baseline_reward = 0.0
+loc_changed = 940
+difficulty = "large"
+
+[metadata.repo2env.evaluation]
+schema_version = "1"
+status = "unverified"
+stage = "generation"
+reason_codes = [
+    "validation_not_run",
+]
+detail = "Generated task; validation has not been established."
+provenance = "unknown"
+evidence = []
+
+[metadata.repo2env.reproducibility]
+mode = "local_only"
+image_ref = "python:3.12-slim"
+image_tag = "python:3.12-slim"
+image_visibility = "private"
+
+[agent]
+timeout_sec = 1800.0
+
+[verifier]
+timeout_sec = 300.0

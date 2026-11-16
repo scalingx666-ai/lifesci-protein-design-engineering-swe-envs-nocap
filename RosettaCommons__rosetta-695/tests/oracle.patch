@@ -1,0 +1,74 @@
+diff --git a/source/src/core/pack/task/PackerTask_.cc b/source/src/core/pack/task/PackerTask_.cc
+index 5d6b2cef703..fd9abe2dfed 100644
+--- a/source/src/core/pack/task/PackerTask_.cc
++++ b/source/src/core/pack/task/PackerTask_.cc
+@@ -676,7 +676,7 @@ PackerTask_::show( std::ostream & out ) const {
+ 
+ 	//sml pymol-style selection, great for debugging
+ 	if ( basic::options::option[ basic::options::OptionKeys::packing::print_pymol_selection ].value() ) {
+-		for ( Size i=1, it_end = total_residue(); i != it_end; ++i ) if ( pack_residue(i) ) out << i << "+";
++		for ( Size i=1, it_end = total_residue(); i <= it_end; ++i ) if ( pack_residue(i) ) out << i << "+";
+ 		out << std::endl;
+ 	}
+ }
+diff --git a/source/src/protocols/denovo_design/components/StructureData.cc b/source/src/protocols/denovo_design/components/StructureData.cc
+index e66b6add4f1..dec53d73370 100644
+--- a/source/src/protocols/denovo_design/components/StructureData.cc
++++ b/source/src/protocols/denovo_design/components/StructureData.cc
+@@ -2115,7 +2115,7 @@ utility::vector1< core::Size >
+ compute_cutpoints( core::pose::Pose const & pose )
+ {
+ 	utility::vector1< core::Size > cutpoints;
+-	for ( core::Size resid=1; resid!=pose.size(); ++resid ) {
++	for ( core::Size resid=1; resid<=pose.size(); ++resid ) {
+ 		if ( pose.residue( resid ).has_variant_type( core::chemical::CUTPOINT_LOWER ) ) {
+ 			cutpoints.push_back( resid );
+ 			if ( ( resid < pose.size() ) && !pose.residue( resid + 1 ).has_variant_type( core::chemical::CUTPOINT_UPPER ) ) {
+diff --git a/source/src/protocols/enzdes/BackboneSampler.cc b/source/src/protocols/enzdes/BackboneSampler.cc
+index accbb67baed..78e3e12289e 100644
+--- a/source/src/protocols/enzdes/BackboneSampler.cc
++++ b/source/src/protocols/enzdes/BackboneSampler.cc
+@@ -153,7 +153,7 @@ BackboneSampler::apply( Pose & pose )
+ 	mc.reset( pose );
+ 
+ 	TR << "Running " << bb_moves_ << " trials..." << std::endl;
+-	for ( core::Size ii =1; ii != bb_moves_; ++ii ) {
++	for ( core::Size ii =1; ii <= bb_moves_; ++ii ) {
+ 		bbg8t3amover.apply( pose );
+ 		mc.boltzmann( pose, bbg8t3amover.type() );
+ 	}
+diff --git a/source/src/protocols/fldsgn/BluePrintBDR.cc b/source/src/protocols/fldsgn/BluePrintBDR.cc
+index 17d0d877f6c..9ad0712eefc 100644
+--- a/source/src/protocols/fldsgn/BluePrintBDR.cc
++++ b/source/src/protocols/fldsgn/BluePrintBDR.cc
+@@ -519,7 +519,7 @@ bool BluePrintBDR::centroid_build(
+ 	// ensure modified_archive_pose is completely full-atom, otherwise mismatch
+ 	// will occur when restoring sidechains at the end of the procedure
+ 	bool mod_ap_is_full_atom = true;
+-	for ( core::Size i = 1, ie = modified_archive_pose.size(); mod_ap_is_full_atom && i != ie; ++i ) {
++	for ( core::Size i = 1, ie = modified_archive_pose.size(); mod_ap_is_full_atom && i <= ie; ++i ) {
+ 		mod_ap_is_full_atom &= ( modified_archive_pose.residue( i ).type().mode() == core::chemical::FULL_ATOM_t );
+ 	}
+ 
+diff --git a/source/src/protocols/forge/components/BDR.cc b/source/src/protocols/forge/components/BDR.cc
+index ddecdf4bfc9..f93d633d49d 100644
+--- a/source/src/protocols/forge/components/BDR.cc
++++ b/source/src/protocols/forge/components/BDR.cc
+@@ -281,7 +281,7 @@ bool BDR::centroid_build(
+ 	// ensure modified_archive_pose is completely full-atom, otherwise mismatch
+ 	// will occur when restoring sidechains at the end of the procedure
+ 	bool mod_ap_is_full_atom = true;
+-	for ( core::Size i = 1, ie = modified_archive_pose.size(); mod_ap_is_full_atom && i != ie; ++i ) {
++	for ( core::Size i = 1, ie = modified_archive_pose.size(); mod_ap_is_full_atom && i <= ie; ++i ) {
+ 		mod_ap_is_full_atom &= ( modified_archive_pose.residue( i ).type().mode() == core::chemical::FULL_ATOM_t );
+ 	}
+ 
+@@ -399,7 +399,7 @@ bool BDR::design_refine(
+ 		RestrictResidueToRepackingOP repack_op( new RestrictResidueToRepacking() );
+ 
+ 		Positions new_positions = manager_.new_positions();
+-		for ( core::Size i = 1, ie = pose.size(); i != ie; ++i ) {
++		for ( core::Size i = 1, ie = pose.size(); i <= ie; ++i ) {
+ 			if ( new_positions.find( i ) == new_positions.end() ) {
+ 				repack_op->include_residue( i );
+ 			}

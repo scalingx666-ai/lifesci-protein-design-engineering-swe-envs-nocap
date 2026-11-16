@@ -1,0 +1,136 @@
+diff --git a/modules/bindcraft.nf b/modules/bindcraft.nf
+index 519df07..a467302 100644
+--- a/modules/bindcraft.nf
++++ b/modules/bindcraft.nf
+@@ -62,7 +62,10 @@ process PrepBC {
+     
+     # Parse hotspots - convert to comma-separated string for BindCraft
+     hotspots_param = "${params.hotspot_residues}".strip()
+-    hotspots = ",".join([h.strip() for h in hotspots_param.split(',') if h.strip()]) if hotspots_param else ""
++    if hotspots_param and hotspots_param != "null":
++        hotspots = ",".join([h.strip() for h in hotspots_param.split(',') if h.strip()])
++    else:
++        hotspots = ""
+     
+     # Parse lengths - handle single value or range, store as list for JSON array
+     length_str = "${params.design_length}".strip()
+@@ -99,10 +102,12 @@ process PrepBC {
+         advanced_settings = json.load(f)
+     
+     # Update amino acid types to avoid during design
+-    # BindCraft expects this as a comma-separated string
+     omit_AAs_param = "${params.bc_omit_AAs}".strip()
+-    omit_AAs = ",".join([aa.strip() for aa in omit_AAs_param.split(',') if aa.strip()]) if omit_AAs_param else ""
+-    advanced_settings["omit_AAs"] = omit_AAs  # String: "C,M"
++    if omit_AAs_param and omit_AAs_param != "null":
++        omit_AAs = ",".join([aa.strip() for aa in omit_AAs_param.split(',') if aa.strip()])
++    else:
++        omit_AAs = ""
++    advanced_settings["omit_AAs"] = omit_AAs
+     
+     # Disable BindCraft's internal MPNN routine as we will perform this in ProteinDJ
+     advanced_settings["enable_mpnn"] = False
+diff --git a/nextflow_schema.json b/nextflow_schema.json
+index 9644fd1..089d20a 100644
+--- a/nextflow_schema.json
++++ b/nextflow_schema.json
+@@ -57,7 +57,7 @@
+                     "description": "Path to an input PDB file. e.g. 'target.pdb'"
+                 },
+                 "hotspot_residues": {
+-                    "type": "string",
++                    "type": ["string", "null"],
+                     "description": "Specifies hotspot residues for binding. e.g. 'A56,A115,A123'",
+                     "pattern": "^[A-Z]\\d+(,[A-Z]\\d+)*$"
+                 },
+@@ -166,7 +166,6 @@
+                     "type": "string",
+                     "description": "Input PDB chains to target. Can be one or multiple, in a comma-separated format e.g. 'A,C'. Other chains will be ignored during design.",
+                     "pattern": "^[A-Z](,[A-Z])*$",
+-                    "default": "A",
+                     "hidden": true
+                 },
+                 "bc_design_protocol": {
+diff --git a/schemas/nextflow_schema_bindcraft.json b/schemas/nextflow_schema_bindcraft.json
+index 322bbbb..6188253 100644
+--- a/schemas/nextflow_schema_bindcraft.json
++++ b/schemas/nextflow_schema_bindcraft.json
+@@ -63,7 +63,10 @@
+           "default": "${projectDir}/benchmarkdata/5o45_pd-l1.pdb"
+         },
+         "hotspot_residues": {
+-          "type": "string",
++          "type": [
++            "string",
++            "null"
++          ],
+           "description": "Specifies hotspot residues for binding. e.g. 'A56,A115,A123'",
+           "pattern": "^[A-Z]\\d+(,[A-Z]\\d+)*$"
+         }
+@@ -141,7 +144,6 @@
+           "type": "string",
+           "description": "Input PDB chains to target. Can be one or multiple, in a comma-separated format e.g. 'A,C'. Other chains will be ignored during design.",
+           "pattern": "^[A-Z](,[A-Z])*$",
+-          "default": "A",
+           "hidden": true
+         },
+         "bc_design_protocol": {
+diff --git a/schemas/nextflow_schema_binder_denovo.json b/schemas/nextflow_schema_binder_denovo.json
+index 93959c9..d95e4fc 100644
+--- a/schemas/nextflow_schema_binder_denovo.json
++++ b/schemas/nextflow_schema_binder_denovo.json
+@@ -63,7 +63,10 @@
+           "default": "${projectDir}/benchmarkdata/5o45_pd-l1.pdb"
+         },
+         "hotspot_residues": {
+-          "type": "string",
++          "type": [
++            "string",
++            "null"
++          ],
+           "description": "Specifies hotspot residues for binding. e.g. 'A56,A115,A123'",
+           "pattern": "^[A-Z]\\d+(,[A-Z]\\d+)*$",
+           "default": "A56,A115,A123"
+diff --git a/schemas/nextflow_schema_binder_foldcond.json b/schemas/nextflow_schema_binder_foldcond.json
+index 6c8dbb1..9c1b412 100644
+--- a/schemas/nextflow_schema_binder_foldcond.json
++++ b/schemas/nextflow_schema_binder_foldcond.json
+@@ -57,7 +57,10 @@
+           "default": "${projectDir}/benchmarkdata/5o45_pd-l1.pdb"
+         },
+         "hotspot_residues": {
+-          "type": "string",
++          "type": [
++            "string",
++            "null"
++          ],
+           "description": "Specifies hotspot residues for binding. e.g. 'A56,A115,A123'",
+           "pattern": "^[A-Z]\\d+(,[A-Z]\\d+)*$",
+           "default": "A56,A115,A123"
+diff --git a/schemas/nextflow_schema_custom.json b/schemas/nextflow_schema_custom.json
+index 836fcee..5be20f7 100644
+--- a/schemas/nextflow_schema_custom.json
++++ b/schemas/nextflow_schema_custom.json
+@@ -70,7 +70,10 @@
+           "default": null
+         },
+         "hotspot_residues": {
+-          "type": "string",
++          "type": [
++            "string",
++            "null"
++          ],
+           "description": "Specifies hotspot residues for binding. e.g. 'A56,A115,A123'",
+           "pattern": "^[A-Z]\\d+(,[A-Z]\\d+)*$",
+           "default": null
+@@ -190,8 +193,8 @@
+           "type": "string",
+           "description": "Input PDB chains to target. Can be one or multiple, in a comma-separated format e.g. 'A,C'. Other chains will be ignored during design.",
+           "pattern": "^[A-Z](,[A-Z])*$",
+-          "default": null,
+-          "hidden": true
++          "hidden": true,
++          "default": null
+         },
+         "bc_design_protocol": {
+           "type": "string",

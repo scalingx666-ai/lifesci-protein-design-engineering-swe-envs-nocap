@@ -1,0 +1,63 @@
+version = "1.0"
+
+[task]
+name = "default/LPDI-EPFL__masif-neosurf-15"
+description = "Novel-ligands"
+
+[metadata]
+difficulty = "large"
+category = "bugfix"
+keywords = [
+    "masif-neosurf",
+    "pr_diff",
+]
+
+[metadata.repo2env]
+pipeline = "pr_diff"
+pipeline_version = "0.3.0"
+repo = "LPDI-EPFL/masif-neosurf"
+ref = "49668c27afb0065de1f820e4ec74c0774d38ae02"
+reference = "https://github.com/LPDI-EPFL/masif-neosurf/pull/15"
+source_access = "auto"
+built_at = "2026-11-16T03:14:09.338491+00:00"
+reward_kinds = [
+    "diff_similarity",
+]
+spec_version = "0.2.0"
+content_hash = "sha256:513c5a5b2b807cc25363946127de648c748bc0cd60e4167001051ecfbc28d419"
+
+[metadata.repo2env.pr_diff]
+pr_merged_at = "2025-05-26T15:41:37Z"
+diff_format = "unified"
+context_files = [
+    "masif/source/data_preparation/01-pdb_extract_and_triangulate.py",
+    "masif/source/input_output/protonate.py",
+]
+
+[metadata.repo2env.reward_calibration]
+baseline_reward = 0.0
+loc_changed = 106
+difficulty = "large"
+
+[metadata.repo2env.evaluation]
+schema_version = "1"
+status = "unverified"
+stage = "generation"
+reason_codes = [
+    "validation_not_run",
+]
+detail = "Generated task; validation has not been established."
+provenance = "unknown"
+evidence = []
+
+[metadata.repo2env.reproducibility]
+mode = "local_only"
+image_ref = "python:3.12-slim"
+image_tag = "python:3.12-slim"
+image_visibility = "private"
+
+[agent]
+timeout_sec = 1800.0
+
+[verifier]
+timeout_sec = 300.0

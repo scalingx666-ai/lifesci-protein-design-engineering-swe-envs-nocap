@@ -1,0 +1,139 @@
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/__init__.py b/source/src/python/PyRosetta/src/pyrosetta/__init__.py
+index a261b106e22..eede849b361 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/__init__.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/__init__.py
+@@ -191,9 +191,9 @@ def init(options='-ex1 -ex2aro', extra_options='', set_logging_handler=None, not
+ 
+     if not silent:
+         print( version() )
+-        logger.info( version() )
++        logger.info( "\n" + version() )
+     else:
+-        logger.debug( version() )
++        logger.debug( "\n" + version() )
+     rosetta.protocols.init.init(v)
+     pyrosetta.protocols.h5_fragment_store_provider.init_H5FragmentStoreProvider()
+     pyrosetta.protocols.h5_structure_store_provider.init_H5StructureStoreProvider()
+@@ -213,6 +213,14 @@ def _version_string():
+     return rosetta.utility.Version.package() + " " + ".".join(version)
+ 
+ 
++def _build_signature():
++    extras = "+".join(sorted(rosetta.utility.Version.extras()))
++    extras_string = f"[extras:{extras}]"
++    version_list = _version_string().split()
++    version_list.insert(1, extras_string)
++    return "".join(version_list)
++
++
+ def version():
+     return (
+         '┌───────────────────────────────────────────────────────────────────────────────┐\n'
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/__init__.py b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/__init__.py
+index 005b45c1c05..2633c266871 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/__init__.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/__init__.py
+@@ -51,7 +51,7 @@
+     "run",
+     "update_scores",
+ ]
+-__version__: str = "3.0.0"
++__version__: str = "3.0.1"
+ 
+ _print_conda_warnings()
+ 
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/converters.py b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/converters.py
+index 2cb4529b5e0..13d646fd43a 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/converters.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/converters.py
+@@ -262,7 +262,7 @@ def _parse_bool(obj: bool) -> bool:
+ def _parse_pyrosetta_build(obj: Any) -> Union[str, NoReturn]:
+     """Parse the PyRosetta build string."""
+ 
+-    _pyrosetta_version_string = pyrosetta._version_string()
++    _pyrosetta_version_string = pyrosetta._build_signature()
+ 
+     @singledispatch
+     def converter(obj: Any) -> NoReturn:
+@@ -276,7 +276,7 @@ def _default_none(obj: None) -> str:
+     def _validate_pyrosetta_version_string(obj: str) -> Union[str, NoReturn]:
+         if obj == "":
+             logging.warning(
+-                "The input 'pyrosetta_build' parameter argument is an empty string, "
++                "The input 'pyrosetta_build' keyword argument parameter is an empty string, "
+                 + "which is not a valid PyRosetta build string capturing the original PyRosetta "
+                 + "version! Reproduction simulations may not necessarily reproduce "
+                 + "the original decoy(s)! Please verify that your PyRosetta build "
+@@ -293,12 +293,12 @@ def _validate_pyrosetta_version_string(obj: str) -> Union[str, NoReturn]:
+                     + "Therefore, the original decoy may not necessarily be reproduced! "
+                     + "Using different PyRosetta builds can lead to different outputs. "
+                     + "Please consider running this simulation using the PyRosetta build that "
+-                    + "was used with the original simulation run. Please set the 'pyrosetta_build' parameter "
+-                    + "argument to an empty string ('') to bypass PyRosetta build validation."
++                    + "was used with the original simulation run. Please set the 'pyrosetta_build' keyword "
++                    + "argument parameter to an empty string ('') to bypass PyRosetta build validation."
+                 )
+             else:
+                 logging.debug(
+-                    "The 'pyrosetta_build' parameter argument correctly validated against the original PyRosetta build!"
++                    "The 'pyrosetta_build' keyword argument parameter correctly validated against the original PyRosetta build!"
+                 )
+                 return obj
+ 
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/core.py b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/core.py
+index e272e8a7621..7c572f4114d 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/core.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/core.py
+@@ -118,7 +118,7 @@
+         accounting.
+         Default: None
+     pyrosetta_build: A `str` or `NoneType` object specifying the PyRosetta build as
+-        output by `pyrosetta._version_string()`. If `None` is provided, then PyRosettaCluster
++        output by `pyrosetta._build_signature()`. If `None` is provided, then PyRosettaCluster
+         automatically detects the PyRosetta build and sets this attribute as the `str`.
+         If a non-empty `str` is provided, then validate that the input PyRosetta build is
+         equal to the active PyRosetta build, and raise an error if not. This ensures that
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/tests/distributed/cluster/test_smoke.py b/source/src/python/PyRosetta/src/pyrosetta/tests/distributed/cluster/test_smoke.py
+index c94ff5c1928..3758148e9c3 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/tests/distributed/cluster/test_smoke.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/tests/distributed/cluster/test_smoke.py
+@@ -975,7 +975,7 @@ def my_pyrosetta_protocol(input_packed_pose, **kwargs):
+             self.assertEqual(init_data["author"], author)
+             self.assertEqual(init_data["email"], email)
+             self.assertEqual(init_data["license"], license)
+-            self.assertEqual(init_data["pyrosetta_build"], pyrosetta._version_string())
++            self.assertEqual(init_data["pyrosetta_build"], pyrosetta._build_signature())
+             self.assertListEqual(init_data["options"]["run:constant_seed"], ["true"])
+ 
+             # Verify metadata in output PyRosetta initialization file
+@@ -1024,7 +1024,7 @@ def my_pyrosetta_protocol(input_packed_pose, **kwargs):
+                 self.assertEqual(decoy_init_data["author"], author)
+                 self.assertEqual(decoy_init_data["email"], email)
+                 self.assertEqual(decoy_init_data["license"], license)
+-                self.assertEqual(decoy_init_data["pyrosetta_build"], pyrosetta._version_string())
++                self.assertEqual(decoy_init_data["pyrosetta_build"], pyrosetta._build_signature())
+                 self.assertListEqual(decoy_init_data["options"]["run:constant_seed"], ["true"])
+ 
+                 # Verify metadata in decoy output PyRosetta initialization file
+@@ -1111,7 +1111,7 @@ def my_pyrosetta_protocol(input_packed_pose, **kwargs):
+             self.assertEqual(exported_init_data["author"], author)
+             self.assertEqual(exported_init_data["email"], email)
+             self.assertEqual(exported_init_data["license"], license)
+-            self.assertEqual(exported_init_data["pyrosetta_build"], pyrosetta._version_string())
++            self.assertEqual(exported_init_data["pyrosetta_build"], pyrosetta._build_signature())
+             self.assertListEqual(exported_init_data["options"]["run:constant_seed"], ["true"])
+ 
+             # Verify metadata in exported PyRosetta initialization file
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/utility/initialization.py b/source/src/python/PyRosetta/src/pyrosetta/utility/initialization.py
+index 601a4087eb0..f90fba0fcc9 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/utility/initialization.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/utility/initialization.py
+@@ -56,7 +56,7 @@ class PyRosettaInitFileParserBase(object):
+     )
+ 
+     def get_pyrosetta_build(self):
+-        return pyrosetta._version_string()
++        return pyrosetta._build_signature()
+ 
+     def pyrosetta_build_warning(self, original_pyrosetta_build, current_pyrosetta_build):
+         _msg = os.linesep.join(

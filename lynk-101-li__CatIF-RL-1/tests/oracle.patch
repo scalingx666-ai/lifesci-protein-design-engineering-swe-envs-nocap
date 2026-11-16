@@ -1,0 +1,72 @@
+diff --git a/CITATION.cff b/CITATION.cff
+index 5e03e28..fedc92a 100644
+--- a/CITATION.cff
++++ b/CITATION.cff
+@@ -1,5 +1,5 @@
+ cff-version: 1.2.0
+-message: "If you use CatIF-RL in your research, please cite the accompanying preprint."
++message: "If you use CatIF-RL in your research, please cite the peer-reviewed article."
+ title: "CatIF-RL: Activity-Oriented Enzyme Sequence Design by Steered Inverse Protein Folding"
+ type: software
+ authors:
+@@ -70,7 +70,8 @@ preferred-citation:
+     - family-names: Wang
+       given-names: Feng
+       orcid: "https://orcid.org/0000-0002-9403-4337"
+-  journal: "bioRxiv"
++  journal: "Journal of Chemical Information and Modeling"
+   year: 2026
+-  doi: "10.64898/2026.05.11.724288"
+-  url: "https://www.biorxiv.org/content/10.64898/2026.05.11.724288"
++  month: 7
++  doi: "10.1021/acs.jcim.6c01587"
++  url: "https://doi.org/10.1021/acs.jcim.6c01587"
+diff --git a/README.md b/README.md
+index 47dba7d..d57e717 100644
+--- a/README.md
++++ b/README.md
+@@ -1,6 +1,6 @@
+ # CatIF-RL
+ 
+-[![bioRxiv](https://img.shields.io/badge/bioRxiv-10.64898%2F2026.05.11.724288-b00.svg)](https://doi.org/10.64898/2026.05.11.724288)
++[![JCIM](https://img.shields.io/badge/JCIM-10.1021%2Facs.jcim.6c01587-006b54.svg)](https://doi.org/10.1021/acs.jcim.6c01587)
+ [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.20357062.svg)](https://doi.org/10.5281/zenodo.20357062)
+ [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+ [![Python 3.10](https://img.shields.io/badge/python-3.10-blue.svg)](https://www.python.org/downloads/)
+@@ -129,13 +129,13 @@ Training data and trained policy weights are too large for git and are archived
+ 
+ ## Citation
+ 
+-If you use CatIF-RL in your research, please cite the preprint:
++If you use CatIF-RL in your research, please cite the peer-reviewed article:
+ 
+ ```
+ Li, Y.; Xiong, J.; Zhang, Y.; Cai, T.; Fu, C.; Li, S.; Xu, W.; Lyu, R.;
+ Chen, Z.; Guo, Z.; Gong, X.; Wang, F. CatIF-RL: Activity-Oriented Enzyme
+-Sequence Design by Steered Inverse Protein Folding. bioRxiv 2026.
+-DOI: 10.64898/2026.05.11.724288.
++Sequence Design by Steered Inverse Protein Folding. J. Chem. Inf. Model. 2026.
++https://doi.org/10.1021/acs.jcim.6c01587.
+ ```
+ 
+ BibTeX:
+@@ -144,14 +144,15 @@ BibTeX:
+ @article{li2026catifrl,
+   title   = {CatIF-RL: Activity-Oriented Enzyme Sequence Design by Steered Inverse Protein Folding},
+   author  = {Li, Yanheng and Xiong, Jialong and Zhang, Yuxin and Cai, Tong and Fu, Chuan and Li, Shutong and Xu, Wei and Lyu, Ruoyi and Chen, Zhaoyang and Guo, Zheng and Gong, Xinqi and Wang, Feng},
+-  journal = {bioRxiv},
++  journal = {Journal of Chemical Information and Modeling},
+   year    = {2026},
+-  doi     = {10.64898/2026.05.11.724288},
+-  url     = {https://www.biorxiv.org/content/10.64898/2026.05.11.724288}
++  month   = jul,
++  doi     = {10.1021/acs.jcim.6c01587},
++  url     = {https://doi.org/10.1021/acs.jcim.6c01587}
+ }
+ ```
+ 
+-A peer-reviewed journal version is forthcoming — this section will be updated to point to the journal article once it is published. A machine-readable [`CITATION.cff`](CITATION.cff) is also provided so GitHub renders the "Cite this repository" button automatically.
++The article was published online on July 17, 2026. A machine-readable [`CITATION.cff`](CITATION.cff) is also provided so GitHub renders the "Cite this repository" button automatically. The Zenodo DOI above identifies the archived software release; the JCIM DOI identifies the peer-reviewed article.
+ 
+ ## License
+ 

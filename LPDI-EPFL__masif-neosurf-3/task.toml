@@ -1,0 +1,63 @@
+version = "1.0"
+
+[task]
+name = "default/LPDI-EPFL__masif-neosurf-3"
+description = "Fix: adjust TMPDIR path and update PYTHONPATH export"
+
+[metadata]
+difficulty = "small"
+category = "bugfix"
+keywords = [
+    "masif-neosurf",
+    "pr_diff",
+]
+
+[metadata.repo2env]
+pipeline = "pr_diff"
+pipeline_version = "0.3.0"
+repo = "LPDI-EPFL/masif-neosurf"
+ref = "6ce860a673ef8ea99046dec85e8d7a216003a4fe"
+reference = "https://github.com/LPDI-EPFL/masif-neosurf/pull/3"
+source_access = "auto"
+built_at = "2026-11-16T03:14:10.713976+00:00"
+reward_kinds = [
+    "diff_similarity",
+]
+spec_version = "0.2.0"
+content_hash = "sha256:5636c5933ab96d39a58522778409eb2e319d20aa17a7966cc504c9d453ab447b"
+
+[metadata.repo2env.pr_diff]
+pr_merged_at = "2024-06-23T17:37:47Z"
+diff_format = "unified"
+context_files = [
+    ".gitignore",
+    "preprocess_pdb.sh",
+]
+
+[metadata.repo2env.reward_calibration]
+baseline_reward = 0.0
+loc_changed = 6
+difficulty = "small"
+
+[metadata.repo2env.evaluation]
+schema_version = "1"
+status = "unverified"
+stage = "generation"
+reason_codes = [
+    "validation_not_run",
+]
+detail = "Generated task; validation has not been established."
+provenance = "unknown"
+evidence = []
+
+[metadata.repo2env.reproducibility]
+mode = "local_only"
+image_ref = "python:3.12-slim"
+image_tag = "python:3.12-slim"
+image_visibility = "private"
+
+[agent]
+timeout_sec = 1800.0
+
+[verifier]
+timeout_sec = 300.0

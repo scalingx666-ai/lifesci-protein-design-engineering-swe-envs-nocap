@@ -1,0 +1,126 @@
+diff --git a/source/src/utility/signals/BufferedSignalHub.hh b/source/src/utility/signals/BufferedSignalHub.hh
+index 5acc8446b6f..2c36ef38ccc 100644
+--- a/source/src/utility/signals/BufferedSignalHub.hh
++++ b/source/src/utility/signals/BufferedSignalHub.hh
+@@ -87,16 +87,8 @@ public: // construct/destruct
+ 	inline
+ 	~BufferedSignalHub() override = default;
+ 
+-
+-private: // disallow copy construction and assignment
+-
+-
+-	/// @brief disallow copy constructor
+-	BufferedSignalHub( BufferedSignalHub const & rval );
+-
+-
+-	/// @brief disallow copy assignment
+-	BufferedSignalHub & operator =( BufferedSignalHub const & rval );
++	BufferedSignalHub( BufferedSignalHub const & ) = delete;
++	BufferedSignalHub & operator =( BufferedSignalHub const & ) = delete;
+ 
+ 
+ public: // signal management
+diff --git a/source/src/utility/signals/LinkUnit.hh b/source/src/utility/signals/LinkUnit.hh
+index a9036ac1d38..4cae2211072 100644
+--- a/source/src/utility/signals/LinkUnit.hh
++++ b/source/src/utility/signals/LinkUnit.hh
+@@ -43,18 +43,6 @@ private:
+ 	typedef utility::VirtualBase Super;
+ 
+ 
+-	/// @brief disallow default constructor
+-	LinkUnit();
+-
+-
+-	/// @brief disallow copy constructor
+-	LinkUnit( LinkUnit const & rval );
+-
+-
+-	/// @brief disallow copy assignment
+-	LinkUnit & operator =( LinkUnit const & rval );
+-
+-
+ public:
+ 
+ 
+@@ -73,6 +61,10 @@ public:
+ 	inline
+ 	~LinkUnit() override = default;
+ 
++	LinkUnit() = delete;
++	LinkUnit( LinkUnit const & ) = delete;
++	LinkUnit & operator =( LinkUnit const & ) = delete;
++
+ 
+ 	/// @brief return a reference to the function object with requested cast
+ 	template< typename Function >
+diff --git a/source/src/utility/signals/PausableSignalHub.hh b/source/src/utility/signals/PausableSignalHub.hh
+index fe12e86cdbe..30136f21f72 100644
+--- a/source/src/utility/signals/PausableSignalHub.hh
++++ b/source/src/utility/signals/PausableSignalHub.hh
+@@ -74,16 +74,8 @@ public: // construct/destruct
+ 	inline
+ 	~PausableSignalHub() override = default;
+ 
+-
+-private: // disallow copy construction and assignment
+-
+-
+-	/// @brief disallow copy constructor
+-	PausableSignalHub( PausableSignalHub const & rval );
+-
+-
+-	/// @brief disallow copy assignment
+-	PausableSignalHub & operator =( PausableSignalHub const & rval );
++	PausableSignalHub( PausableSignalHub const & ) = delete;
++	PausableSignalHub & operator =( PausableSignalHub const & ) = delete;
+ 
+ 
+ public: // signal management
+diff --git a/source/src/utility/signals/SignalHub.hh b/source/src/utility/signals/SignalHub.hh
+index d99314195ad..d949b796f78 100644
+--- a/source/src/utility/signals/SignalHub.hh
++++ b/source/src/utility/signals/SignalHub.hh
+@@ -95,16 +95,8 @@ public: // construct/destruct
+ 		invalidate_all( links_ );
+ 	}
+ 
+-
+-private: // disallow copy construction and assignment
+-
+-
+-	/// @brief disallow copy constructor
+-	SignalHub( SignalHub const & rval );
+-
+-
+-	/// @brief disallow copy assignment
+-	SignalHub & operator =( SignalHub const & rval );
++	SignalHub( SignalHub const & ) = delete;
++	SignalHub & operator =( SignalHub const & ) = delete;
+ 
+ 
+ public: // operators
+diff --git a/source/src/utility/signals/TokenHub.hh b/source/src/utility/signals/TokenHub.hh
+index 60fb6bf20b8..12e4450d9f8 100644
+--- a/source/src/utility/signals/TokenHub.hh
++++ b/source/src/utility/signals/TokenHub.hh
+@@ -89,16 +89,8 @@ public: // construct/destruct
+ 		this->invalidate_all( tokens_ );
+ 	}
+ 
+-
+-private: // disallow copy construction and assignment
+-
+-
+-	/// @brief disallow copy constructor
+-	TokenHub( TokenHub const & rval );
+-
+-
+-	/// @brief disallow copy assignment
+-	TokenHub & operator =( TokenHub const & rval );
++	TokenHub( TokenHub const & ) = delete;
++	TokenHub & operator =( TokenHub const & ) = delete;
+ 
+ 
+ public: // token copy

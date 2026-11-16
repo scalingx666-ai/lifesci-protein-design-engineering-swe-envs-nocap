@@ -1,0 +1,63 @@
+version = "1.0"
+
+[task]
+name = "default/RosettaCommons__rosetta-277"
+description = "Add cmath includes"
+
+[metadata]
+difficulty = "easy"
+category = "bugfix"
+keywords = [
+    "rosetta",
+    "pr_diff",
+]
+
+[metadata.repo2env]
+pipeline = "pr_diff"
+pipeline_version = "0.3.0"
+repo = "RosettaCommons/rosetta"
+ref = "4e95d564dc8b93fbe830018d2f295f3f69a70dfd"
+reference = "https://github.com/RosettaCommons/rosetta/pull/277"
+source_access = "auto"
+built_at = "2026-11-15T22:37:37.026046+00:00"
+reward_kinds = [
+    "diff_similarity",
+]
+spec_version = "0.2.0"
+content_hash = "sha256:192164ce129ed4aa738aeb197e56b985219d1fa4ca03b6be38779f7aaa409137"
+
+[metadata.repo2env.pr_diff]
+pr_merged_at = "2025-05-28T22:24:52Z"
+diff_format = "unified"
+context_files = [
+    "source/src/protocols/recces/sampler/MC_OneTorsion.cc",
+    "source/src/protocols/recces/sampler/rna/MC_RNA_KIC_Sampler.cc",
+]
+
+[metadata.repo2env.reward_calibration]
+baseline_reward = 0.0
+loc_changed = 4
+difficulty = "trivial"
+
+[metadata.repo2env.evaluation]
+schema_version = "1"
+status = "unverified"
+stage = "generation"
+reason_codes = [
+    "validation_not_run",
+]
+detail = "Generated task; validation has not been established."
+provenance = "unknown"
+evidence = []
+
+[metadata.repo2env.reproducibility]
+mode = "local_only"
+image_ref = "python:3.12-slim"
+image_tag = "python:3.12-slim"
+image_visibility = "private"
+
+[agent]
+timeout_sec = 1800.0
+
+[verifier]
+timeout_sec = 300.0

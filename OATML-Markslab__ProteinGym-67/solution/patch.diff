@@ -1,0 +1,213 @@
+diff --git a/config.json b/config.json
+index c20401a..e49e66b 100644
+--- a/config.json
++++ b/config.json
+@@ -71,7 +71,8 @@
+         "ProSST-512":{"input_score_name":"ProSST-512", "location":"ProSST/ProSST-512", "directionality": 1, "key": "mutant","model_type":"Hybrid - Structure & PLM"},
+         "ProSST-1024":{"input_score_name":"ProSST-1024", "location":"ProSST/ProSST-1024", "directionality": 1, "key": "mutant","model_type":"Hybrid - Structure & PLM"},
+         "ProSST-2048":{"input_score_name":"ProSST-2048", "location":"ProSST/ProSST-2048", "directionality": 1, "key": "mutant","model_type":"Hybrid - Structure & PLM"},
+-        "ProSST-4096":{"input_score_name":"ProSST-4096", "location":"ProSST/ProSST-4096", "directionality": 1, "key": "mutant","model_type":"Hybrid - Structure & PLM"}
++        "ProSST-4096":{"input_score_name":"ProSST-4096", "location":"ProSST/ProSST-4096", "directionality": 1, "key": "mutant","model_type":"Hybrid - Structure & PLM"},
++        "RSALOR":{"input_score_name":"RSALOR", "location":"RSALOR", "directionality": -1, "key": "mutant","model_type":"Hybrid - Structure & Alignment"}
+     
+     },
+     "model_list_zero_shot_indels_DMS":{
+diff --git a/proteingym/baselines/RSALOR/run_rsalor.py b/proteingym/baselines/RSALOR/run_rsalor.py
+new file mode 100644
+index 0000000..24ba608
+--- /dev/null
++++ b/proteingym/baselines/RSALOR/run_rsalor.py
+@@ -0,0 +1,140 @@
++
++"""
++Run RSALOR mutational landscape predictions on DMS datasets.
++"""
++
++# Imports ----------------------------------------------------------------------
++import os
++import argparse
++try:
++    from rsalor import MSA
++    from rsalor.structure import Structure
++    from rsalor.utils import CSV
++except:
++    raise ImportError("Import of pip package 'rsalor' failed. Please install the package with 'pip install rsalor'.")
++
++
++# Main -------------------------------------------------------------------------
++def main():
++
++    # Constants
++    MUTATION_PROPERTY = "mutant"
++    PREDICTION_PROPERTY = "RSALOR"
++    REMOVE_PROPERTIES_IN_OUTPUT = ["DMS_score", "DMS_score_bin"]
++    SEP = ","
++    CHAIN = "A"
++    MAX_CPUS = 16
++    
++    # Set number of used CPUs
++    n_cpu_total = os.cpu_count()
++    n_cpu_used = max(1, min(n_cpu_total // 2, MAX_CPUS))
++
++    # Parse arguments
++    parser = argparse.ArgumentParser(description='RSALOR arguments')
++    parser.add_argument("--DMS_reference_file_path", type=str, help="Datasets reference '.csv' file.")
++    parser.add_argument("--DMS_data_folder", type=str, help="Initial DMS datasets folder")
++    parser.add_argument("--MSA_folder", type=str, help="MSA ('.a2m' or '.fasta') folder")
++    parser.add_argument("--DMS_structure_folder", type=str, help="PDB ('.pdb') folder")
++    parser.add_argument("--output_scores_folder", type=str, help="Output folder")
++    args = parser.parse_args()
++
++    # Read reference file
++    dataset_reference_path = args.DMS_reference_file_path
++    dataset_reference = CSV(sep=SEP, name="DMS reference").read(dataset_reference_path)
++    print(f"\nEvaluate RSALOR on {len(dataset_reference)} DMS datasets")
++    print(f" * dataset_reference_path: '{dataset_reference_path}'")
++    dataset_reference.show()
++
++    # Init output folder if required
++    if not os.path.isdir(args.output_scores_folder):
++        print(f"\nCreate new output directory '{args.output_scores_folder}'.")
++        os.mkdir(args.output_scores_folder)
++
++    # Loop on DMS datasets
++    print(f"\nRun RSALOR on datasets from '{args.DMS_data_folder}' ...")
++    for i, dataset_entry in enumerate(dataset_reference):
++
++        # Init metadata
++        dms_name = dataset_entry["DMS_id"]
++        msa_name = dataset_entry["MSA_filename"]
++        pdb_name = dataset_entry["pdb_file"]
++        resid_shift = int(dataset_entry["MSA_start"]) - 1
++        print(f"\n * Run RSALOR {i+1} / {len(dataset_reference)}: '{dms_name}'")
++
++        # Set paths
++        dataset_input_path = os.path.join(args.DMS_data_folder, f"{dms_name}.csv")
++        dataset_output_path = os.path.join(args.output_scores_folder, f"{dms_name}.csv")
++        msa_path = os.path.join(args.MSA_folder, f"{msa_name}")
++        pdb_path = os.path.join(args.DMS_structure_folder, f"{pdb_name}")
++
++        # Run RSALOR
++        if "|" not in pdb_name: # normal case
++            msa = MSA(
++                msa_path, pdb_path, CHAIN,
++                num_threads=n_cpu_used,
++                verbose=False, disable_warnings=True,
++            )
++        else: # one single case when the PDB structure is splitted in 3 files ...
++            # Oh God why you put 3 different '.pdb' files for one protein instead of merging them in one file :( ... 
++            # (I am not supposed to do that with my code)
++
++            # Set all PDB paths
++            pdb_paths_list = [os.path.join(args.DMS_structure_folder, f"{pdb_name_i}") for pdb_name_i in pdb_name.split("|")]
++
++            # Init MSA object with first structure
++            msa = MSA(
++                msa_path, pdb_paths_list[0], CHAIN,
++                num_threads=n_cpu_used,
++                verbose=False, disable_warnings=True,
++            )
++
++            # Manually merge all structures to one single structure
++            structures = [Structure(pdb_path_i, CHAIN) for pdb_path_i in pdb_paths_list]
++            main_structure = structures[0]
++            for i in range(1, len(structures)):
++                for residue in structures[i].residues:
++                    main_structure.residues.append(residue)
++            for resid, res in enumerate(main_structure.residues):
++                res.position = str(resid+1) # re-index all residues
++            main_structure.chain_residues = [res for res in main_structure.residues if res.chain == main_structure.chain]
++            main_structure.residues_map = {res.resid: res for res in main_structure.residues}
++            main_structure.sequence.sequence = "".join(res.amino_acid.one for res in main_structure.chain_residues)
++
++            # Manually inject merged structure in the MSA object
++            msa.structure = main_structure
++            msa._align_structure_to_sequence()
++            msa._init_weights()
++            msa._init_counts()
++
++        # Output RSALOR scores
++        rsalor_single_scores = msa.get_scores()
++
++        # Format scores (and shift mutation residue id reference because of MSA files shifts)
++        rsalor_single_scores_map = {
++            s["mutation_fasta"][0] + str(int(s["mutation_fasta"][1:-1])+resid_shift) + s["mutation_fasta"][-1]: s
++            for s in rsalor_single_scores
++        }
++
++        # Read dataset
++        dataset = CSV(sep=SEP, name=dms_name).read(dataset_input_path)
++        for property_to_remove in REMOVE_PROPERTIES_IN_OUTPUT:
++            dataset.remove_col(property_to_remove)
++
++        # Assign predicted values
++        dataset.add_empty_col(PREDICTION_PROPERTY, allow_replacement=True)
++        for mutation_entry in dataset:
++            mutations_arr = mutation_entry[MUTATION_PROPERTY].split(":")
++            mutation_entry[PREDICTION_PROPERTY] = sum([rsalor_single_scores_map[mut]["RSA*LOR"] for mut in mutations_arr])
++
++        # Save output
++        print(f"   - save output to '{dataset_output_path}'")
++        dataset.show()
++        dataset.write(dataset_output_path)
++
++    # Log DONE
++    print("\nDONE.")
++
++
++# Execution --------------------------------------------------------------------
++if __name__ == "__main__":
++    main()
+diff --git a/proteingym/constants.json b/proteingym/constants.json
+index b46e630..c594281 100644
+--- a/proteingym/constants.json
++++ b/proteingym/constants.json
+@@ -73,7 +73,8 @@
+         "ProSST-512": "ProSST (K=512)",
+         "ProSST-1024": "ProSST (K=1024)",
+         "ProSST-2048": "ProSST (K=2048)",
+-        "ProSST-4096": "ProSST (K=4096)"
++        "ProSST-4096": "ProSST (K=4096)",
++        "RSALOR": "RSALOR model"
+     },
+     "model_references":{
+         "Tranception_L_no_retrieval":"<a href='https://proceedings.mlr.press/v162/notin22a.html'>Notin, P., Dias, M., Frazer, J., Marchena-Hurtado, J., Gomez, A.N., Marks, D.S., & Gal, Y. (2022). Tranception: Protein Fitness Prediction with Autoregressive Transformers and Inference-time Retrieval. ICML.</a>",
+@@ -149,7 +150,8 @@
+         "ProSST-512": "<a href='https://www.biorxiv.org/content/10.1101/2024.04.15.589672v3'>Mingchen Li, Yang Tan, Xinzhu Ma, Bozitao Zhong, Ziyi Zhou, Huiqun Yu, Wanli Ouyang, Liang Hong, Bingxin Zhou, Pan Tan. (2024). ProSST: Protein language modeling with quantizied structure and disentangled attention. bioRxiv.</a>",
+         "ProSST-1024": "<a href='https://www.biorxiv.org/content/10.1101/2024.04.15.589672v3'>Mingchen Li, Yang Tan, Xinzhu Ma, Bozitao Zhong, Ziyi Zhou, Huiqun Yu, Wanli Ouyang, Liang Hong, Bingxin Zhou, Pan Tan. (2024). ProSST: Protein language modeling with quantizied structure and disentangled attention. bioRxiv.</a>",
+         "ProSST-2048": "<a href='https://www.biorxiv.org/content/10.1101/2024.04.15.589672v3'>Mingchen Li, Yang Tan, Xinzhu Ma, Bozitao Zhong, Ziyi Zhou, Huiqun Yu, Wanli Ouyang, Liang Hong, Bingxin Zhou, Pan Tan. (2024). ProSST: Protein language modeling with quantizied structure and disentangled attention. bioRxiv.</a>",
+-        "ProSST-4096": "<a href='https://www.biorxiv.org/content/10.1101/2024.04.15.589672v3'>Mingchen Li, Yang Tan, Xinzhu Ma, Bozitao Zhong, Ziyi Zhou, Huiqun Yu, Wanli Ouyang, Liang Hong, Bingxin Zhou, Pan Tan. (2024). ProSST: Protein language modeling with quantizied structure and disentangled attention. bioRxiv.</a>"
++        "ProSST-4096": "<a href='https://www.biorxiv.org/content/10.1101/2024.04.15.589672v3'>Mingchen Li, Yang Tan, Xinzhu Ma, Bozitao Zhong, Ziyi Zhou, Huiqun Yu, Wanli Ouyang, Liang Hong, Bingxin Zhou, Pan Tan. (2024). ProSST: Protein language modeling with quantizied structure and disentangled attention. bioRxiv.</a>",
++        "RSALOR": "<a href='https://www.biorxiv.org/content/10.1101/2025.02.03.636212v1'>Matsvei Tsishyn, Pauline Hermans, Fabrizio Pucci, Marianne Rooman. (2025). Residue conservation and solvent accessibility are (almost) all you need for predicting mutational effects in proteins. bioRxiv.</a>"
+ 
+     },
+     "clean_names":{
+@@ -232,7 +234,8 @@
+         "ProSST-512": "ProSST (K=512)",
+         "ProSST-1024": "ProSST (K=1024)",
+         "ProSST-2048": "ProSST (K=2048)",
+-        "ProSST-4096": "ProSST (K=4096)"
++        "ProSST-4096": "ProSST (K=4096)",
++        "RSALOR": "RSALOR"
+     },
+     "supervised_model_details": {
+         "ProteinNPT":"ProteinNPT Model",
+diff --git a/scripts/scoring_DMS_zero_shot/scoring_RSALOR_substitutions.sh b/scripts/scoring_DMS_zero_shot/scoring_RSALOR_substitutions.sh
+new file mode 100644
+index 0000000..9cb11a9
+--- /dev/null
++++ b/scripts/scoring_DMS_zero_shot/scoring_RSALOR_substitutions.sh
+@@ -0,0 +1,13 @@
++#!/bin/bash 
++
++source ../zero_shot_config.sh
++source activate proteingym_env
++
++export output_scores_folder=${DMS_output_score_folder_subs}/RSALOR/
++
++python ../../proteingym/baselines/RSALOR/run_rsalor.py \
++    --DMS_reference_file_path ${DMS_reference_file_path_subs} \
++    --DMS_data_folder ${DMS_data_folder_subs} \
++    --MSA_folder ${DMS_MSA_data_folder} \
++    --DMS_structure_folder ${DMS_structure_folder} \
++    --output_scores_folder ${output_scores_folder} \

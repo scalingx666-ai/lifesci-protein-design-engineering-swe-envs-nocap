@@ -1,0 +1,62 @@
+version = "1.0"
+
+[task]
+name = "default/LPDI-EPFL__masif-neosurf-16"
+description = "Minor_update"
+
+[metadata]
+difficulty = "medium"
+category = "bugfix"
+keywords = [
+    "masif-neosurf",
+    "pr_diff",
+]
+
+[metadata.repo2env]
+pipeline = "pr_diff"
+pipeline_version = "0.3.0"
+repo = "LPDI-EPFL/masif-neosurf"
+ref = "f746178b183516b843326fcff4c34cb76177f439"
+reference = "https://github.com/LPDI-EPFL/masif-neosurf/pull/16"
+source_access = "auto"
+built_at = "2026-11-16T03:14:08.089521+00:00"
+reward_kinds = [
+    "diff_similarity",
+]
+spec_version = "0.2.0"
+content_hash = "sha256:39ac18f8289bb449606e93ce2c24822acbc8b0dbb10ee0750957d59e1b1d9db9"
+
+[metadata.repo2env.pr_diff]
+pr_merged_at = "2025-06-05T15:12:58Z"
+diff_format = "unified"
+context_files = [
+    "masif_search.py",
+]
+
+[metadata.repo2env.reward_calibration]
+baseline_reward = 0.0
+loc_changed = 40
+difficulty = "medium"
+
+[metadata.repo2env.evaluation]
+schema_version = "1"
+status = "unverified"
+stage = "generation"
+reason_codes = [
+    "validation_not_run",
+]
+detail = "Generated task; validation has not been established."
+provenance = "unknown"
+evidence = []
+
+[metadata.repo2env.reproducibility]
+mode = "local_only"
+image_ref = "python:3.12-slim"
+image_tag = "python:3.12-slim"
+image_visibility = "private"
+
+[agent]
+timeout_sec = 1800.0
+
+[verifier]
+timeout_sec = 300.0

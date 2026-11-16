@@ -1,0 +1,65 @@
+version = "1.0"
+
+[task]
+name = "default/RosettaCommons__rosetta-661"
+description = "Refactor pimpl pointers in XMLSchemaComplexTypeGenerator and XMLValidator to unique_ptr"
+
+[metadata]
+difficulty = "small"
+category = "bugfix"
+keywords = [
+    "rosetta",
+    "pr_diff",
+]
+
+[metadata.repo2env]
+pipeline = "pr_diff"
+pipeline_version = "0.3.0"
+repo = "RosettaCommons/rosetta"
+ref = "068bd85322153b1ddc5a354f8cf0633a5631e9fa"
+reference = "https://github.com/RosettaCommons/rosetta/pull/661"
+source_access = "auto"
+built_at = "2026-11-15T22:35:30.153942+00:00"
+reward_kinds = [
+    "diff_similarity",
+]
+spec_version = "0.2.0"
+content_hash = "sha256:f5b47a66dc955907efe49e6b6ca405b03fa0f63c1d2a4339f8a4891a1a7aa492"
+
+[metadata.repo2env.pr_diff]
+pr_merged_at = "2026-05-07T17:56:11Z"
+diff_format = "unified"
+context_files = [
+    "source/src/utility/tag/XMLSchemaGeneration.cc",
+    "source/src/utility/tag/XMLSchemaGeneration.hh",
+    "source/src/utility/tag/XMLSchemaValidation.cc",
+    "source/src/utility/tag/XMLSchemaValidation.hh",
+]
+
+[metadata.repo2env.reward_calibration]
+baseline_reward = 0.0
+loc_changed = 10
+difficulty = "small"
+
+[metadata.repo2env.evaluation]
+schema_version = "1"
+status = "unverified"
+stage = "generation"
+reason_codes = [
+    "validation_not_run",
+]
+detail = "Generated task; validation has not been established."
+provenance = "unknown"
+evidence = []
+
+[metadata.repo2env.reproducibility]
+mode = "local_only"
+image_ref = "python:3.12-slim"
+image_tag = "python:3.12-slim"
+image_visibility = "private"
+
+[agent]
+timeout_sec = 1800.0
+
+[verifier]
+timeout_sec = 300.0

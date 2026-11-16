@@ -1,0 +1,62 @@
+version = "1.0"
+
+[task]
+name = "default/PapenfussLab__proteindj-4"
+description = "Adding a unique date/time to output directory name"
+
+[metadata]
+difficulty = "easy"
+category = "bugfix"
+keywords = [
+    "proteindj",
+    "pr_diff",
+]
+
+[metadata.repo2env]
+pipeline = "pr_diff"
+pipeline_version = "0.3.0"
+repo = "PapenfussLab/proteindj"
+ref = "625273d5d63bc0b0e8a5f9cc78b03aa378468f47"
+reference = "https://github.com/PapenfussLab/proteindj/pull/4"
+source_access = "auto"
+built_at = "2026-11-16T03:27:06.898491+00:00"
+reward_kinds = [
+    "diff_similarity",
+]
+spec_version = "0.2.0"
+content_hash = "sha256:4e51e1ab2eba6f5701ea87fdcce1ef0ab7d8a01a542222e10bf188ef63501009"
+
+[metadata.repo2env.pr_diff]
+pr_merged_at = "2025-10-08T00:59:26Z"
+diff_format = "unified"
+context_files = [
+    "nextflow.config",
+]
+
+[metadata.repo2env.reward_calibration]
+baseline_reward = 0.0
+loc_changed = 5
+difficulty = "trivial"
+
+[metadata.repo2env.evaluation]
+schema_version = "1"
+status = "unverified"
+stage = "generation"
+reason_codes = [
+    "validation_not_run",
+]
+detail = "Generated task; validation has not been established."
+provenance = "unknown"
+evidence = []
+
+[metadata.repo2env.reproducibility]
+mode = "local_only"
+image_ref = "python:3.12-slim"
+image_tag = "python:3.12-slim"
+image_visibility = "private"
+
+[agent]
+timeout_sec = 1800.0
+
+[verifier]
+timeout_sec = 300.0

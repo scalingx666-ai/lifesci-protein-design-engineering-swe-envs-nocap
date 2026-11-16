@@ -1,0 +1,330 @@
+diff --git a/.gitignore b/.gitignore
+index 805fe80..cb9c36f 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -4,6 +4,8 @@ __cache__
+ 
+ __tmcache__
+ 
++.ipynb_checkpoints
++
+ ckpts
+ 
+ checkpoints
+diff --git a/2025_env.yml b/2025_env.yml
+new file mode 100644
+index 0000000..e4bf5dc
+--- /dev/null
++++ b/2025_env.yml
+@@ -0,0 +1,144 @@
++name: PepGLAD
++channels:
++  - conda-forge
++  - bioconda
++  - salilab
++  - defaults
++  - https://repo.anaconda.com/pkgs/main
++  - https://repo.anaconda.com/pkgs/r
++dependencies:
++  - _libgcc_mutex=0.1
++  - _openmp_mutex=5.1
++  - bzip2=1.0.8
++  - ca-certificates=2025.2.25
++  - dssp=3.0.0
++  - gawk=5.3.1
++  - gettext=0.21.0
++  - icu=73.1
++  - ld_impl_linux-64=2.40
++  - libboost=1.82.0
++  - libffi=3.4.4
++  - libgcc-ng=11.2.0
++  - libgomp=11.2.0
++  - libiconv=1.16
++  - libidn2=2.3.4
++  - libstdcxx-ng=11.2.0
++  - libunistring=0.9.10
++  - libuuid=1.41.5
++  - libxml2=2.13.7
++  - lz4-c=1.9.4
++  - mmseqs2=13.45111
++  - ncurses=6.4
++  - openssl=3.0.16
++  - pcre2=10.42
++  - pdbfixer=1.11
++  - pip=25.0
++  - python=3.11.11
++  - readline=8.2
++  - setuptools=75.8.0
++  - sqlite=3.45.3
++  - tk=8.6.14
++  - wget=1.25.0
++  - wheel=0.45.1
++  - xz=5.6.4
++  - zlib=1.2.13
++  - zstd=1.5.6
++  - pip:
++      - absl-py==2.2.2
++      - aiosignal==1.3.2
++      - attrs==25.3.0
++      - biopython==1.85
++      - biotite==1.2.0
++      - biotraj==1.2.2
++      - certifi==2025.1.31
++      - charset-normalizer==3.4.1
++      - chex==0.1.89
++      - click==8.1.8
++      - colabdesign==1.1.1
++      - contourpy==1.3.1
++      - cycler==0.12.1
++      - dm-haiku==0.0.13
++      - dm-tree==0.1.9
++      - etils==1.12.2
++      - filelock==3.18.0
++      - fonttools==4.57.0
++      - freesasa==2.2.1
++      - frozenlist==1.5.0
++      - fsspec==2025.3.2
++      - grpcio==1.71.0
++      - idna==3.10
++      - immutabledict==4.2.1
++      - intel-cmplr-lib-ur==2025.1.0
++      - intel-openmp==2025.1.0
++      - jax==0.5.3
++      - jax-cuda12-pjrt==0.5.3
++      - jax-cuda12-plugin==0.5.3
++      - jaxlib==0.5.3
++      - jinja2==3.1.6
++      - jmp==0.0.4
++      - joblib==1.4.2
++      - jsonschema==4.23.0
++      - jsonschema-specifications==2024.10.1
++      - kiwisolver==1.4.8
++      - markdown==3.8
++      - markupsafe==3.0.2
++      - matplotlib==3.10.1
++      - mkl==2025.1.0
++      - ml-collections==1.0.0
++      - ml-dtypes==0.5.1
++      - mpmath==1.3.0
++      - msgpack==1.1.0
++      - networkx==3.4.2
++      - numpy==2.2.4
++      - nvidia-cublas-cu12==12.4.5.8
++      - nvidia-cuda-cupti-cu12==12.4.127
++      - nvidia-cuda-nvcc-cu12==12.8.93
++      - nvidia-cuda-nvrtc-cu12==12.4.127
++      - nvidia-cuda-runtime-cu12==12.4.127
++      - nvidia-cudnn-cu12==9.1.0.70
++      - nvidia-cufft-cu12==11.2.1.3
++      - nvidia-curand-cu12==10.3.5.147
++      - nvidia-cusolver-cu12==11.6.1.9
++      - nvidia-cusparse-cu12==12.3.1.170
++      - nvidia-cusparselt-cu12==0.6.2
++      - nvidia-nccl-cu12==2.21.5
++      - nvidia-nvjitlink-cu12==12.4.127
++      - nvidia-nvtx-cu12==12.4.127
++      - openmm==8.2.0
++      - openmm-cuda-12==8.2.0
++      - opt-einsum==3.4.0
++      - optax==0.2.4
++      - packaging==24.2
++      - pandas==2.2.3
++      - pillow==11.2.1
++      - protobuf==6.30.2
++      - py3dmol==2.4.2
++      - pyparsing==3.2.3
++      - python-dateutil==2.9.0.post0
++      - pytz==2025.2
++      - pyyaml==6.0.2
++      - ray==2.44.1
++      - rdkit==2024.9.6
++      - referencing==0.36.2
++      - requests==2.32.3
++      - rpds-py==0.24.0
++      - scipy==1.15.2
++      - seaborn==0.13.2
++      - six==1.17.0
++      - sympy==1.13.1
++      - tabulate==0.9.0
++      - tbb==2022.1.0
++      - tcmlib==1.3.0
++      - tensorboard==2.19.0
++      - tensorboard-data-server==0.7.2
++      - toolz==1.0.0
++      - torch==2.6.0
++      - torch-scatter==2.1.2+pt26cu124
++      - tqdm==4.67.1
++      - triton==3.2.0
++      - typing-extensions==4.13.2
++      - tzdata==2025.2
++      - umf==0.10.0
++      - urllib3==2.4.0
++      - werkzeug==3.1.3
++      - wrapt==1.17.2
+diff --git a/api/run.py b/api/run.py
+index 773a539..dce3e74 100644
+--- a/api/run.py
++++ b/api/run.py
+@@ -42,6 +42,7 @@ def get_epitope(self, idx):
+             epitope = json.load(fin)
+         to_str = lambda pos: f'{pos[0]}-{pos[1]}'
+         epi_map = {}
++        
+         for chain_name, pos in epitope:
+             if chain_name not in epi_map:
+                 epi_map[chain_name] = {}
+@@ -154,7 +155,7 @@ def design(mode, ckpt, gpu, pdbs, epitope_defs, n_samples, out_dir,
+         identifiers = [splitext(basename(pdb))[0] for pdb in pdbs]
+     # load model
+     device = torch.device('cpu' if gpu == -1 else f'cuda:{gpu}')
+-    model = torch.load(ckpt, map_location='cpu')
++    model = torch.load(ckpt, map_location='cpu', weights_only=False)
+     model.to(device)
+     model.eval()
+ 
+diff --git a/data/converter/blocks_interface.py b/data/converter/blocks_interface.py
+index 2367a05..b4f020f 100644
+--- a/data/converter/blocks_interface.py
++++ b/data/converter/blocks_interface.py
+@@ -58,19 +58,49 @@ def add_cb(input_array):
+     return CB #np.array([N,CA,C,CB,O])
+ 
+ 
++# def blocks_to_cb_coords(blocks):
++#     cb_coords = []
++#     for block in blocks:
++#         try:
++#             cb_coords.append(block.get_unit_by_name('CB').get_coord())
++#         except KeyError:
++#             tmp_coord = np.array([
++#                block.get_unit_by_name('N').get_coord(),
++#                block.get_unit_by_name('CA').get_coord(),
++#                block.get_unit_by_name('C').get_coord(),
++#                block.get_unit_by_name('O').get_coord()
++#             ])
++#             cb_coords.append(add_cb(tmp_coord))
++#     return np.array(cb_coords)
++
+ def blocks_to_cb_coords(blocks):
++    """MODIFIED to work for non-standard peptides"""
+     cb_coords = []
+     for block in blocks:
+-         try:
+-              cb_coords.append(block.get_unit_by_name('CB').get_coord())
+-         except KeyError:
+-              tmp_coord = np.array([
++        try:
++            # First try to get actual CB atom
++            cb_coords.append(block.get_unit_by_name('CB').get_coord())
++        except KeyError:
++            try:
++                # Try to use backbone atoms to calculate virtual CB
++                tmp_coord = np.array([
+                    block.get_unit_by_name('N').get_coord(),
+                    block.get_unit_by_name('CA').get_coord(),
+                    block.get_unit_by_name('C').get_coord(),
+                    block.get_unit_by_name('O').get_coord()
+-              ])
+-              cb_coords.append(add_cb(tmp_coord))
++                ])
++                cb_coords.append(add_cb(tmp_coord))
++            except KeyError:
++                # For non-standard residues, use center of carbon atoms
++                carbon_atoms = [unit for unit in block.units if unit.element == 'C']
++                if carbon_atoms:  # If there are carbon atoms
++                    coords = np.array([atom.get_coord() for atom in carbon_atoms])
++                    center_of_mass = coords.mean(axis=0)
++                    cb_coords.append(center_of_mass)
++                else:  # If no carbon atoms, use center of all atoms
++                    coords = np.array([unit.get_coord() for unit in block.units])
++                    center_of_mass = coords.mean(axis=0)
++                    cb_coords.append(center_of_mass)
+     return np.array(cb_coords)
+ 
+ 
+diff --git a/data/converter/pdb_to_list_blocks.py b/data/converter/pdb_to_list_blocks.py
+index 0d5df0c..d9f82da 100644
+--- a/data/converter/pdb_to_list_blocks.py
++++ b/data/converter/pdb_to_list_blocks.py
+@@ -42,13 +42,12 @@ def pdb_to_list_blocks(pdb: str, selected_chains: Optional[List[str]]=None, retu
+         break
+ 
+     for chain in structure.get_chains():
+-
+         _id = chain.get_id()
+         if (selected_chains is not None) and (_id not in selected_chains):
+             continue
+ 
+         residues, res_ids = [], {}
+-
++        
+         for residue in chain:
+             abrv = residue.get_resname()
+             hetero_flag, res_number, insert_code = residue.get_id()
+@@ -65,7 +64,8 @@ def pdb_to_list_blocks(pdb: str, selected_chains: Optional[List[str]]=None, retu
+             # filter Hs because not all data include them
+             atoms = [ Atom(atom.get_id(), atom.get_coord().tolist(), atom.element) for atom in residue if atom.element != 'H' ]
+             block = Block(abrv, atoms, id=(res_number, insert_code))
+-            if block.is_residue():
++            
++            if block.is_residue() or block.is_peptide_residue(): # MODIFIED
+                 residues.append(block)
+                 res_ids[res_id] = True
+         
+diff --git a/data/format.py b/data/format.py
+index bd1c350..b272113 100644
+--- a/data/format.py
++++ b/data/format.py
+@@ -207,6 +207,34 @@ def to_tuple(self):
+     
+     def is_residue(self):
+         return self.has_unit('CA') and self.has_unit('N') and self.has_unit('C') and self.has_unit('O')
++    
++    def is_peptide_residue(self):
++        """
++        Check if a block represents a peptide-like residue, even if non-standard.
++        This is more permissive than is_residue() which requires standard backbone atoms.
++
++        Returns:
++            bool: True if the block likely represents a peptide-like residue
++        """
++        # If it's already recognized as a standard residue, return True
++        if self.is_residue():
++            return True
++
++        # For HETATM records with 'LIG' or similar labels
++        if self.abrv in [
++            'LIG', 'UNL', 'UNK', 'MSE',
++            'ALA', 'ARG', 'ASP', 'CYS', 'GLN', 'GLU', 'GLY', 'LEU', 'THR', 'TRP', 'VAL',]:
++            # Check if it has at least one carbon atom (most peptide-like molecules will)
++            has_carbon = any(unit.element == 'C' for unit in self.units)
++
++            # Make sure it has a reasonable number of atoms (not just a single atom)
++            has_multiple_atoms = len(self.units) > 3
++
++            return has_carbon and has_multiple_atoms
++
++        # Add more specific checks here if needed for other types of residues
++
++        return False
+    
+     @classmethod
+     def from_tuple(self, data):
+diff --git a/evaluation/dG/openmm_relaxer.py b/evaluation/dG/openmm_relaxer.py
+index f2c0d17..e46e66e 100644
+--- a/evaluation/dG/openmm_relaxer.py
++++ b/evaluation/dG/openmm_relaxer.py
+@@ -8,11 +8,12 @@
+ from openmm import unit
+ ENERGY = unit.kilocalories_per_mole
+ LENGTH = unit.angstroms
++FORCE = unit.kilojoules_per_mole/unit.nanometer 
+ 
+ 
+ class ForceFieldMinimizer(object):
+ 
+-    def __init__(self, stiffness=10.0, max_iterations=0, tolerance=2.39*unit.kilocalories_per_mole, platform='CUDA'):
++    def __init__(self, stiffness=10.0, max_iterations=0, tolerance=2.39*FORCE, platform='CUDA'):
+         super().__init__()
+         self.stiffness = stiffness
+         self.max_iterations = max_iterations

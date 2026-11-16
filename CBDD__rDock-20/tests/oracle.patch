@@ -1,0 +1,114 @@
+diff --git a/.github/docker/Dockerfile.centos-stream8 b/.github/docker/Dockerfile.centos-stream8
+new file mode 100644
+index 00000000..c18a3772
+--- /dev/null
++++ b/.github/docker/Dockerfile.centos-stream8
+@@ -0,0 +1,5 @@
++FROM tgagor/centos-stream:stream8 as base
++
++# Install dependencies
++RUN yum install -y popt-devel gcc-c++ make
++RUN yum install -y perl
+\ No newline at end of file
+diff --git a/.github/docker/Dockerfile.debian-10 b/.github/docker/Dockerfile.debian-10
+new file mode 100644
+index 00000000..fd63aa36
+--- /dev/null
++++ b/.github/docker/Dockerfile.debian-10
+@@ -0,0 +1,4 @@
++FROM debian:10 as base
++
++# Install dependencies
++RUN apt-get update && apt-get install -y --no-install-recommends make g++ libpopt-dev libpopt0
+diff --git a/.github/docker/Dockerfile.debian-11 b/.github/docker/Dockerfile.debian-11
+new file mode 100644
+index 00000000..b567aef0
+--- /dev/null
++++ b/.github/docker/Dockerfile.debian-11
+@@ -0,0 +1,4 @@
++FROM debian:11 as base
++
++# Install dependencies
++RUN apt-get update && apt-get install -y --no-install-recommends make g++ libpopt-dev libpopt0
+diff --git a/.github/docker/Dockerfile.ubuntu-20.04 b/.github/docker/Dockerfile.ubuntu-20.04
+new file mode 100644
+index 00000000..680ea04b
+--- /dev/null
++++ b/.github/docker/Dockerfile.ubuntu-20.04
+@@ -0,0 +1,4 @@
++FROM ubuntu:20.04 as base
++
++# Install dependencies
++RUN apt-get update && apt-get install -y --no-install-recommends make g++ libpopt-dev libpopt0
+diff --git a/.github/docker/Dockerfile.ubuntu-22.04 b/.github/docker/Dockerfile.ubuntu-22.04
+new file mode 100644
+index 00000000..680ea04b
+--- /dev/null
++++ b/.github/docker/Dockerfile.ubuntu-22.04
+@@ -0,0 +1,4 @@
++FROM ubuntu:20.04 as base
++
++# Install dependencies
++RUN apt-get update && apt-get install -y --no-install-recommends make g++ libpopt-dev libpopt0
+diff --git a/.github/workflows/build_generic.yml b/.github/workflows/build_generic.yml
+new file mode 100644
+index 00000000..b6a08f7a
+--- /dev/null
++++ b/.github/workflows/build_generic.yml
+@@ -0,0 +1,26 @@
++on:
++  workflow_call:
++    inputs:
++      distribution:
++        required: true
++        type: string
++
++jobs:
++  build:
++    runs-on: ubuntu-latest
++    steps:
++    - uses: actions/checkout@v3
++    - name: Set up Docker Buildx
++      uses: docker/setup-buildx-action@v2
++    - name: Build base image
++      uses: docker/build-push-action@v4
++      with:
++        context: .
++        push: false
++        tags: rdock-${{ inputs.distribution }}:base
++        file: .github/docker/Dockerfile.${{ inputs.distribution }}
++        target: base
++        load: true
++
++    - name: Build rDock
++      run: docker run --rm -v $PWD:/rdock -w /rdock/build rdock-${{ inputs.distribution }}:base make linux-g++-64 -j 2
+\ No newline at end of file
+diff --git a/.github/workflows/build_matrix.yml b/.github/workflows/build_matrix.yml
+new file mode 100644
+index 00000000..1511afa5
+--- /dev/null
++++ b/.github/workflows/build_matrix.yml
+@@ -0,0 +1,22 @@
++on:
++  push:
++    branches: [ main ]
++  pull_request:
++    branches: [ main ]
++  schedule:
++    - cron: '0 12 * * 1' # every Monday at 11:00 UTC - 12:00 CET
++
++jobs:
++  build:
++    strategy:
++      fail-fast: false  # we want all the flows to run, to success or failure
++      matrix:
++        distribution:
++          - ubuntu-20.04
++          - ubuntu-22.04
++          - debian-10
++          - debian-11
++          - centos-stream8
++    uses: ./.github/workflows/build_generic.yml
++    with:
++      distribution: ${{ matrix.distribution }}
+\ No newline at end of file

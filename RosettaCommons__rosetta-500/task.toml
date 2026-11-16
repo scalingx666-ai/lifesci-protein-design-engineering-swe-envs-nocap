@@ -1,0 +1,62 @@
+version = "1.0"
+
+[task]
+name = "default/RosettaCommons__rosetta-500"
+description = "Change Gemmi submodule from ssh to https"
+
+[metadata]
+difficulty = "easy"
+category = "bugfix"
+keywords = [
+    "rosetta",
+    "pr_diff",
+]
+
+[metadata.repo2env]
+pipeline = "pr_diff"
+pipeline_version = "0.3.0"
+repo = "RosettaCommons/rosetta"
+ref = "7b35872d6974b9026ba99c438c63c1058aa53585"
+reference = "https://github.com/RosettaCommons/rosetta/pull/500"
+source_access = "auto"
+built_at = "2026-11-15T22:36:42.586087+00:00"
+reward_kinds = [
+    "diff_similarity",
+]
+spec_version = "0.2.0"
+content_hash = "sha256:b5354de6395701e7c5186b7460021f2aea31a1a8e2c38e218bab1a597df4722a"
+
+[metadata.repo2env.pr_diff]
+pr_merged_at = "2025-08-25T15:10:48Z"
+diff_format = "unified"
+context_files = [
+    ".gitmodules",
+]
+
+[metadata.repo2env.reward_calibration]
+baseline_reward = 0.0
+loc_changed = 2
+difficulty = "trivial"
+
+[metadata.repo2env.evaluation]
+schema_version = "1"
+status = "unverified"
+stage = "generation"
+reason_codes = [
+    "validation_not_run",
+]
+detail = "Generated task; validation has not been established."
+provenance = "unknown"
+evidence = []
+
+[metadata.repo2env.reproducibility]
+mode = "local_only"
+image_ref = "python:3.12-slim"
+image_tag = "python:3.12-slim"
+image_visibility = "private"
+
+[agent]
+timeout_sec = 1800.0
+
+[verifier]
+timeout_sec = 300.0

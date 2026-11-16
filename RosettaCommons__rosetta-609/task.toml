@@ -1,0 +1,76 @@
+version = "1.0"
+
+[task]
+name = "default/RosettaCommons__rosetta-609"
+description = "Updated PARCS applications and IMMS_CCS score function"
+
+[metadata]
+difficulty = "large"
+category = "bugfix"
+keywords = [
+    "rosetta",
+    "pr_diff",
+]
+
+[metadata.repo2env]
+pipeline = "pr_diff"
+pipeline_version = "0.3.0"
+repo = "RosettaCommons/rosetta"
+ref = "307045a3f7fe7488f28b6c4422425c60f04a78cd"
+reference = "https://github.com/RosettaCommons/rosetta/pull/609"
+source_access = "auto"
+built_at = "2026-11-15T22:35:57.473479+00:00"
+reward_kinds = [
+    "diff_similarity",
+]
+spec_version = "0.2.0"
+content_hash = "sha256:0f0f363b22bf4dcffa4035a7fe51421e32c1bf19a078291926daff31a9b0ef84"
+
+[metadata.repo2env.pr_diff]
+pr_merged_at = "2026-01-30T19:14:27Z"
+diff_format = "unified"
+context_files = [
+    "database/scoring/weights/ccs_imms_complex.wts_patch",
+    "database/scoring/weights/ccs_imms_cryoem.wts_patch",
+    "source/src/apps/public/analysis/parcs_ccs_calc.cc",
+    "source/src/core/energy_methods/CCS_IMMSComplexEnergyCreator.hh",
+    "source/src/core/energy_methods/CCS_IMMSEnergy.cc",
+    "source/src/core/energy_methods/CCS_IMMSEnergy.fwd.hh",
+    "source/src/core/energy_methods/CCS_IMMSEnergy.hh",
+    "source/src/core/energy_methods/CCS_IMMS_with_CryoEMEnergyCreator.hh",
+    "source/src/core/init/init.cc",
+    "source/src/core/scoring/ScoreType.hh",
+    "source/src/core/scoring/ScoreTypeManager.cc",
+    "tests/integration/tests/CCS_PARCS_multimer/1AQF.pdb",
+    "tests/integration/tests/CCS_PARCS_multimer/command",
+    "tests/integration/tests/CCS_PARCS_multimer/flags",
+    "tests/integration/tests/CCS_PARCS_multimer/integration_test_fixed.out",
+]
+
+[metadata.repo2env.reward_calibration]
+baseline_reward = 0.0
+loc_changed = 33242
+difficulty = "large"
+
+[metadata.repo2env.evaluation]
+schema_version = "1"
+status = "unverified"
+stage = "generation"
+reason_codes = [
+    "validation_not_run",
+]
+detail = "Generated task; validation has not been established."
+provenance = "unknown"
+evidence = []
+
+[metadata.repo2env.reproducibility]
+mode = "local_only"
+image_ref = "python:3.12-slim"
+image_tag = "python:3.12-slim"
+image_visibility = "private"
+
+[agent]
+timeout_sec = 1800.0
+
+[verifier]
+timeout_sec = 300.0

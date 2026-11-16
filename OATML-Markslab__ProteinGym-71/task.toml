@@ -1,0 +1,76 @@
+version = "1.0"
+
+[task]
+name = "default/OATML-Markslab__ProteinGym-71"
+description = "Update to supervised results and scoring scripts"
+
+[metadata]
+difficulty = "large"
+category = "bugfix"
+keywords = [
+    "ProteinGym",
+    "pr_diff",
+]
+
+[metadata.repo2env]
+pipeline = "pr_diff"
+pipeline_version = "0.3.0"
+repo = "OATML-Markslab/ProteinGym"
+ref = "e1d603d28ed8c6a27959c993de30312a83203a16"
+reference = "https://github.com/OATML-Markslab/ProteinGym/pull/71"
+source_access = "auto"
+built_at = "2026-11-15T22:30:21.653972+00:00"
+reward_kinds = [
+    "diff_similarity",
+]
+spec_version = "0.2.0"
+content_hash = "sha256:2363543b82b452661dae61d32236cb88796fd3279999c375afc450261d87cf87"
+
+[metadata.repo2env.pr_diff]
+pr_merged_at = "2025-03-06T06:11:04Z"
+diff_format = "unified"
+context_files = [
+    ".gitignore",
+    "benchmarks/DMS_supervised/substitutions/MSE/DMS_substitutions_MSE_DMS_level.csv",
+    "benchmarks/DMS_supervised/substitutions/MSE/DMS_substitutions_MSE_DMS_level_fold_contiguous_5.csv",
+    "benchmarks/DMS_supervised/substitutions/MSE/DMS_substitutions_MSE_DMS_level_fold_modulo_5.csv",
+    "benchmarks/DMS_supervised/substitutions/MSE/DMS_substitutions_MSE_DMS_level_fold_random_5.csv",
+    "benchmarks/DMS_supervised/substitutions/MSE/Summary_performance_DMS_substitutions_MSE.csv",
+    "benchmarks/DMS_supervised/substitutions/Spearman/DMS_substitutions_Spearman_DMS_level.csv",
+    "benchmarks/DMS_supervised/substitutions/Spearman/DMS_substitutions_Spearman_DMS_level_fold_contiguous_5.csv",
+    "benchmarks/DMS_supervised/substitutions/Spearman/DMS_substitutions_Spearman_DMS_level_fold_modulo_5.csv",
+    "benchmarks/DMS_supervised/substitutions/Spearman/DMS_substitutions_Spearman_DMS_level_fold_random_5.csv",
+    "benchmarks/DMS_supervised/substitutions/Spearman/Summary_performance_DMS_substitutions_Spearman.csv",
+    "config.json",
+    "proteingym/constants.json",
+    "proteingym/merge_supervised.py",
+    "proteingym/performance_DMS_supervised_benchmarks.py",
+]
+
+[metadata.repo2env.reward_calibration]
+baseline_reward = 0.0
+loc_changed = 3786
+difficulty = "large"
+
+[metadata.repo2env.evaluation]
+schema_version = "1"
+status = "unverified"
+stage = "generation"
+reason_codes = [
+    "validation_not_run",
+]
+detail = "Generated task; validation has not been established."
+provenance = "unknown"
+evidence = []
+
+[metadata.repo2env.reproducibility]
+mode = "local_only"
+image_ref = "python:3.12-slim"
+image_tag = "python:3.12-slim"
+image_visibility = "private"
+
+[agent]
+timeout_sec = 1800.0
+
+[verifier]
+timeout_sec = 300.0

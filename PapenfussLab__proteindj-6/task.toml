@@ -1,0 +1,68 @@
+version = "1.0"
+
+[task]
+name = "default/PapenfussLab__proteindj-6"
+description = "BindSweeper fixes"
+
+[metadata]
+difficulty = "large"
+category = "bugfix"
+keywords = [
+    "proteindj",
+    "pr_diff",
+]
+
+[metadata.repo2env]
+pipeline = "pr_diff"
+pipeline_version = "0.3.0"
+repo = "PapenfussLab/proteindj"
+ref = "2fac1aa64aefd91e49e5869d18e088e141d6fc49"
+reference = "https://github.com/PapenfussLab/proteindj/pull/6"
+source_access = "auto"
+built_at = "2026-11-16T03:27:03.852351+00:00"
+reward_kinds = [
+    "diff_similarity",
+]
+spec_version = "0.2.0"
+content_hash = "sha256:c8d06a0461dc999848b89178fff687b415443c84880837c8c6595ec1bea58874"
+
+[metadata.repo2env.pr_diff]
+pr_merged_at = "2025-10-11T01:46:32Z"
+diff_format = "unified"
+context_files = [
+    "bindsweeper/bindsweeper/cli.py",
+    "bindsweeper/bindsweeper/profile_generator.py",
+    "bindsweeper/bindsweeper/results_processor.py",
+    "bindsweeper/bindsweeper/sweep_config.py",
+    "bindsweeper/bindsweeper/utils.py",
+    "bindsweeper/pyproject.toml",
+    "bindsweeper/uv.lock",
+]
+
+[metadata.repo2env.reward_calibration]
+baseline_reward = 0.0
+loc_changed = 137
+difficulty = "large"
+
+[metadata.repo2env.evaluation]
+schema_version = "1"
+status = "unverified"
+stage = "generation"
+reason_codes = [
+    "validation_not_run",
+]
+detail = "Generated task; validation has not been established."
+provenance = "unknown"
+evidence = []
+
+[metadata.repo2env.reproducibility]
+mode = "local_only"
+image_ref = "python:3.12-slim"
+image_tag = "python:3.12-slim"
+image_visibility = "private"
+
+[agent]
+timeout_sec = 1800.0
+
+[verifier]
+timeout_sec = 300.0

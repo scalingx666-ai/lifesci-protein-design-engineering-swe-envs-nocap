@@ -1,0 +1,15 @@
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/bindings/energies.py b/source/src/python/PyRosetta/src/pyrosetta/bindings/energies.py
+index 8421a86ed1b..01981bb6e2c 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/bindings/energies.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/bindings/energies.py
+@@ -29,8 +29,8 @@ def _residue_selection_to_1ind(selection, total_count):
+     else:
+         selection = selection.astype(int)
+ 
+-    assert numpy.alltrue(selection > 0), "Selection contained invalid indicies."
+-    assert numpy.alltrue(selection <= total_count), "Selection contained invalid indicies."
++    assert numpy.all(selection > 0), "Selection contained invalid indicies."
++    assert numpy.all(selection <= total_count), "Selection contained invalid indicies."
+ 
+     return selection
+ 

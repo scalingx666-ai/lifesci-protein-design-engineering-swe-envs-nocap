@@ -1,0 +1,76 @@
+version = "1.0"
+
+[task]
+name = "default/moritztng__tt-bio-8"
+description = "exp/bioperf-largeseq: Protenix denoise dispatch optimization"
+
+[metadata]
+difficulty = "large"
+category = "bugfix"
+keywords = [
+    "tt-bio",
+    "pr_diff",
+]
+
+[metadata.repo2env]
+pipeline = "pr_diff"
+pipeline_version = "0.3.0"
+repo = "moritztng/tt-bio"
+ref = "858bc392753001f8bd45375b546e6632cfd92977"
+reference = "https://github.com/moritztng/tt-bio/pull/8"
+source_access = "auto"
+built_at = "2026-11-16T04:26:52.759199+00:00"
+reward_kinds = [
+    "diff_similarity",
+]
+spec_version = "0.2.0"
+content_hash = "sha256:7ff190ac1f784e1daa84df663968d9b3bf2de6cb3acc6507ec23e64871207264"
+
+[metadata.repo2env.pr_diff]
+pr_merged_at = "2026-07-08T16:18:24Z"
+diff_format = "unified"
+context_files = [
+    ".perf-runs/20260629/REPORT.md",
+    ".perf-runs/20260708-protenix-batch/REPORT.md",
+    ".perf-runs/protenix-batch/BASELINE.md",
+    ".perf-runs/protenix-batch/accuracy_trace.py",
+    ".perf-runs/protenix-batch/harness.py",
+    ".perf-runs/protenix-batch/inputs/inputs/rand_len_0256.yaml",
+    ".perf-runs/protenix-batch/inputs/inputs/rand_len_0512.yaml",
+    ".perf-runs/protenix-batch/inputs/manifest.tsv",
+    ".perf-runs/protenix-batch/micro_apb.py",
+    ".perf-runs/protenix-batch/micro_sdpa.py",
+    ".perf-runs/protenix-batch/parity_denoise.py",
+    "tests/ca_rmsd.py",
+    "tests/generate_synthetic_template.py",
+    "tt_bio/protenix.py",
+    "tt_bio/tenstorrent.py",
+]
+
+[metadata.repo2env.reward_calibration]
+baseline_reward = 0.0
+loc_changed = 710
+difficulty = "large"
+
+[metadata.repo2env.evaluation]
+schema_version = "1"
+status = "unverified"
+stage = "generation"
+reason_codes = [
+    "validation_not_run",
+]
+detail = "Generated task; validation has not been established."
+provenance = "unknown"
+evidence = []
+
+[metadata.repo2env.reproducibility]
+mode = "local_only"
+image_ref = "python:3.12-slim"
+image_tag = "python:3.12-slim"
+image_visibility = "private"
+
+[agent]
+timeout_sec = 1800.0
+
+[verifier]
+timeout_sec = 300.0

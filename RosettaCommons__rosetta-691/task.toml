@@ -1,0 +1,66 @@
+version = "1.0"
+
+[task]
+name = "default/RosettaCommons__rosetta-691"
+description = "Apply Rule of Zero to utility/keys container family"
+
+[metadata]
+difficulty = "large"
+category = "bugfix"
+keywords = [
+    "rosetta",
+    "pr_diff",
+]
+
+[metadata.repo2env]
+pipeline = "pr_diff"
+pipeline_version = "0.3.0"
+repo = "RosettaCommons/rosetta"
+ref = "b8e64ecdc0338b77c231760f7f9bdcd4d500a240"
+reference = "https://github.com/RosettaCommons/rosetta/pull/691"
+source_access = "auto"
+built_at = "2026-11-15T22:35:00.055749+00:00"
+reward_kinds = [
+    "diff_similarity",
+]
+spec_version = "0.2.0"
+content_hash = "sha256:467bae647e87e28c759cfec1efda90a1068a4dc1fd0f0f03a0838da17215390c"
+
+[metadata.repo2env.pr_diff]
+pr_merged_at = "2026-05-13T19:35:01Z"
+diff_format = "unified"
+context_files = [
+    "source/src/utility/keys/ClassKeyMap.hh",
+    "source/src/utility/keys/ClassKeyVector.hh",
+    "source/src/utility/keys/KeyVector.hh",
+    "source/src/utility/keys/SmallKeyMap.hh",
+    "source/src/utility/keys/SmallKeyVector.hh",
+]
+
+[metadata.repo2env.reward_calibration]
+baseline_reward = 0.0
+loc_changed = 140
+difficulty = "large"
+
+[metadata.repo2env.evaluation]
+schema_version = "1"
+status = "unverified"
+stage = "generation"
+reason_codes = [
+    "validation_not_run",
+]
+detail = "Generated task; validation has not been established."
+provenance = "unknown"
+evidence = []
+
+[metadata.repo2env.reproducibility]
+mode = "local_only"
+image_ref = "python:3.12-slim"
+image_tag = "python:3.12-slim"
+image_visibility = "private"
+
+[agent]
+timeout_sec = 1800.0
+
+[verifier]
+timeout_sec = 300.0

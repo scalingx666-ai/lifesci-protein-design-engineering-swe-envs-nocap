@@ -1,0 +1,13 @@
+diff --git a/source/src/protocols/backrub/BackrubMover.hh b/source/src/protocols/backrub/BackrubMover.hh
+index eb3831a0bca..11a65be458d 100644
+--- a/source/src/protocols/backrub/BackrubMover.hh
++++ b/source/src/protocols/backrub/BackrubMover.hh
+@@ -134,6 +134,8 @@ public:
+ 	clear_segments()
+ 	{
+ 		segments_.clear();
++		// The BondAngleMap is derived data from segments_
++		bond_angle_map_.clear();
+ 	}
+ 
+ 	/// @brief get the number of segments

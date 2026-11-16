@@ -1,0 +1,13 @@
+diff --git a/source/tools/build/basic.settings b/source/tools/build/basic.settings
+index b32a38aeb42..fde2c6a00ab 100644
+--- a/source/tools/build/basic.settings
++++ b/source/tools/build/basic.settings
+@@ -2243,7 +2243,7 @@ settings = {
+             "flags" : {
+                 # Change 'abspath' to 'file' to use DYLD_LIBRARY_PATH environ-
+                 # ment variable.
+-                "compile" : [ "march=native", "mtune=native", "stdlib=libc++", ],
++                "compile" : ["mtune=native", "stdlib=libc++", ],
+                 "shlink" : [ "install_name ${TARGET.abspath}", "stdlib=libc++", ],
+                 "link"   : [ "stdlib=libc++"],
+                 # There is at least one variable only used on non-Macs.

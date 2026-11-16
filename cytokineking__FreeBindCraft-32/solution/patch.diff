@@ -1,0 +1,2425 @@
+diff --git a/.gitignore b/.gitignore
+index 1ae5b2e..48c9020 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -17,3 +17,4 @@ ipSAE.py
+ /.micromamba/
+ /params/
+ /runs/
++/.metaljax-src/
+diff --git a/APPLE_SILICON.md b/APPLE_SILICON.md
+index 7d99a27..dca425e 100644
+--- a/APPLE_SILICON.md
++++ b/APPLE_SILICON.md
+@@ -1,7 +1,7 @@
+ # Apple Silicon (experimental)
+ 
+ FreeBindCraft runs natively on Apple Silicon using
+-[metaljax](https://github.com/eterevsky/metaljax) for AlphaFold design and
++[FreeBindCraft's frozen MetalJAX build](https://github.com/cytokineking/metaljax/releases/tag/v0.11.9-fbc1) for AlphaFold design and
+ ProteinMPNN on the Apple GPU. Relaxation uses native PyRosetta on the CPU by
+ default, or OpenMM on the GPU through OpenCL with `--no-pyrosetta`.
+ 
+@@ -26,6 +26,26 @@ Dependencies install inside the checkout under `.venv-metaljax`, `.local`, and
+ installation command to add PyRosetta later. FFmpeg is needed only for saving
+ animations; the supplied small examples disable them.
+ 
++The default installs the prebuilt `metaljax==0.11.9+fbc1` arm64 macOS wheel.
++Its versioned release URL and SHA-256 are pinned, together with JAX/jaxlib
++`0.11.2`. There is no user source-build step or automatic upstream upgrade.
++The installer reports the selected backend and installed versions.
++
++For troubleshooting, install the pinned stock upstream `0.11.9` backend:
++
++```bash
++FREEBINDCRAFT_METALJAX=stock bash install_bindcraft.sh
++```
++
++Rerun `bash install_bindcraft.sh` with that variable unset to restore the frozen
++build. Both commands accept `--no-pyrosetta`. Reruns retain the selected version;
++switching modes explicitly replaces it. This is an installation choice, not a
++runtime fallback. A download/checksum failure stops installation before Python
++packages change. An explicit `FREEBINDCRAFT_METALJAX_WHEEL=/absolute/path.whl`
++developer override takes precedence over both modes; unset it to return to the
++published build. Local overrides are user-selected artifacts, outside the
++published-wheel checksum guarantee.
++
+ ## Run a small example
+ 
+ No environment activation is needed:
+@@ -63,12 +83,12 @@ It uses a 65-residue binder and writes to `runs/pdl1-apple-example/output`.
+ 
+ ## Tested configuration and performance
+ 
+-The pinned runtime uses Python 3.12, JAX/jaxlib 0.11.2, metaljax 0.11.9, and
++The pinned runtime uses Python 3.12, JAX/jaxlib 0.11.2, metaljax 0.11.9+fbc1, and
+ OpenMM 8.6.1. Exact dependencies are recorded in the
+ [Apple Silicon requirements](installation/apple-silicon-requirements.txt) and
+ [PyRosetta requirements](installation/pyrosetta-apple-requirements.txt).
+ 
+-Installation and pipeline execution have been tested on an M2 MacBook Pro with
++The earlier stock MetalJAX 0.11.9 installation and pipeline were tested on an M2 MacBook Pro with
+ 24 GiB unified memory (macOS 26.7) and an M5 Max MacBook Pro with 128 GB unified
+ memory (macOS 27.0.1). In a full installation on the M2, the small ubiquitin
+ example measured:
+@@ -80,7 +100,9 @@ example measured:
+ 
+ Both runs completed with zero accepted designs under the default filters.
+ These are single-run measurements of process physical footprint; larger targets
+-and higher recycle counts can require more memory.
++and higher recycle counts can require more memory. These M2 measurements use
++stock upstream MetalJAX, not the new default. The frozen build's validation is on
++the 128 GiB M5 Max; support on a physical smaller-memory Mac is not established.
+ 
+ ## Backend behavior
+ 
+@@ -93,6 +115,29 @@ to CUDA has not been established.
+ In OpenMM mode, Rosetta-only metrics use compatibility placeholders rather than
+ measured Rosetta scores, as in FreeBindCraft's Linux bypass mode.
+ 
++### Frozen MetalJAX backend and memory
++
++The default build fixes nested AlphaFold loops that otherwise silently retire
++their compiled variants. It keeps the existing calculation, precision,
++recycling, checkpointing and optimization behavior, and uses unchanged private
++MLX runtime binaries. The reviewed 146-residue fixture's warmed gradients were
++1.71× faster and its full design stage 1.73× faster on the M5 Max. Full-workflow
++peak physical footprint increased from 5.49 to 8.85 GiB.
++
++Existing per-loop recovery and memory safeguards remain enabled. A memory
++governor refusal propagates as an error; it does not guarantee eager recovery,
++swap dependencies or restart a design. Its budget is checked at admission and
++sampling points, and is not a strict peak-memory cap: the bounded PDL1 test
++reached 9.78 GiB transiently under a 4 GiB policy before reclaiming memory.
++The normal PDL1 forward/gradient probe used 10.43 GiB versus 5.14 GiB on stock.
++Use the explicit stock installation choice above when investigating
++memory/performance differences.
++
++See [release provenance, bounded larger-target and memory-budget validation,
++and maintainer build instructions](installation/metaljax/README.md). Future
++upgrades require a new reviewed source commit, versioned artifact and checksum;
++installation never follows a moving upstream branch.
++
+ ## Verify the installation
+ 
+ Run the Metal alignment tests and native OpenMM/DSSP/ProteinMPNN check:
+diff --git a/extras/benchmark_metaljax_loops.py b/extras/benchmark_metaljax_loops.py
+new file mode 100644
+index 0000000..18d46a1
+--- /dev/null
++++ b/extras/benchmark_metaljax_loops.py
+@@ -0,0 +1,142 @@
++"""Fixed-input AF2 forward/VJP probe for the MetalJAX loop patch.
++
++No optimizer, schedule, precision, recycling, or checkpointing changes. Use the
++baseline's --previous file for a same-state VJP comparison. Timers include host
++materialization; first calls are reported separately from warmed calls.
++"""
++import argparse
++import ast
++import hashlib
++import importlib.metadata
++import importlib.util
++import json
++import os
++from pathlib import Path
++import resource
++import time
++
++import jax
++import jax.numpy as jnp
++import numpy as np
++from colabdesign import mk_afdesign_model
++from colabdesign.af.alphafold.common import residue_constants
++from colabdesign.af.loss import get_ptm, mask_loss, get_dgram_bins, _get_con_loss
++from monitor_macos_job import read_footprint
++
++
++def digest(array):
++    a = np.asarray(array)
++    return hashlib.sha256(a.dtype.str.encode() + str(a.shape).encode() + a.tobytes()).hexdigest()
++
++
++def main():
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument('--assets', type=Path, required=True, help='Checkout containing params/ and example/')
++    parser.add_argument('--out', type=Path, required=True)
++    parser.add_argument('--previous', type=Path, help='Frozen baseline first-recycle state (.npz)')
++    parser.add_argument('--repeats', type=int, default=6)
++    parser.add_argument('--name', required=True)
++    parser.add_argument('--dump-hlo', action='store_true')
++    parser.add_argument('--pdb', type=Path, help='Target PDB; defaults to the bundled ubiquitin fixture')
++    parser.add_argument('--chain', default='A')
++    parser.add_argument('--binder-length', type=int, default=70)
++    parser.add_argument('--hotspot', default='44')
++    args = parser.parse_args()
++    if args.repeats < 1:
++        parser.error('--repeats must be positive')
++    if args.binder_length < 1:
++        parser.error('--binder-length must be positive')
++    if jax.default_backend() != 'metal':
++        parser.error('This probe requires JAX_PLATFORMS=metal')
++    root = Path(__file__).resolve().parents[1]
++    args.out.mkdir(parents=True, exist_ok=True)
++    spec = importlib.util.spec_from_file_location('fbc_probe_metal', root/'functions/metal_utils.py')
++    metal = importlib.util.module_from_spec(spec)
++    spec.loader.exec_module(metal)
++    metal.enable_metal_alignment()
++
++    # The unchanged production loss callbacks, without native scoring imports.
++    source = ast.parse((root/'functions/colabdesign_utils.py').read_text())
++    selected = [n for n in source.body if isinstance(n, ast.FunctionDef) and n.name in
++                {'add_rg_loss', 'add_i_ptm_loss', 'add_helix_loss'}]
++    callbacks = dict(globals())
++    exec(compile(ast.Module(body=selected, type_ignores=[]), 'production_loss_callbacks', 'exec'), callbacks)
++
++    start = time.perf_counter()
++    model = mk_afdesign_model(protocol='binder', use_multimer=True,
++                             data_dir=str(args.assets), num_recycles=1, use_remat=True,
++                             model_names=['model_1_multimer_v3'])
++    target = args.pdb or args.assets/'example/ubiquitin_1ubq.pdb'
++    model.prep_inputs(pdb_filename=str(target), chain=args.chain,
++                      binder_len=args.binder_length, hotspot=args.hotspot, seed=42, rm_aa='C')
++    model.opt.update(dropout=True, soft=0.9, hard=0.0, temp=1.0)
++    model.opt['weights'].update(plddt=0.1, pae=0.4, i_pae=0.1, con=1., i_con=1.)
++    model.opt['con'].update(num=2, cutoff=14., binary=False, seqsep=9)
++    model.opt['i_con'].update(num=2, cutoff=20., binary=False)
++    for name, weight in [('add_rg_loss', 0.3), ('add_i_ptm_loss', 0.05), ('add_helix_loss', -0.3)]:
++        callbacks[name](model, weight)
++    length = int(model._inputs['residue_index'].shape[0])
++    model._inputs['opt'] = model.opt
++    model._inputs['prev'] = dict(prev_pos=np.zeros((length,37,3),np.float32),
++                                prev_msa_first_row=np.zeros((length,256),np.float32),
++                                prev_pair=np.zeros((length,length,128),np.float32))
++    key = jax.random.PRNGKey(42)
++
++    def call(fn):
++        return fn(model._params, model._model_params[0], model._inputs, key)
++
++    def settle(tree):
++        return jax.tree_util.tree_map(np.asarray, tree)
++
++    setup_seconds = time.perf_counter()-start
++    t = time.perf_counter()
++    forward_loss, forward = settle(call(model._model['fn']))
++    first_forward_seconds = time.perf_counter()-t
++    np.savez(args.out/f'{args.name}-previous.npz', **forward['prev'])
++    if args.previous:
++        with np.load(args.previous) as previous:
++            model._inputs['prev'] = {k: previous[k] for k in previous.files}
++    else:
++        model._inputs['prev'] = forward['prev']
++    previous_hashes = {k: digest(v) for k, v in model._inputs['prev'].items()}
++    if args.dump_hlo:
++        lowered = model._model['grad_fn'].lower(model._params, model._model_params[0], model._inputs, key)
++        (args.out/f'{args.name}-gradient.mlir').write_text(lowered.as_text())
++
++    t = time.perf_counter()
++    first = settle(call(model._model['grad_fn']))
++    first_grad_seconds = time.perf_counter()-t
++    times = []
++    for _ in range(args.repeats):
++        t = time.perf_counter()
++        (loss,aux),grad = settle(call(model._model['grad_fn']))
++        times.append(time.perf_counter()-t)
++    assert np.isfinite(loss) and np.isfinite(grad['seq']).all()
++    assert np.isfinite(aux['atom_positions']).all()
++    assert previous_hashes == {k: digest(v) for k, v in model._inputs['prev'].items()}
++    np.savez(args.out/f'{args.name}.npz', loss=loss, grad=grad['seq'], xyz=aux['atom_positions'],
++             plddt=aux['plddt'], initial_seq=np.asarray(model._params['seq']),
++             forward_loss=forward_loss, forward_xyz=forward['atom_positions'], forward_plddt=forward['plddt'],
++             **{f'loss_{k}': v for k, v in aux['losses'].items()})
++    report = dict(name=args.name, backend=jax.default_backend(), jax=jax.__version__,
++        metaljax=importlib.metadata.version('metaljax'),
++        precision=os.environ.get('METALJAX_MATMUL_PRECISION','high'),
++        plugin=os.environ.get('METALJAX_PLUGIN_PATH', 'installed'),
++        use_bfloat16=model._args['use_bfloat16'], use_remat=model._args['use_remat'],
++        subbatch=model._cfg.model.global_config.subbatch_size, length=length,
++        target_pdb_sha256=hashlib.sha256(target.read_bytes()).hexdigest(),
++        chain=args.chain, binder_length=args.binder_length, hotspot=args.hotspot,
++        model='model_1_multimer_v3', fixed_rng=True, dropout=True,
++        sequence_sha256=digest(model._params['seq']), key_sha256=digest(key), previous_sha256=previous_hashes,
++        setup_seconds=setup_seconds, first_forward_seconds=first_forward_seconds,
++        first_grad_seconds=first_grad_seconds, grad_seconds=times, median_grad_seconds=float(np.median(times)),
++        loss=float(loss), grad_norm=float(np.linalg.norm(grad['seq'])),
++        process_peak_rss_bytes=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
++        **read_footprint(os.getpid()),
++        scope='Fixed-input AF2 forward and last-recycle VJP, not a trajectory or quality benchmark')
++    (args.out/f'{args.name}.json').write_text(json.dumps(report, indent=2)+'\n')
++    print(json.dumps(report, indent=2), flush=True)
++
++
++if __name__ == '__main__':
++    main()
+diff --git a/install_apple_silicon.sh b/install_apple_silicon.sh
+index 2a6adf6..c8745ec 100755
+--- a/install_apple_silicon.sh
++++ b/install_apple_silicon.sh
+@@ -12,6 +12,8 @@ for argument in "$@"; do
+       printf 'Usage: %s [--with-pyrosetta | --no-pyrosetta]\n' "$0"
+       printf 'Requires Apple Command Line Tools. Downloads local uv/Rust, Python dependencies,\n'
+       printf 'native helpers, and AlphaFold weights. The default omits PyRosetta.\n'
++      printf 'MetalJAX: frozen FreeBindCraft wheel by default; FREEBINDCRAFT_METALJAX=stock opts out.\n'
++      printf 'FREEBINDCRAFT_METALJAX_WHEEL=/absolute/path.whl takes precedence over that selection.\n'
+       exit 0 ;;
+     *) echo "Unknown Apple installation option: $argument" >&2; exit 2 ;;
+   esac
+@@ -95,14 +97,10 @@ export RUSTUP_TOOLCHAIN=1.89.0
+ if [[ ! -x .venv-metaljax/bin/python ]]; then
+   .local/bin/uv venv --python 3.12.15 --managed-python .venv-metaljax
+ fi
+-if [[ "$install_pyrosetta" == true ]]; then
+-  .local/bin/uv pip sync --python .venv-metaljax/bin/python \
+-    --find-links https://west.rosettacommons.org/pyrosetta/quarterly/release/ \
+-    installation/apple-silicon-requirements.txt \
+-    <(sed '/^--/d' installation/pyrosetta-apple-requirements.txt)
+-else
+-  .local/bin/uv pip sync --python .venv-metaljax/bin/python installation/apple-silicon-requirements.txt
+-fi
++python_options=(--python "$repo_dir/.venv-metaljax/bin/python" --uv "$repo_dir/.local/bin/uv")
++[[ "$install_pyrosetta" == true ]] && python_options+=(--with-pyrosetta)
++.venv-metaljax/bin/python installation/install_apple_python.py \
++  "${python_options[@]}"
+ 
+ ensure_source() {
+   local url="$1" destination="$2" revision="$3"
+@@ -167,6 +165,7 @@ import openmm
+ import colabdesign, freesasa, pdbfixer
+ from functions.generic_utils import check_jax_gpu
+ check_jax_gpu()
++print("MetalJAX version:", version("metaljax"), "JAX:", version("jax"), "jaxlib:", version("jaxlib"))
+ print("JAX devices:", jax.devices())
+ platforms = [openmm.Platform.getPlatform(i).getName()
+              for i in range(openmm.Platform.getNumPlatforms())]
+diff --git a/installation/apple-silicon-requirements.txt b/installation/apple-silicon-requirements.txt
+index c1668c9..e6ba77b 100644
+--- a/installation/apple-silicon-requirements.txt
++++ b/installation/apple-silicon-requirements.txt
+@@ -76,7 +76,7 @@ markupsafe==3.0.4
+ matplotlib==3.11.2
+ matplotlib-inline==0.2.2
+ mdurl==0.1.2
+-metaljax==0.11.9
++metaljax @ https://github.com/cytokineking/metaljax/releases/download/v0.11.9-fbc1/metaljax-0.11.9+fbc1-py3-none-macosx_14_0_arm64.whl#sha256=8b3ec3bd4a71e57d7c77a0f3f8b1ee9fefe28b4ca81c0b325dc6d2975938d079
+ mistune==3.3.4
+ ml-collections==1.1.0
+ ml-dtypes==0.6.0
+diff --git a/installation/build_metaljax_apple.py b/installation/build_metaljax_apple.py
+new file mode 100644
+index 0000000..9d476c1
+--- /dev/null
++++ b/installation/build_metaljax_apple.py
+@@ -0,0 +1,158 @@
++#!/usr/bin/env python3
++"""Maintainer build of the frozen FreeBindCraft MetalJAX release.
++
++Normal users receive a prebuilt wheel from install_bindcraft.sh. This recipe
++checks out the exact fork commit (the fix is already committed), verifies the
++archived SDK/XLA/Bazel inputs, and builds only inside the selected source/cache
++directories. Requires native arm64 macOS, Command Line Tools and the pinned venv.
++"""
++import argparse
++import hashlib
++import json
++import os
++from pathlib import Path
++import platform
++import shutil
++import subprocess
++import tarfile
++import urllib.request
++
++
++def run(command, **kwargs):
++    print('+', ' '.join(map(str, command)), flush=True)
++    return subprocess.run(list(map(str, command)), check=True, **kwargs)
++
++
++def sha(path):
++    with Path(path).open('rb') as file:
++        return hashlib.file_digest(file, 'sha256').hexdigest()
++
++
++def download(asset, path):
++    if path.is_file() and sha(path) == asset['sha256']:
++        return
++    path.parent.mkdir(parents=True, exist_ok=True)
++    part = path.with_suffix(path.suffix + '.part')
++    try:
++        print('Downloading', asset['url'], flush=True)
++        urllib.request.urlretrieve(asset['url'], part)
++        if sha(part) != asset['sha256']:
++            raise RuntimeError(f"Checksum mismatch: {asset['url']}")
++        part.replace(path)
++    finally:
++        part.unlink(missing_ok=True)
++
++
++def checkout(url, path, revision):
++    if not path.exists():
++        path.mkdir(parents=True)
++        run(['git', 'init', path])
++        run(['git', '-C', path, 'remote', 'add', 'origin', url])
++        run(['git', '-C', path, 'fetch', '--depth', '1', 'origin', revision])
++        run(['git', '-C', path, 'checkout', '--detach', 'FETCH_HEAD'])
++    current = subprocess.check_output(['git', '-C', str(path), 'rev-parse', 'HEAD'], text=True).strip()
++    if current != revision:
++        raise RuntimeError(f'Preserving {path}: expected {revision}, found {current}')
++    changed = subprocess.check_output(
++        ['git', '-C', str(path), 'diff', '--name-only', 'HEAD'], text=True).splitlines()
++    if set(changed) - {'plugin-native/.bazelrc', 'plugin-native/WORKSPACE'}:
++        raise RuntimeError(f'Preserving modified source at {path}: {changed}')
++    if (path/'plugin-native/.bazelrc.user').exists():
++        raise RuntimeError('Preserving custom .bazelrc.user; use a fresh --source-dir')
++
++
++def prepare_archive(archive, destination, prefix):
++    """Extract once; on reruns verify every archived file, preserving changes."""
++    with tarfile.open(archive) as tar:
++        if not destination.exists():
++            destination.parent.mkdir(parents=True, exist_ok=True)
++            tar.extractall(destination.parent, filter='data')
++            extracted = destination.parent/prefix
++            if extracted != destination:
++                extracted.rename(destination)
++        for member in tar.getmembers():
++            if not member.isfile():
++                continue
++            relative = Path(member.name).relative_to(prefix)
++            file = destination/relative
++            with tar.extractfile(member) as original:
++                expected = hashlib.file_digest(original, 'sha256').hexdigest()
++            if not file.is_file() or sha(file) != expected:
++                raise RuntimeError(f'Preserving changed/missing build input: {file}')
++
++
++def main():
++    root = Path(__file__).resolve().parents[1]
++    release = json.loads((root/'installation/metaljax/release.json').read_text())
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument('--python', type=Path, default=root/'.venv-metaljax/bin/python')
++    parser.add_argument('--source-dir', type=Path, default=root/'.local/src/metaljax-fbc1')
++    parser.add_argument('--cache-dir', type=Path, default=root/'.local/metaljax-build')
++    parser.add_argument('--jobs', type=int, default=12)
++    parser.add_argument('--install', action='store_true', help='Install into --python only')
++    args = parser.parse_args()
++    if (platform.system(), platform.machine()) != ('Darwin', 'arm64'):
++        parser.error('Requires native arm64 macOS')
++    # Do not resolve the interpreter symlink: it selects the global interpreter.
++    python = args.python.absolute()
++    source, cache = args.source_dir.absolute(), args.cache_dir.absolute()
++    if not python.is_file() or args.jobs < 1:
++        parser.error('Need an existing Apple venv and a positive --jobs')
++    query = ("import importlib.metadata as m, json, sys; "
++             "print(json.dumps(dict(venv=sys.prefix != sys.base_prefix, "
++             "jax=m.version('jax'), jaxlib=m.version('jaxlib'))))")
++    target = json.loads(subprocess.check_output([str(python), '-c', query], text=True))
++    if not target['venv'] or any(target[k] != release[k] for k in ['jax', 'jaxlib']):
++        parser.error('--python must select the pinned venv with JAX/jaxlib 0.11.2')
++    checkout(release['repository']+'.git', source, release['source_commit'])
++    tools = source/'build-tools'
++    tools.mkdir(exist_ok=True)
++    sdk_archive, xla_archive, bazel = tools/'mlx-sdk.tar.gz', tools/'xla.tar.gz', tools/'bazel-8.7.0'
++    download(release['mlx_sdk'], sdk_archive)
++    download(release['xla'], xla_archive)
++    download(release['bazel'], bazel)
++    sdk = source/'src/metaljax/lib/mlx'
++    prepare_archive(sdk_archive, sdk, 'mlx')
++    xla = source/'xla-91888df6'
++    prepare_archive(xla_archive, xla, 'xla-'+release['xla']['revision'])
++    bazel.chmod(0o755)
++    for rel in ['plugin-native/WORKSPACE', 'plugin-native/.bazelrc']:
++        file = source/rel
++        original = subprocess.check_output(['git', '-C', str(source), 'show', 'HEAD:'+rel], text=True)
++        prepared = original.replace('/Users/oleg/metaljax', str(source)).replace(
++            'build --disk_cache=~/.cache/metaljax-bazel', f'build --disk_cache={cache}/bazel-disk-cache')
++        if file.read_text() not in (original, prepared):
++            raise RuntimeError(f'Preserving custom build configuration: {file}')
++        file.write_text(prepared)
++    env = dict(os.environ, METALJAX_MLX_DIR=str(sdk), UV_CACHE_DIR=str(tools/'uv-cache'),
++               SDKROOT=subprocess.check_output(['xcrun', '--show-sdk-path'], text=True).strip())
++    flags = ['--repositories_without_autoloads=cc_compatibility_proxy', '--macos_minimum_os=14.0',
++             '--host_copt=--target=arm64-apple-macosx14.0', '--host_linkopt=--target=arm64-apple-macosx14.0',
++             f'--jobs={args.jobs}', f'--disk_cache={cache}/bazel-disk-cache']
++    run([bazel, f'--output_user_root={cache}/bazel', 'build', *flags,
++         '//metal:libmetal_pjrt_native.dylib'], cwd=source/'plugin-native', env=env)
++    dylib = source/'plugin-native/bazel-bin/metal/libmetal_pjrt_native.dylib'
++    out = tools/'frozen-wheels'
++    out.mkdir(exist_ok=True)
++    constraints = tools/'build-constraints.txt'
++    constraints.write_text(f"hatchling=={release['hatchling']}\n")
++    uv = shutil.which('uv') or str(root/'.local/bin/uv')
++    env.update(METALJAX_NATIVE_DYLIB=str(dylib), METALJAX_VENDORED_MLX=str(sdk))
++    run([uv, 'build', '--wheel', '--build-constraint', constraints, '--out-dir', out], cwd=source, env=env)
++    wheel, = out.glob(f"metaljax-{release['version']}-*.whl")
++    manifest = dict(source_commit=release['source_commit'], release=release, build_flags=flags,
++                    compiler=subprocess.check_output(['xcrun', 'clang++', '--version'], text=True).strip(),
++                    python=subprocess.check_output([str(python), '--version'], text=True).strip(),
++                    jax=target['jax'], jaxlib=target['jaxlib'], macos=platform.mac_ver()[0],
++                    plugin_sha256=sha(dylib), wheel_sha256=sha(wheel),
++                    matches_published_plugin=sha(dylib) == release['plugin_sha256'],
++                    matches_published_wheel=sha(wheel) == release['wheel']['sha256'])
++    (out/'build-manifest.json').write_text(json.dumps(manifest, indent=2)+'\n')
++    if args.install:
++        run([uv, 'pip', 'install', '--python', python, '--no-deps', '--reinstall', wheel], env=env)
++    print(f'Built {wheel}\nManifest: {out}/build-manifest.json', flush=True)
++    print('Byte-identical to published wheel:', manifest['matches_published_wheel'], flush=True)
++
++
++if __name__ == '__main__':
++    main()
+diff --git a/installation/install_apple_python.py b/installation/install_apple_python.py
+new file mode 100644
+index 0000000..52b7225
+--- /dev/null
++++ b/installation/install_apple_python.py
+@@ -0,0 +1,99 @@
++#!/usr/bin/env python3
++"""Install pinned Apple Python dependencies with an explicit MetalJAX selection.
++
++Precedence: FREEBINDCRAFT_METALJAX_WHEEL (local developer override), then
++FREEBINDCRAFT_METALJAX=stock (troubleshooting), otherwise the frozen release.
++The published wheel is verified before uv can modify the target environment.
++"""
++import argparse
++import hashlib
++import json
++import os
++from pathlib import Path
++import shutil
++import subprocess
++import tempfile
++import urllib.parse
++import urllib.request
++
++
++def sha(path):
++    with path.open('rb') as file:
++        return hashlib.file_digest(file, 'sha256').hexdigest()
++
++
++def download_verified(asset, directory):
++    directory.mkdir(parents=True, exist_ok=True)
++    destination = directory/Path(urllib.parse.urlsplit(asset['url']).path).name
++    if destination.is_file() and sha(destination) == asset['sha256']:
++        return destination
++    # Separate temporary files also make concurrent downloads safe.
++    with tempfile.NamedTemporaryFile(dir=directory, suffix='.part', delete=False) as file:
++        part = Path(file.name)
++    try:
++        print('Downloading MetalJAX:', asset['url'], flush=True)
++        urllib.request.urlretrieve(asset['url'], part)
++        if sha(part) != asset['sha256']:
++            raise RuntimeError(f"MetalJAX checksum mismatch for {asset['url']}; environment unchanged")
++        part.replace(destination)
++    finally:
++        part.unlink(missing_ok=True)
++    return destination
++
++
++def select_wheel(release, directory):
++    mode = os.environ.get('FREEBINDCRAFT_METALJAX', 'frozen')
++    if mode not in ('frozen', 'stock'):
++        raise ValueError('FREEBINDCRAFT_METALJAX must be frozen or stock')
++    override = os.environ.get('FREEBINDCRAFT_METALJAX_WHEEL')
++    if override:
++        wheel = Path(override).expanduser().absolute()
++        if not wheel.is_file() or wheel.suffix != '.whl':
++            raise ValueError(f'MetalJAX wheel not found: {wheel}')
++        return 'local override', wheel, sha(wheel)
++    asset = release['stock_wheel'] if mode == 'stock' else release['wheel']
++    return mode, download_verified(asset, directory), asset['sha256']
++
++
++def main():
++    root = Path(__file__).resolve().parents[1]
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument('--python', type=Path, default=root/'.venv-metaljax/bin/python')
++    parser.add_argument('--uv', default=shutil.which('uv') or str(root/'.local/bin/uv'))
++    parser.add_argument('--downloads', type=Path, default=root/'.local/downloads/metaljax')
++    parser.add_argument('--with-pyrosetta', action='store_true')
++    args = parser.parse_args()
++    python = args.python.absolute()  # preserve a venv interpreter's symlink
++    query = 'import sys; assert sys.prefix != sys.base_prefix, "Expected a virtual environment"'
++    subprocess.run([str(python), '-c', query], check=True)
++    release = json.loads((root/'installation/metaljax/release.json').read_text())
++    requirements = (root/'installation/apple-silicon-requirements.txt').read_text().splitlines()
++    expected = f"metaljax @ {release['wheel']['url']}#sha256={release['wheel']['sha256']}"
++    backend_lines = [line for line in requirements if line.startswith('metaljax')]
++    if backend_lines != [expected] or any(f'{key}=={release[key]}' not in requirements for key in ('jax', 'jaxlib')):
++        raise RuntimeError('Apple requirements disagree with the frozen MetalJAX release pins')
++    mode, wheel, digest = select_wheel(release, args.downloads.absolute())
++    selected = f'metaljax @ {wheel.as_uri()}#sha256={digest}'
++    requirements = [selected if line == expected else line for line in requirements]
++    command = [args.uv, 'pip', 'sync', '--python', str(python)]
++    if args.with_pyrosetta:
++        command += ['--find-links', 'https://west.rosettacommons.org/pyrosetta/quarterly/release/']
++        requirements += [line for line in (root/'installation/pyrosetta-apple-requirements.txt').read_text().splitlines()
++                         if not line.startswith('--')]
++    with tempfile.TemporaryDirectory(prefix='fbc-apple-requirements-') as temporary:
++        lock = Path(temporary)/'requirements.txt'
++        lock.write_text('\n'.join(requirements)+'\n')
++        print(f'MetalJAX selection: {mode}; SHA-256: {digest}', flush=True)
++        subprocess.run([*command, str(lock)], check=True)
++    report = json.loads(subprocess.check_output([str(python), '-c',
++        "import importlib.metadata as m,json; print(json.dumps({n:m.version(n) for n in ['metaljax','jax','jaxlib']}))"], text=True))
++    if any(report[key] != release[key] for key in ('jax', 'jaxlib')):
++        raise RuntimeError(f'Unexpected JAX versions after sync: {report}')
++    wanted = '0.11.9' if mode == 'stock' else release['version']
++    if mode != 'local override' and report['metaljax'] != wanted:
++        raise RuntimeError(f'Unexpected MetalJAX version after sync: {report}')
++    print(f"Installed MetalJAX {report['metaljax']} ({mode}); JAX {report['jax']}, jaxlib {report['jaxlib']}", flush=True)
++
++
++if __name__ == '__main__':
++    main()
+diff --git a/installation/metaljax/.gitattributes b/installation/metaljax/.gitattributes
+new file mode 100644
+index 0000000..24e115f
+--- /dev/null
++++ b/installation/metaljax/.gitattributes
+@@ -0,0 +1 @@
++*.patch -whitespace
+diff --git a/installation/metaljax/0001-static-nested-loop-trip.patch b/installation/metaljax/0001-static-nested-loop-trip.patch
+new file mode 100644
+index 0000000..323ab7a
+--- /dev/null
++++ b/installation/metaljax/0001-static-nested-loop-trip.patch
+@@ -0,0 +1,212 @@
++diff --git a/plugin-native/metal/metal_lowering.cc b/plugin-native/metal/metal_lowering.cc
++index bf6ba73..a5253ea 100644
++--- a/plugin-native/metal/metal_lowering.cc
+++++ b/plugin-native/metal/metal_lowering.cc
++@@ -7335,6 +7335,15 @@ absl::Status Lowering::LowerWhile(mlir::Operation* op) {
++     std::fflush(stderr);
++   }
++ 
+++  // Preserve the proof used by WhileTraceable. At runtime these constants
+++  // may be captures of an enclosing compiled body and therefore tracers;
+++  // reading them back to recover the trip count is forbidden inside a trace.
+++  // -1 means unknown. The eager path still reads its actual carries/bound.
+++  std::optional<int64_t> static_trip;
+++  if (is_counted && bound_kind == 0) {
+++    std::optional<int64_t> start = StaticStart(op, k);
+++    if (start.has_value()) static_trip = std::max<int64_t>(bound - *start, 0);
+++  }
++   std::vector<int64_t> attrs{ncarry,
++                              static_cast<int64_t>(cond.caps.size()),
++                              static_cast<int64_t>(body.caps.size()),
++@@ -7347,7 +7356,8 @@ absl::Status Lowering::LowerWhile(mlir::Operation* op) {
++                              chunkable,
++                              kmax,
++                              body_compile_max,
++-                             real_bytes};
+++                             real_bytes,
+++                             static_trip.value_or(-1)};
++ 
++   std::vector<int> ins;
++   for (mlir::Value v : op->getOperands()) {
++@@ -7380,11 +7390,6 @@ absl::Status Lowering::LowerWhile(mlir::Operation* op) {
++   // very often main's own argument, so which of the two it is decides whether
++   // the result may alias one.  A statically counted loop answers that here;
++   // anything else is charged both.
++-  std::optional<int64_t> static_trip;
++-  if (is_counted && bound_kind == 0) {
++-    std::optional<int64_t> start = StaticStart(op, k);
++-    if (start.has_value()) static_trip = std::max<int64_t>(bound - *start, 0);
++-  }
++   for (int64_t j = 0; j < ncarry; j++) {
++     // With no interpreted fallback the kernel is the only thing that runs, and
++     // the only carry it can hand back untouched is one it classified as
++diff --git a/plugin-native/runtime/control.cc b/plugin-native/runtime/control.cc
++index ad1aec9..1b81471 100644
++--- a/plugin-native/runtime/control.cc
+++++ b/plugin-native/runtime/control.cc
++@@ -607,6 +607,8 @@ class BodyRunner {
++       const std::vector<mx::array>& vals) {
++     bool resource_limit = false;
++     std::exception_ptr err;
+++    std::string failure;
+++    const char* phase = "call";
++     try {
++       std::vector<mx::array> flat(vals);
++       flat.insert(flat.end(), caps_.begin(), caps_.end());
++@@ -622,6 +624,7 @@ class BodyRunner {
++         // generate kernels for reports itself. Synchronous (not
++         // async_eval) — a Metal build error raised on a worker thread
++         // aborts the process.
+++        phase = "eval";
++         mx::eval(out);
++         probe_ = false;
++       }
++@@ -631,6 +634,7 @@ class BodyRunner {
++       if (is_oom(ex)) throw;   // the governor's refusal: see run_recovering
++       resource_limit = is_resource_limit(ex);
++       err = std::current_exception();
+++      failure = ex.what();
++     }
++     // Recovery OUTSIDE the handler: the failed attempt's arrays must be
++     // gone before anything tries to allocate again (the C++ analogue of
++@@ -653,7 +657,12 @@ class BodyRunner {
++       return std::nullopt;
++     }
++     if (!compiled_) std::rethrow_exception(err);
++-    debug_print("compiled while body failed; retrying eagerly");
+++    debug_print("compiled while body failed; retrying eagerly: phase=" +
+++                std::string(phase) + " repeat=" + std::to_string(repeat_) +
+++                " ops=" + std::to_string(body_->num_ops()) +
+++                " slots=" + std::to_string(body_->num_slots()) +
+++                " args=" + std::to_string(body_->num_args()) +
+++                " error=" + failure);
++     body_->drop_compiled();
++     bind();
++     return std::nullopt;
++@@ -1019,25 +1028,19 @@ void Program::run_while(const Entry& e,
++ 
++   std::vector<mx::array> vals;
++   if (counted) {
++-    int64_t n;
++-    if (bound_kind == 0) {
++-      n = bound;
++-    } else if (bound_kind == 1) {
++-      n = item_int(ins[static_cast<size_t>(bound)]);
++-    } else {
++-      n = item_int(cond_caps[static_cast<size_t>(bound)]);
++-    }
++-    const int64_t start = item_int(ins[static_cast<size_t>(k)]);
++-    const int64_t trip = std::max<int64_t>(n - start, 0);
++     if (in_trace) {
++-      // An enclosing mx::compile is tracing us: inline the iterations
++-      // into that graph. Past 64 of them the trace holds more
++-      // intermediates than Metal's buffer budget allows, and the answer
++-      // is the same as the Python engine's -- abort, and let the caller
++-      // fall back to the eager path (run_recovering does that here).
++-      // The lowering's `WhileTraceable` carries the same bound
++-      // (metal_lowering.cc kUnrollMax), so a body it let compile never
++-      // reaches this throw; keep the two numbers together.
+++      // Lowering proved this count from the original StableHLO constants,
+++      // using the same StaticStart/AnalyzeCounted proof as WhileTraceable.
+++      // The initial counter can be hoisted into an enclosing body's
+++      // captures: mx::compile replaces even those constants with tracers,
+++      // so item_int on the carries here tries to evaluate a tracer and
+++      // permanently retires an otherwise compilable enclosing body.
+++      // Never read a device value while constructing a compiled graph.
+++      const int64_t trip = at.size() > 13 ? at[13] : -1;
+++      if (trip < 0)
+++        throw std::runtime_error(
+++            "metaljax: counted loop has no proven static trip count inside a trace");
+++      // Keep this limit in step with lowering's kUnrollMax.
++       if (trip > 64)
++         throw std::runtime_error(
++             "metaljax: refusing to unroll trip=" + std::to_string(trip) +
++@@ -1049,6 +1052,16 @@ void Program::run_while(const Entry& e,
++       write_results(e, env, vals);
++       return;
++     }
+++    int64_t n;
+++    if (bound_kind == 0) {
+++      n = bound;
+++    } else if (bound_kind == 1) {
+++      n = item_int(ins[static_cast<size_t>(bound)]);
+++    } else {
+++      n = item_int(cond_caps[static_cast<size_t>(bound)]);
+++    }
+++    const int64_t start = item_int(ins[static_cast<size_t>(k)]);
+++    const int64_t trip = std::max<int64_t>(n - start, 0);
++     // Eager loop. Chained replays are expensive (a compiled call
++     // evaluates its inputs), so unroll as many iterations as the trace
++     // budget allows into each compiled chunk and replay trip/K chunks
++diff --git a/tests/test_nested_counted.py b/tests/test_nested_counted.py
++new file mode 100644
++index 0000000..5c1b55a
++--- /dev/null
+++++ b/tests/test_nested_counted.py
++@@ -0,0 +1,66 @@
+++"""Regression for a static nested loop whose initial counter is a capture.
+++
+++The lowering hoists that constant out of the enclosing loop body. MLX replaces
+++all body arguments, including the hoisted constant, with tracers. Reading the
+++counter with item_int therefore retires the enclosing compiled body. A numerical
+++check alone passes on the broken backend because it silently replays eagerly.
+++"""
+++import os
+++from pathlib import Path
+++import re
+++import subprocess
+++import sys
+++
+++import pytest
+++
+++
+++@pytest.mark.parametrize('start,stop', [(0, 3), (2, 5), (5, 5), (5, 2)])
+++def test_nested_static_loop_compiles_and_differentiates(start, stop):
+++    code = f'''
+++import jax
+++import jax.numpy as jnp
+++import numpy as np
+++from helpers import check
+++
+++def f(x, w):
+++    def outer(i, h):
+++        return jax.lax.fori_loop({start}, {stop},
+++            lambda j, a: jnp.tanh(a @ w + a * 0.99 + j * 0.0001), h)
+++    return jax.lax.fori_loop(0, 65, outer, x)
+++
+++x = np.random.default_rng(4).normal(size=(4, 4)).astype(np.float32) * 0.03
+++w = np.eye(4, dtype=np.float32) * 0.002
+++for scale in (1.0, 1.5):
+++    check(f, x * scale, w, rtol=1e-4, atol=1e-5)
+++    check(jax.grad(lambda a, b: jnp.sum(f(a, b)), argnums=(0, 1)),
+++          x * scale, w, rtol=1e-4, atol=1e-5)
+++print('nested forward and gradients match CPU')
+++'''
+++    env = dict(os.environ, METALJAX_DEBUG='1', METALJAX_MSL='0',
+++               JAX_PLATFORMS='metal,cpu')
+++    env['PYTHONPATH'] = str(Path(__file__).resolve().parent)
+++    result = subprocess.run([sys.executable, '-c', code], env=env,
+++                            text=True, capture_output=True, timeout=120)
+++    assert result.returncode == 0, result.stdout + result.stderr
+++    assert 'compiled while body failed' not in result.stderr, result.stderr
+++    assert 'chunked loop failed' not in result.stderr, result.stderr
+++    drops = re.findall(r'drops=(\d+)/(\d+)', result.stderr)
+++    assert drops and all(a == b == '0' for a, b in drops), result.stderr
+++    if stop > start:
+++        assert any(int(n) > 0 for n in re.findall(r'unrolls=(\d+)', result.stderr)), result.stderr
+++
+++
+++def test_dynamic_start_and_bound_stay_dynamic():
+++    # A runtime trip count must not be replaced by metadata from an earlier
+++    # invocation. This also exercises nonzero starts and both zero-trip cases.
+++    from helpers import check
+++    import jax
+++    import jax.numpy as jnp
+++    import numpy as np
+++
+++    def f(x, start, stop):
+++        return jax.lax.fori_loop(start, stop, lambda i, a: a * 1.01 + i, x)
+++
+++    for start, stop in [(0, 3), (2, 5), (5, 5), (5, 2)]:
+++        check(f, np.ones(4, np.float32), np.int32(start), np.int32(stop),
+++              rtol=1e-4, atol=1e-5)
+diff --git a/installation/metaljax/README.md b/installation/metaljax/README.md
+new file mode 100644
+index 0000000..6faebd8
+--- /dev/null
++++ b/installation/metaljax/README.md
+@@ -0,0 +1,429 @@
++# MetalJAX static nested-loop repair
++
++This patch fixes the compiled-loop fallbacks observed in FreeBindCraft's Apple
++AlphaFold workload. It changes only MetalJAX's Metal PJRT lowering/runtime and
++adds backend regression tests. FreeBindCraft's shared design functions, CUDA
++installation, model, precision, recycling, checkpointing and optimizer are
++unchanged. The Apple installer now downloads the frozen FreeBindCraft release
++wheel by default; no user build is needed.
++On the measured 146-residue M5 Max fixture, warmed gradients improved 1.71×
++and the full design stage improved 1.73×, with higher memory use.
++
++## Default installation and troubleshooting
++
++```bash
++bash install_bindcraft.sh
++# Add --no-pyrosetta to omit native Rosetta.
++```
++
++This selects `metaljax==0.11.9+fbc1`, with JAX/jaxlib `0.11.2`. The exact
++versioned wheel URL and expected SHA-256 are in `release.json` and
++`../apple-silicon-requirements.txt`. `install_apple_python.py` verifies the
++artifact before syncing Python dependencies, and prints the installed versions.
++The default requirements also contain the URL's SHA-256 fragment for direct uv
++use. There is no moving branch or latest-release lookup during installation.
++
++To troubleshoot with pinned stock upstream MetalJAX:
++
++```bash
++FREEBINDCRAFT_METALJAX=stock bash install_bindcraft.sh
++```
++
++Rerun the ordinary command with that variable unset to restore the frozen
++release. The selected wheel participates in a single dependency sync, so fresh
++installs, reruns and mode switches do not temporarily install another backend.
++Existing explicit `FREEBINDCRAFT_METALJAX_WHEEL=/absolute/path.whl` overrides take
++precedence over `stock` and the default. Local override bytes are chosen by the
++user and are outside the published release's expected-checksum guarantee.
++Unknown backend modes and missing overrides fail. A download/hash failure occurs
++before uv changes the target venv; a damaged cache is re-downloaded and verified.
++
++This selection happens only during installation. The backend retains its
++existing per-loop recovery. Memory-governor refusals propagate as errors and
++are not automatically retried eagerly. There are no dependency swaps or
++whole-job restarts. CUDA/Linux dependencies and shared scientific logic are
++unchanged.
++
++## Frozen fork and release
++
++- Fork: [cytokineking/metaljax](https://github.com/cytokineking/metaljax), verified
++  under the same owner as FreeBindCraft.
++- Source commit: `678c58eaaafc33c5b31bcc6b6d0176dd078f6063`.
++- Tag/release: [v0.11.9-fbc1](https://github.com/cytokineking/metaljax/releases/tag/v0.11.9-fbc1).
++- [Prebuilt wheel](https://github.com/cytokineking/metaljax/releases/download/v0.11.9-fbc1/metaljax-0.11.9%2Bfbc1-py3-none-macosx_14_0_arm64.whl)
++  SHA-256: `8b3ec3bd4a71e57d7c77a0f3f8b1ee9fefe28b4ca81c0b325dc6d2975938d079`.
++- [Canonical release checksums](https://github.com/cytokineking/metaljax/releases/download/v0.11.9-fbc1/SHA256SUMS.release.txt)
++  and [build provenance](https://github.com/cytokineking/metaljax/releases/download/v0.11.9-fbc1/build-provenance.json).
++
++The fork commits the reviewed fix and regression tests directly on the frozen
++upstream base. Its default branch is `freebindcraft-0.11.9-fbc1`; installation
++uses the artifact and source commit pins, not that branch. Upstream authorship,
++Apache-2.0 licensing and bundled MLX MIT notices are retained in source and wheel.
++FreeBindCraft carries the reviewed patch as an audit artifact; the builder does
++**not** apply it again to the fork.
++
++The release archives the exact committed MetalJAX source, checksum-pinned XLA
++archive and Bazel 8.7.0 executable, staged reconstructed MLX SDK headers and
++unchanged runtime binaries, recipe and provenance. The source archive contains
++the four SDK-header patches. `build-provenance.json` records every compiled
++source hash, SDK file hash, compiler/SDK versions, runtime binary hashes, flags,
++JAX pins and the relationship to the reviewed build. The required private MLX
++runtime inputs are archived; this does not claim to build MLX from its
++unavailable stamped commit. XLA's transitive Bazel downloads remain pinned by
++its build rules, rather than all being mirrored in this release.
++
++The released wheel adds fork URLs and license notices to the original reviewed
++wheel. All seven runtime payload files, including the plugin, Python loaders,
++MLX dylibs and metallib, are byte-identical. The updated recipe, using the
++frozen source and archived inputs on the recorded compiler/SDK, reproduced the
++new wheel and native plugin hashes exactly. That rebuild used the existing
++Bazel action cache after verifying the source and inputs; it was not a second
++cold XLA build. A fresh public fork checkout also matched all 74 recorded
++compiled source files. Different compilers/SDKs/paths may produce different
++binaries; a local rebuild is not automatically a validated release.
++
++All uploaded/downloaded asset bytes were checked. Use the canonical
++`SHA256SUMS.release.txt` for downloaded filenames: the initial build-directory
++manifest names `.gitignore`, which GitHub renames `default.gitignore`. The
++canonical manifest was added under a new name; no published artifact or tag
++was overwritten.
++
++Future upgrades are deliberate: review a concrete source commit, create a new
++immutable version/tag/asset identity, record and preserve inputs, run compiler,
++numerical and memory checks, then update the installer URL/hash and compatible
++JAX/jaxlib pins in a reviewed FreeBindCraft change. No automatic upstream
++merges, dependency upgrades or runtime switching are enabled. Existing tags and
++published bytes must not be replaced.
++
++## Cause and implementation
++
++MetalJAX admits small static nested loops into an enclosing compiled body.
++`WhileTraceable` proves their trip counts from the StableHLO constants. Region
++lowering can hoist the initial counter into that enclosing body's captures;
++MLX replaces **all** its arguments, including those hoisted constants, with
++tracers. `Program::run_while` nevertheless called `item_int` on the counter
++before checking `in_trace`. Every enclosing body then failed with:
++
++```text
++[eval] Attempting to eval an array during function transformations like compile or vmap is not allowed.
++```
++
++The patch carries the existing static-trip proof in tape attribute 13. During
++tracing, the runtime unrolls exactly that count without reading a device value.
++It preserves the 64-iteration unroll cap, all admission/byte gates, the eager
++path's actual runtime-bound reads, and the existing recovery ladder. Unknown
++trip counts still refuse tracing and retain the correct fallback. This does not
++raise a trace budget or change MLX kernels.
++
++Under `METALJAX_DEBUG=1`, a compiled-body failure now reports its exception,
++call/evaluation phase, repeat count, body operation/slot counts and argument
++count. The reviewed 48-layer forward body, for example, failed at call time
++with 2,552 operations, 3,373 slots and 112 arguments. All nine observed failures
++had the same tracer-evaluation cause. Disabling MLX fusion also retained them.
++
++## Source and build provenance
++
++- FreeBindCraft starting commit and freshly fetched `origin/master`:
++  `c6f8994bf6deb455a5b8f449f36cd65915e6b307`; clean detached worktree initially,
++  then branch `codex/metaljax-compiled-loops`.
++- MetalJAX 0.11.9: `7546eb93aa60c6570efdca95836276d03fe70a94`.
++- JAX/jaxlib 0.11.2; XLA `91888df6ce85102c30220e41d952065925e10886`.
++- ColabDesign `8fd167defd1b0f98e29f00584ff4f3987e6935dc`.
++- The wheel retains the release's **byte-identical** private MLX dylibs and
++  metallib (MLX 0.32.0). `build_metaljax_apple.py` verifies their SHA-256 hashes.
++- The release stamp names MLX commit `661b2e38`, absent from the published fork
++  inspected here. For SDK headers only, the build uses published base
++  `651c39cd3d26d0a62587ca639a52ea1efa4b8186` plus the release's checked-in
++  patches 0004–0007. It does not rebuild or replace the MLX runtime.
++- Bazel 8.7.0 and the XLA archive are checksum pinned. The helper replaces
++  maintainer-specific source paths, sets the macOS target for both host tools
++  and plugin, keeps caches local, and packages `metaljax==0.11.9+fbc1`.
++
++Normal installation uses the prebuilt wheel. Maintainers can reproduce from the
++frozen fork and the release's archived build inputs after installing the pinned
++Apple environment:
++
++```bash
++.venv-metaljax/bin/python installation/build_metaljax_apple.py
++# Optional: --install installs the result only into the selected venv.
++```
++
++The helper checks out `678c58e` by full commit hash, checks both JAX pins,
++verifies every archived SDK/XLA file on reruns, rejects changed source/build
++configuration, uses a pinned hatchling, and prints the wheel and manifest paths.
++The first cold native build can take several minutes. Inputs, source checkouts
++and caches stay inside the checkout by default. The release also includes a
++standalone recipe archive with this script and `release.json`; unpack it in a
++working directory with uv on PATH, and pass
++`--python /absolute/path/to/the/pinned/venv/bin/python`.
++
++Only the normal Apple Command Line Tools are needed: the original metallib is
++reused, so this build does not need the separate Metal shader toolchain.
++A maintainer can explicitly install a local rebuild on a subsequent installer
++run with `FREEBINDCRAFT_METALJAX_WHEEL=/absolute/path/to/the/built.whl`.
++
++## Reproduce and test
++
++The reviewed development build and the final frozen-recipe rebuild used the
++same source/cache locations (the fork now contains the fix):
++
++```bash
++.venv-metaljax/bin/python installation/build_metaljax_apple.py \
++  --source-dir .metaljax-src --cache-dir .local --jobs 16
++```
++
++The diagnostic-only build retained original execution and matched the release
++bit for bit. Its captured log is `runs/metaljax-loop-fix/diagnostic-built.log`;
++`diagnostic-built-gradient.mlir` is the complete failing gradient StableHLO.
++`stack-diagnostic.log` independently shows the release-binary stack through
++`item_int -> Program::run_while -> Program::interpret -> Program::compiled`.
++The first attempt at that temporary exception logger failed; all validation
++and timing results use normal, uninterposed processes.
++
++The reduced regression is included in the patch at
++`tests/test_nested_counted.py`. It disables generated MSL scans only inside its
++isolated child processes, so it specifically exercises this counted-loop path.
++It checks forward results and both input/weight gradients against CPU, replays
++with changed input values, and asserts that compiled/chunked variants are not
++retired. It also tests nonzero starts, zero/negative trips and dynamic bounds.
++The numerical tolerance, `rtol=1e-4, atol=1e-5`, follows the existing long-scan
++coverage; the original backend passes its numerical checks but fails its
++compilation-retention assertion.
++
++Install `pytest` into the chosen test venv if needed. These paths use the
++`.metaljax-src` checkout from the explicit build command above.
++
++```bash
++JAX_PLATFORMS=metal,cpu .venv-metaljax/bin/python -m pytest -q \
++  .metaljax-src/tests/test_nested_counted.py \
++  .metaljax-src/tests/test_control.py \
++  .metaljax-src/tests/test_msl_scan.py \
++  .metaljax-src/tests/test_command_buffer.py
++```
++
++The focused run with the fixed plugin passed **57 tests**. FreeBindCraft’s
++existing suite passed **10 tests** with the installed wheel. The interpreter-free
++C++ runtime test also passed when run directly. Its first Bazel test invocation
++could not access Metal because the persistent build server inherited the build
++sandbox; this was a device-access failure, not a numerical/test assertion.
++The packaged wheel was also checked to load exactly its own two private MLX
++libraries, rather than the build tree’s copies. Existing tests cover
++conditional/dynamic control flow, generated-kernel failure recovery, wide bodies
++and command-buffer ordering. The new regression failed on the original backend
++because variants were retired despite matching CPU numerically.
++
++The fixed-input harness uses the unchanged production losses, BF16, `high`
++matmul precision, checkpointing, one recycle, dropout and RNG key 42, model 1
++multimer v3, and the 76+70-residue ubiquitin fixture. It saves/hashes the sequence,
++RNG and previous state, materializes outputs before stopping each timer, and
++reports first calls separately from warmed calls. For example:
++
++```bash
++JAX_PLATFORMS=metal METALJAX_MATMUL_PRECISION=high \
++METALJAX_DEBUG=1 METALJAX_TIMING=1 \
++.venv-metaljax/bin/python extras/benchmark_metaljax_loops.py \
++  --assets /absolute/path/to/installed/FreeBindCraft \
++  --out runs/metaljax-loop-fix --name baseline --repeats 6 --dump-hlo
++# Use the baseline backend for that command, then select the patched wheel:
++JAX_PLATFORMS=metal METALJAX_MATMUL_PRECISION=high \
++METALJAX_DEBUG=1 METALJAX_TIMING=1 \
++.venv-metaljax-fixed/bin/python extras/benchmark_metaljax_loops.py \
++  --assets /absolute/path/to/installed/FreeBindCraft \
++  --out runs/metaljax-loop-fix --name fixed --repeats 6 \
++  --previous runs/metaljax-loop-fix/baseline-previous.npz
++```
++
++## Numerical validation
++
++With identical sequence, RNG, previous recycling tensors and precision,
++`baseline-frozen.npz` and `fixed-frozen.npz` are bit-identical for **all 18 saved
++fields**: initial forward loss/coordinates/confidence, final loss/coordinates/
++confidence, all individual loss terms and sequence gradient. The three initial
++forward recycling tensors also match bit for bit. Sequence-gradient cosine is
++1 within FP64 calculation rounding; relative L2 difference and maximum absolute
++difference are zero. Loss is `13.94212818145752`; gradient norm is
++`1.6165108680725098`. This validates this fixture; it is not a CUDA equivalence or
++binder-success claim.
++
++Performance measurements and full-trajectory validation are recorded in the
++accompanying `validation.json` and the worktree's `runs/metaljax-loop-fix/`.
++Raw logs, NPZ outputs, HLO, native binaries and wheels remain local build/test
++artifacts rather than repository payloads.
++
++## Measurements and limits
++
++Measurements were sequential on the same M5 Max (128 GiB, macOS 27.0.1).
++The final steady-state comparison used fresh processes in **A-B-B-A order**, six
++warmed materialized VJPs per process (12 per backend), with the same frozen
++previous-state file. Persistent JAX compilation caching was disabled. No other
++test workload ran concurrently. The desktop was not quiesced; clocks and thermal
++state were uncontrolled, and OS/driver caches were retained. These are small,
++correlated samples, not a confidence interval or a production throughput claim.
++
++| Fixed-input probe | Release 0.11.9 | Patched 0.11.9+fbc1 |
++| --- | ---: | ---: |
++| Warmed VJP median | 2.192 s | 1.283 s |
++| Fresh-process medians | 2.177 / 2.194 s | 1.286 / 1.278 s |
++| First forward calls | 1.665–1.776 s | 1.389–1.397 s |
++| First gradient calls | 4.481–4.592 s | 3.617–3.640 s |
++| Warmed dispatches, median | 293,027 | 141,615 |
++| Warmed command buffers, median | 897 | 310 |
++| Warmed eager flushes, median | 367 | 3 |
++| Backend GPU busy, median | 1,585.4 ms | 1,129.9 ms |
++| Backend GPU idle, median | 596.6 ms | 141.1 ms |
++| Initial caught body failures, each process | 9 | 0 |
++| Lifetime peak physical footprint | 3.77–3.93 GiB | 6.75 GiB |
++
++First calls include compilation **and execution**; they are separated from the
++warmed measurements, not presented as isolated compiler timings. All warmed
++calls report zero new compilations. The baseline had permanently retired its
++failed bodies by then. GPU times/dispatches are backend diagnostics, not an
++independently captured Instruments trace.
++
++The unchanged archived `benchmark-fixed-budget.py` (SHA-256
++`e73d95f8c09f4e5dec907ac68fd2240e2220242873250e7c07eb93cf3462075a`) was
++run once per backend, in two identical clean `c6f8994` source extractions with
++read-only links to the same weights/native tools. Both used `high`, BF16, the
++original 75/45/5/15 schedule, one recycle, checkpointing, seed 121958, no
++PyRosetta, OpenMM/OpenCL and FASPR. Debug counters and the original 1-second
++physical-memory monitor were enabled in both. The design stage includes first
++compilation. Each completed 125 differentiated design calls, 16 design forward
++calls, one MPNN sample, two complex and two binder predictions, three complete
++relaxation/scoring/DSSP checks, filtering and best-model selection.
++
++| Full fixed-work benchmark, one run each | Release | Patched |
++| --- | ---: | ---: |
++| Design stage | 404.068 s | 233.421 s |
++| Complete process, including exit/monitor | 463.463 s | 295.854 s |
++| Lifetime peak process physical footprint | 5.49 GiB | 8.85 GiB |
++| Caught compiled-body failures across workflow | 12 | 0 |
++
++This is **1.73×** for design and **1.57×** for the complete measured workflow.
++All 140 printed design iteration records, the actual generated design PDB,
++both unrelaxed complex predictions and both binder predictions are bit-identical.
++The filter outcome and selected model also agree. The benchmark uses common
++fixtures after design; it measures fixed work, not accepted-binder throughput.
++
++The full runs' MPNN samples and relaxed structures/scores differ. The unchanged
++harness constructs MPNN with `seed=None`; ColabDesign’s `Key` then uses Python’s
++unseeded `random.randint`, despite the harness resetting NumPy’s seed. OpenMM
++also uses unseeded Langevin MD shakes and `setVelocitiesToTemperature`. Thus the
++full runs are not a same-RNG equivalence test of those stochastic stages.
++A separate explicit-seed-42 MPNN probe matched **all six output fields bit for
++bit**, including sequence, logits, score and decoding order. OpenMM is outside
++the patched backend, and its input structures match exactly; its stochastic
++relaxations were left unchanged.
++
++The extra memory is a material tradeoff: compiled bodies retain more
++intermediates than the previously flushing eager path. No memory/trace budget
++or checkpointing policy was changed. The frozen build has not been validated on the physical 24 GiB M2. The
++additional bounded PDL1 and controlled-budget checks below extend fixture
++coverage on the M5 Max; they do not establish arbitrary target-size support. CUDA/shared design source is untouched; no CUDA execution or
++cross-backend numerical-equivalence claim is made.
++
++To repeat the full benchmark with the copied assets in this worktree, choose a
++fresh output source extraction for each arm (the harness refuses an existing
++output directory), then run the same command with the appropriate Python and
++root:
++
++```bash
++JAX_PLATFORMS=metal METALJAX_MATMUL_PRECISION=high METALJAX_DEBUG=1 \
++.venv-metaljax-fixed/bin/python extras/monitor_macos_job.py \
++  --output-dir runs/metaljax-loop-fix/trajectory-fixed/monitor --interval 1 -- \
++  .venv-metaljax-fixed/bin/python runs/metaljax-loop-fix/benchmark-fixed-budget.py \
++  --root runs/metaljax-loop-fix/trajectory-fixed \
++  --fixture runs/metaljax-loop-fix/fixed-fixture --mode no-pyrosetta --backend metal
++```
++
++The executed command/environment records are in each monitor’s `metadata.json`
++and `paired-commands.json`. `validation.json` contains all warmed samples,
++per-process first calls/counters, memory peaks, fixture/source hashes and the
++full stage timings. The source rebuild check reproduced the SDK header patch
++stack from a new public checkout. The original development recipe produced two byte-identical reviewed wheels:
++plugin `005ab1302a7f49ec27e1447ab31db89e78b0e22793e6e14cf66bfe7773dce2fd`,
++wheel `6e4b9ca8ad6e5dbaec3611d7fd827a48bd3bbb7710ac12911644739083eac50f`.
++
++## Published distribution validation
++
++The actual public release wheel was downloaded without GitHub authentication,
++checksum-verified and installed into a fresh isolated venv with all pinned Apple
++Python dependencies (without PyRosetta). The installer reported
++`0.11.9+fbc1`, JAX `0.11.2`, jaxlib `0.11.2`. Rerunning audited the existing
++packages. Switching to stock, rerunning stock, a fresh stock install, local
++override precedence (even over stock), switching back and corrupted-cache
++recovery all passed. An isolated copy of the real installer pins, with a
++deliberately wrong expected hash against the real public wheel URL, failed
++before uv ran and left the installed backend/versions unchanged; partial files
++were removed. Five focused installer tests cover these failure/selection
++contracts. The full native-tool/PyRosetta/weights bootstrap was not repeated;
++its Python dependency phase is the tested distribution path.
++
++The installed release wheel passed **72 tests**: the prior 57 compiler/control
++tests, 10 FreeBindCraft tests and five new installer tests. Two existing JAX
++deprecation warnings remain. The sandbox initially denied Metal device access;
++the successful GPU tests ran with the normal device-access exemption.
++
++Raw logs, installed wheel provenance, distribution checks and bounded probe
++outputs are in `runs/metaljax-release/`. The committed
++`release-validation.json` records the final measurements and checks.
++
++### Bounded larger-target and memory checks
++
++The release installed from the public URL was also compared to the actual
++stock opt-out installation on bundled PDL1 chain A: 115 target residues plus a
++70-residue binder, **185 residues total**, hotspot 56. The model, BF16/high
++precision, checkpointing, one recycle, production losses, dropout and seed 42
++were unchanged. The sequence/key hashes agree, and both gradients used the
++same frozen stock first-recycle state. All **18 saved output fields** and all
++three first-recycle tensors were bit-identical; gradient relative L2 and
++maximum absolute difference are zero. The released wheel also matched all
++18 saved fields of the earlier 146-residue stock baseline.
++
++Both PDL1 arms ran sequentially in fresh processes, with two warmed gradients,
++a 16 GiB governor process budget, a 24 GiB external process-tree RSS guard and
++a six-minute external limit. Neither guard fired. The governor's other memory
++settings were retained. Process physical footprint, not isolated GPU memory,
++peaked at **5.14 GiB stock / 10.43 GiB release**. Warm-gradient medians were
++4.710 / 2.575 seconds in this short pair; these timings are corroborative, not
++a new balanced performance estimate. No system swap growth was observed.
++
++The same release fixture under a **4 GiB** process policy and 250 ms stall
++setting completed through repeated reclamation/stalls, with all 18 fields
++still bit-identical. Its lifetime peak was **9.78 GiB**. The policy acts at
++sampling/admission checkpoints and can reclaim/stall after graph transients;
++it is **not a strict process peak-memory cap**. This is a material limitation
++when interpreting budget settings as protection on smaller machines.
++
++A deliberately tiny **256 MiB** policy with a 250 ms stall setting produced
++`RESOURCE_EXHAUSTED: metaljax out of memory at transfer`, exiting with status 1
++and no result file. The external monitor did not stop the job. The refusal
++propagated normally; there was no eager retry, dependency change or job restart.
++This exercised the transfer refusal path, not every allocation failure or
++possible driver failure. Neither imposed budget simulates a physical smaller
++Mac. The 24 GiB M2, arbitrary larger targets and higher recycle counts remain
++unvalidated with the frozen backend.
++
++For the larger comparison, use separate stock/release venvs installed with
++`installation/install_apple_python.py --python /path/to/venv/bin/python` and
++`FREEBINDCRAFT_METALJAX=stock` for the stock venv. Run each arm sequentially:
++
++```bash
++JAX_PLATFORMS=metal METALJAX_MATMUL_PRECISION=high METALJAX_MEM_BUDGET_MB=16384 \
++  /path/to/stock/venv/bin/python extras/benchmark_metaljax_loops.py \
++  --assets /path/to/installed/FreeBindCraft --pdb example/PDL1.pdb \
++  --hotspot 56 --binder-length 70 --out runs/my-release-check \
++  --name large-stock --repeats 2
++JAX_PLATFORMS=metal METALJAX_MATMUL_PRECISION=high METALJAX_MEM_BUDGET_MB=16384 \
++  /path/to/release/venv/bin/python extras/benchmark_metaljax_loops.py \
++  --assets /path/to/installed/FreeBindCraft --pdb example/PDL1.pdb \
++  --hotspot 56 --binder-length 70 --out runs/my-release-check \
++  --name large-fixed --repeats 2 \
++  --previous runs/my-release-check/large-stock-previous.npz
++```
++
++For an independent guard, wrap each command with
++`extras/monitor_macos_job.py --output-dir <fresh-monitor-directory> --interval 1
++--max-tree-rss-gib 24 --max-hours 0.1 -- <command>`. For the controlled policy
++checks, use 4096 or 256 for `METALJAX_MEM_BUDGET_MB`, set
++`METALJAX_MEM_STALL_MS=250` and `METALJAX_MEMDBG=1`, and choose new output paths.
++These settings are test inputs, not default installation or launcher changes.
+diff --git a/installation/metaljax/release-validation.json b/installation/metaljax/release-validation.json
+new file mode 100644
+index 0000000..863867a
+--- /dev/null
++++ b/installation/metaljax/release-validation.json
+@@ -0,0 +1,362 @@
++{
++  "validation_date_local": "2026-10-22",
++  "hardware": "M5 Max, 128 GiB, macOS 27.0.1",
++  "release": {
++    "version": "0.11.9+fbc1",
++    "repository": "https://github.com/cytokineking/metaljax",
++    "source_commit": "678c58eaaafc33c5b31bcc6b6d0176dd078f6063",
++    "upstream_base": "7546eb93aa60c6570efdca95836276d03fe70a94",
++    "tag": "v0.11.9-fbc1",
++    "jax": "0.11.2",
++    "jaxlib": "0.11.2",
++    "wheel": {
++      "url": "https://github.com/cytokineking/metaljax/releases/download/v0.11.9-fbc1/metaljax-0.11.9+fbc1-py3-none-macosx_14_0_arm64.whl",
++      "sha256": "8b3ec3bd4a71e57d7c77a0f3f8b1ee9fefe28b4ca81c0b325dc6d2975938d079"
++    },
++    "stock_wheel": {
++      "filename": "metaljax-0.11.9-py3-none-macosx_14_0_arm64.whl",
++      "sha256": "05ed087f0e8b307aaea0763e45f03e2123ea358de2c117c93e4dca25c882db7f",
++      "url": "https://files.pythonhosted.org/packages/17/b3/c7deaa5599ba600bcd8d2647fcb34e9ea424a2f628f34f1a62de5ca08260/metaljax-0.11.9-py3-none-macosx_14_0_arm64.whl"
++    },
++    "source_archive": {
++      "url": "https://github.com/cytokineking/metaljax/releases/download/v0.11.9-fbc1/metaljax-0.11.9-fbc1-source.tar.gz",
++      "sha256": "30029c1cb2d5e8838a0ccfb92d23f9cafb49ac6fb201d4b1258f8a2437ca7972"
++    },
++    "mlx_sdk": {
++      "url": "https://github.com/cytokineking/metaljax/releases/download/v0.11.9-fbc1/metaljax-fbc1-mlx-sdk.tar.gz",
++      "sha256": "64a2ed745b8d180b6323b3a8e9811b7ed4119dfcc1404e4b3365b5057dc0497b"
++    },
++    "xla": {
++      "url": "https://github.com/cytokineking/metaljax/releases/download/v0.11.9-fbc1/xla-91888df6ce85102c30220e41d952065925e10886.tar.gz",
++      "sha256": "32cb8087d88318a01f9974ead6254e1ca06d263fa1847f61503379525bd46897",
++      "revision": "91888df6ce85102c30220e41d952065925e10886"
++    },
++    "bazel": {
++      "url": "https://github.com/cytokineking/metaljax/releases/download/v0.11.9-fbc1/bazel-8.7.0-darwin-arm64",
++      "sha256": "575f20fb23955e02f73519befd180df635b4ed0960c60f0e70fcc8d74014a713"
++    },
++    "plugin_sha256": "005ab1302a7f49ec27e1447ab31db89e78b0e22793e6e14cf66bfe7773dce2fd",
++    "hatchling": "1.32.4"
++  },
++  "build": {
++    "frozen_source_verified_files": 74,
++    "source_commit_matches_public_annotated_tag": true,
++    "recipe_reproduced_plugin": true,
++    "recipe_reproduced_release_wheel": true,
++    "existing_bazel_action_cache_used": true,
++    "reviewed_runtime_payload_files_identical": 7,
++    "packaging_only_changes": [
++      "fork URLs",
++      "bundled license notices"
++    ],
++    "all_published_downloaded_assets_verified": 12,
++    "canonical_checksums_url": "https://github.com/cytokineking/metaljax/releases/download/v0.11.9-fbc1/SHA256SUMS.release.txt",
++    "canonical_checksums_sha256": "af14bff6618aa51e3282c1bd9813d56b8fb1578f9d5daa657ecccffd8beaf3c3"
++  },
++  "distribution": {
++    "fresh-published-default": {
++      "versions": {
++        "metaljax": "0.11.9+fbc1",
++        "jax": "0.11.2",
++        "jaxlib": "0.11.2"
++      },
++      "direct_url": {
++        "url": "file://$WORKTREE/runs/metaljax-release/downloads/metaljax-0.11.9+fbc1-py3-none-macosx_14_0_arm64.whl#sha256=8b3ec3bd4a71e57d7c77a0f3f8b1ee9fefe28b4ca81c0b325dc6d2975938d079",
++        "archive_info": {}
++      },
++      "plugin_sha256": "005ab1302a7f49ec27e1447ab31db89e78b0e22793e6e14cf66bfe7773dce2fd",
++      "projects": [
++        "Repository, https://github.com/cytokineking/metaljax",
++        "Upstream, https://github.com/eterevsky/metaljax",
++        "Issues, https://github.com/cytokineking/metaljax/issues"
++      ]
++    },
++    "default-rerun": {
++      "returncode": 0,
++      "installed": {
++        "versions": {
++          "metaljax": "0.11.9+fbc1",
++          "jax": "0.11.2",
++          "jaxlib": "0.11.2"
++        },
++        "direct_url": {
++          "url": "file://$WORKTREE/runs/metaljax-release/downloads/metaljax-0.11.9+fbc1-py3-none-macosx_14_0_arm64.whl#sha256=8b3ec3bd4a71e57d7c77a0f3f8b1ee9fefe28b4ca81c0b325dc6d2975938d079",
++          "archive_info": {}
++        },
++        "plugin_sha256": "005ab1302a7f49ec27e1447ab31db89e78b0e22793e6e14cf66bfe7773dce2fd",
++        "projects": [
++          "Repository, https://github.com/cytokineking/metaljax",
++          "Upstream, https://github.com/eterevsky/metaljax",
++          "Issues, https://github.com/cytokineking/metaljax/issues"
++        ]
++      }
++    },
++    "switch-stock": {
++      "returncode": 0,
++      "installed": {
++        "versions": {
++          "metaljax": "0.11.9",
++          "jax": "0.11.2",
++          "jaxlib": "0.11.2"
++        },
++        "direct_url": {
++          "url": "file://$WORKTREE/runs/metaljax-release/downloads/metaljax-0.11.9-py3-none-macosx_14_0_arm64.whl#sha256=05ed087f0e8b307aaea0763e45f03e2123ea358de2c117c93e4dca25c882db7f",
++          "archive_info": {}
++        },
++        "plugin_sha256": "c8577caba62378ec01ddda70dd5d70483ea4ff746783cafca0e79f90bb655278",
++        "projects": [
++          "Repository, https://github.com/eterevsky/metaljax",
++          "Issues, https://github.com/eterevsky/metaljax/issues"
++        ]
++      }
++    },
++    "stock-rerun": {
++      "returncode": 0,
++      "installed": {
++        "versions": {
++          "metaljax": "0.11.9",
++          "jax": "0.11.2",
++          "jaxlib": "0.11.2"
++        },
++        "direct_url": {
++          "url": "file://$WORKTREE/runs/metaljax-release/downloads/metaljax-0.11.9-py3-none-macosx_14_0_arm64.whl#sha256=05ed087f0e8b307aaea0763e45f03e2123ea358de2c117c93e4dca25c882db7f",
++          "archive_info": {}
++        },
++        "plugin_sha256": "c8577caba62378ec01ddda70dd5d70483ea4ff746783cafca0e79f90bb655278",
++        "projects": [
++          "Repository, https://github.com/eterevsky/metaljax",
++          "Issues, https://github.com/eterevsky/metaljax/issues"
++        ]
++      }
++    },
++    "fresh-stock": {
++      "returncode": 0,
++      "installed": {
++        "versions": {
++          "metaljax": "0.11.9",
++          "jax": "0.11.2",
++          "jaxlib": "0.11.2"
++        },
++        "direct_url": {
++          "url": "file://$WORKTREE/runs/metaljax-release/downloads/metaljax-0.11.9-py3-none-macosx_14_0_arm64.whl#sha256=05ed087f0e8b307aaea0763e45f03e2123ea358de2c117c93e4dca25c882db7f",
++          "archive_info": {}
++        },
++        "plugin_sha256": "c8577caba62378ec01ddda70dd5d70483ea4ff746783cafca0e79f90bb655278",
++        "projects": [
++          "Repository, https://github.com/eterevsky/metaljax",
++          "Issues, https://github.com/eterevsky/metaljax/issues"
++        ]
++      }
++    },
++    "local-override-over-stock": {
++      "returncode": 0,
++      "installed": {
++        "versions": {
++          "metaljax": "0.11.9+fbc1",
++          "jax": "0.11.2",
++          "jaxlib": "0.11.2"
++        },
++        "direct_url": {
++          "url": "file://$WORKTREE/.metaljax-src/build-tools/wheels/metaljax-0.11.9+fbc1-py3-none-macosx_14_0_arm64.whl#sha256=6e4b9ca8ad6e5dbaec3611d7fd827a48bd3bbb7710ac12911644739083eac50f",
++          "archive_info": {}
++        },
++        "plugin_sha256": "005ab1302a7f49ec27e1447ab31db89e78b0e22793e6e14cf66bfe7773dce2fd",
++        "projects": [
++          "Repository, https://github.com/eterevsky/metaljax",
++          "Issues, https://github.com/eterevsky/metaljax/issues"
++        ]
++      }
++    },
++    "restore-default": {
++      "returncode": 0,
++      "installed": {
++        "versions": {
++          "metaljax": "0.11.9+fbc1",
++          "jax": "0.11.2",
++          "jaxlib": "0.11.2"
++        },
++        "direct_url": {
++          "url": "file://$WORKTREE/runs/metaljax-release/downloads/metaljax-0.11.9+fbc1-py3-none-macosx_14_0_arm64.whl#sha256=8b3ec3bd4a71e57d7c77a0f3f8b1ee9fefe28b4ca81c0b325dc6d2975938d079",
++          "archive_info": {}
++        },
++        "plugin_sha256": "005ab1302a7f49ec27e1447ab31db89e78b0e22793e6e14cf66bfe7773dce2fd",
++        "projects": [
++          "Repository, https://github.com/cytokineking/metaljax",
++          "Upstream, https://github.com/eterevsky/metaljax",
++          "Issues, https://github.com/cytokineking/metaljax/issues"
++        ]
++      }
++    },
++    "public-checksum-failure": {
++      "returncode": 1,
++      "installed": {
++        "versions": {
++          "metaljax": "0.11.9+fbc1",
++          "jax": "0.11.2",
++          "jaxlib": "0.11.2"
++        },
++        "direct_url": {
++          "url": "file://$WORKTREE/runs/metaljax-release/downloads/metaljax-0.11.9+fbc1-py3-none-macosx_14_0_arm64.whl#sha256=8b3ec3bd4a71e57d7c77a0f3f8b1ee9fefe28b4ca81c0b325dc6d2975938d079",
++          "archive_info": {}
++        },
++        "plugin_sha256": "005ab1302a7f49ec27e1447ab31db89e78b0e22793e6e14cf66bfe7773dce2fd",
++        "projects": [
++          "Repository, https://github.com/cytokineking/metaljax",
++          "Upstream, https://github.com/eterevsky/metaljax",
++          "Issues, https://github.com/cytokineking/metaljax/issues"
++        ]
++      },
++      "environment_unchanged": true
++    },
++    "corrupt-cache-recovery": {
++      "returncode": 0,
++      "installed": {
++        "versions": {
++          "metaljax": "0.11.9+fbc1",
++          "jax": "0.11.2",
++          "jaxlib": "0.11.2"
++        },
++        "direct_url": {
++          "url": "file://$WORKTREE/runs/metaljax-release/corrupted-cache/metaljax-0.11.9+fbc1-py3-none-macosx_14_0_arm64.whl#sha256=8b3ec3bd4a71e57d7c77a0f3f8b1ee9fefe28b4ca81c0b325dc6d2975938d079",
++          "archive_info": {}
++        },
++        "plugin_sha256": "005ab1302a7f49ec27e1447ab31db89e78b0e22793e6e14cf66bfe7773dce2fd",
++        "projects": [
++          "Repository, https://github.com/cytokineking/metaljax",
++          "Upstream, https://github.com/eterevsky/metaljax",
++          "Issues, https://github.com/cytokineking/metaljax/issues"
++        ]
++      }
++    },
++    "final-default": {
++      "returncode": 0,
++      "installed": {
++        "versions": {
++          "metaljax": "0.11.9+fbc1",
++          "jax": "0.11.2",
++          "jaxlib": "0.11.2"
++        },
++        "direct_url": {
++          "url": "file://$WORKTREE/runs/metaljax-release/downloads/metaljax-0.11.9+fbc1-py3-none-macosx_14_0_arm64.whl#sha256=8b3ec3bd4a71e57d7c77a0f3f8b1ee9fefe28b4ca81c0b325dc6d2975938d079",
++          "archive_info": {}
++        },
++        "plugin_sha256": "005ab1302a7f49ec27e1447ab31db89e78b0e22793e6e14cf66bfe7773dce2fd",
++        "projects": [
++          "Repository, https://github.com/cytokineking/metaljax",
++          "Upstream, https://github.com/eterevsky/metaljax",
++          "Issues, https://github.com/cytokineking/metaljax/issues"
++        ]
++      }
++    }
++  },
++  "tests": {
++    "passed": 72,
++    "warnings": 2,
++    "warnings_kind": "Existing JAX jit backend/device deprecations",
++    "seconds": 76.25,
++    "command": "JAX_PLATFORMS=metal,cpu METALJAX_MATMUL_PRECISION=high .venv-metaljax-release/bin/python -m pytest -q .metaljax-src/tests/test_nested_counted.py .metaljax-src/tests/test_control.py .metaljax-src/tests/test_msl_scan.py .metaljax-src/tests/test_command_buffer.py tests",
++    "pip_check_release_and_stock_passed": true
++  },
++  "small_fixture": {
++    "length": 146,
++    "all_18_saved_fields_bit_identical_to_reviewed_stock_baseline": true,
++    "gradient_relative_l2": 0.0,
++    "peak_physical_footprint_bytes": 7248759592
++  },
++  "larger_fixture": {
++    "target": "Bundled PDL1 chain A",
++    "target_residues": 115,
++    "binder_residues": 70,
++    "total_residues": 185,
++    "target_pdb_sha256": "d3c95434dcadf26d005340b15bd92be61e101ed921478c26f2a5550f198e61f6",
++    "hotspot": "56",
++    "model": "model_1_multimer_v3",
++    "bfloat16": true,
++    "remat": true,
++    "precision": "high",
++    "num_recycles": 1,
++    "dropout": true,
++    "seed": 42,
++    "sequence_sha256": "eb794ec35dd0cfe38408942e3853343660cceaaecdaec4cc94d5d1bc896636b1",
++    "key_sha256": "a5bd31ffb882b29f946f4e17aa421f115f16df944b071a67df32bc250d290afa",
++    "previous_sha256": {
++      "prev_msa_first_row": "451f81884189d641ddf770d71b2a97c6c7034d2d0aec5417c2ed29c59239f2d2",
++      "prev_pair": "6f316d49a44b1afd098285f424bad01571f5a91427d78cccbdd7ceb7cb9a8f09",
++      "prev_pos": "6344fcb35c7a5cf89fb9d5977e26c85216f9983d519315702bbb8270d56ca196"
++    },
++    "all_18_saved_fields_bit_identical": true,
++    "first_recycle_state_3_fields_bit_identical": true,
++    "gradient_relative_l2": 0.0,
++    "gradient_cosine": 1.0,
++    "loss": 10.315740585327148,
++    "gradient_norm": 2.2170660495758057,
++    "process_budget_mb": 16384,
++    "external_tree_rss_guard_gib": 24,
++    "external_wall_limit_seconds": 360,
++    "normal_memory_governor_other_settings_retained": true,
++    "stock": {
++      "first_forward_seconds": 2.6159029999980703,
++      "first_grad_seconds": 7.5755798750324175,
++      "grad_seconds": [
++        4.729296791017987,
++        4.6898675840348005
++      ],
++      "median_grad_seconds": 4.709582187526394,
++      "lifetime_peak_physical_footprint_bytes": 5519804576
++    },
++    "release": {
++      "first_forward_seconds": 1.8961917919805273,
++      "first_grad_seconds": 5.311793291009963,
++      "grad_seconds": [
++        2.5552411249955185,
++        2.5942201249999925
++      ],
++      "median_grad_seconds": 2.5747306249977555,
++      "lifetime_peak_physical_footprint_bytes": 11202317072
++    },
++    "scope": "One sequential fresh process per backend, two warmed gradients each; bounded numerical/memory coverage, not a balanced performance study or full design trajectory"
++  },
++  "controlled_memory": {
++    "reclaim_case": {
++      "process_budget_mb": 4096,
++      "stall_ms": 250,
++      "completed": true,
++      "all_18_fields_bit_identical": true,
++      "peak_physical_footprint_bytes": 10501261760,
++      "reclaim_log_events": 50,
++      "stall_cleared_log_events": 30,
++      "note": "Governor samples/admission checkpoints are not a strict peak-footprint cap; compiled graph transients exceeded 4 GiB before reclamation."
++    },
++    "refusal_case": {
++      "process_budget_mb": 256,
++      "stall_ms": 250,
++      "child_exit_code": 1,
++      "external_monitor_stop_reason": null,
++      "error": "RESOURCE_EXHAUSTED: metaljax out of memory at transfer",
++      "elapsed_seconds": 2.646222957991995,
++      "peak_physical_footprint_bytes": 533202264,
++      "no_result_emitted": true,
++      "no_dependency_swap_or_job_restart": true
++    },
++    "no_swap_growth_observed_in_monitored_runs": true
++  },
++  "limitations": [
++    "Only the 128 GiB M5 Max was used; imposed budgets do not simulate a physical smaller-memory Mac.",
++    "The larger fixture is 185 total residues; arbitrary larger targets, deeper recycles and smaller physical GPUs remain unvalidated.",
++    "Physical footprint is whole-process memory, not a separate Metal allocation measurement.",
++    "The release reuses the reviewed native payload; the earlier full-trajectory validation is retained, not repeated here.",
++    "Full native-tool, PyRosetta and weight-download bootstrap was not repeated; the actual Apple Python dependency phase and public wheel delivery were exercised.",
++    "The upstream MLX runtime stamped source commit was unavailable; exact binaries and reconstructed SDK inputs are archived, without claiming a from-source rebuild of MLX.",
++    "The archived recipe reproduced bytes with the recorded compiler/SDK and existing Bazel action cache; this is not a cold rebuild or cross-toolchain reproducibility claim."
++  ],
++  "raw_artifacts": "runs/metaljax-release/",
++  "artifact_hashes": {
++    "compiler-tests.log": "c45dc6178a20f5d43e978dd2e2caf7f36307c41fab3090ee035280cdfed989c8",
++    "rebuild.log": "9438e06a4b92f1fd0f8211ea532f5ff0d9c2f9c79b1ccc29cb3aeccafd7defb5",
++    "distribution-validation.json": "d7acbef14d68d034345410308c9d7358f2e3f2e46d4b250849119ad867f520e2",
++    "upload-download-verification.json": "74895f29c031a9e60649ce578296118d9e014634fb688a334b3bc112978fee08",
++    "af/PDL1-185-comparison.json": "f73486c84cf9a65e88cd1341461a542ce0e64eec12a4028cb86dcea9af67836a",
++    "af/released-small-comparison.json": "ff1e9d034d1b9dba8c344313cd5498c107a58b19128a650e8d154a75b2fe1e59",
++    "budget-hard-refusal-monitor/job.log": "42bdd5849112c65038e3559d5b918f55dd76dfb8d5662a6ca360a3d124c4cd28"
++  }
++}
+diff --git a/installation/metaljax/release.json b/installation/metaljax/release.json
+new file mode 100644
+index 0000000..0792402
+--- /dev/null
++++ b/installation/metaljax/release.json
+@@ -0,0 +1,37 @@
++{
++  "version": "0.11.9+fbc1",
++  "repository": "https://github.com/cytokineking/metaljax",
++  "source_commit": "678c58eaaafc33c5b31bcc6b6d0176dd078f6063",
++  "upstream_base": "7546eb93aa60c6570efdca95836276d03fe70a94",
++  "tag": "v0.11.9-fbc1",
++  "jax": "0.11.2",
++  "jaxlib": "0.11.2",
++  "wheel": {
++    "url": "https://github.com/cytokineking/metaljax/releases/download/v0.11.9-fbc1/metaljax-0.11.9+fbc1-py3-none-macosx_14_0_arm64.whl",
++    "sha256": "8b3ec3bd4a71e57d7c77a0f3f8b1ee9fefe28b4ca81c0b325dc6d2975938d079"
++  },
++  "stock_wheel": {
++    "filename": "metaljax-0.11.9-py3-none-macosx_14_0_arm64.whl",
++    "sha256": "05ed087f0e8b307aaea0763e45f03e2123ea358de2c117c93e4dca25c882db7f",
++    "url": "https://files.pythonhosted.org/packages/17/b3/c7deaa5599ba600bcd8d2647fcb34e9ea424a2f628f34f1a62de5ca08260/metaljax-0.11.9-py3-none-macosx_14_0_arm64.whl"
++  },
++  "source_archive": {
++    "url": "https://github.com/cytokineking/metaljax/releases/download/v0.11.9-fbc1/metaljax-0.11.9-fbc1-source.tar.gz",
++    "sha256": "30029c1cb2d5e8838a0ccfb92d23f9cafb49ac6fb201d4b1258f8a2437ca7972"
++  },
++  "mlx_sdk": {
++    "url": "https://github.com/cytokineking/metaljax/releases/download/v0.11.9-fbc1/metaljax-fbc1-mlx-sdk.tar.gz",
++    "sha256": "64a2ed745b8d180b6323b3a8e9811b7ed4119dfcc1404e4b3365b5057dc0497b"
++  },
++  "xla": {
++    "url": "https://github.com/cytokineking/metaljax/releases/download/v0.11.9-fbc1/xla-91888df6ce85102c30220e41d952065925e10886.tar.gz",
++    "sha256": "32cb8087d88318a01f9974ead6254e1ca06d263fa1847f61503379525bd46897",
++    "revision": "91888df6ce85102c30220e41d952065925e10886"
++  },
++  "bazel": {
++    "url": "https://github.com/cytokineking/metaljax/releases/download/v0.11.9-fbc1/bazel-8.7.0-darwin-arm64",
++    "sha256": "575f20fb23955e02f73519befd180df635b4ed0960c60f0e70fcc8d74014a713"
++  },
++  "plugin_sha256": "005ab1302a7f49ec27e1447ab31db89e78b0e22793e6e14cf66bfe7773dce2fd",
++  "hatchling": "1.32.4"
++}
+diff --git a/installation/metaljax/validation.json b/installation/metaljax/validation.json
+new file mode 100644
+index 0000000..2d5559b
+--- /dev/null
++++ b/installation/metaljax/validation.json
+@@ -0,0 +1,692 @@
++{
++  "date": "2026-10-22",
++  "hardware": "Apple M5 Max, 128 GiB, macOS 27.0.1",
++  "starting_freebindcraft": "c6f8994bf6deb455a5b8f449f36cd65915e6b307",
++  "patch_sha256": "938d3a0d4c4a27d6346df740f602d1f63cf46cba8855668a5c01abd6e216c76f",
++  "build": {
++    "metaljax_revision": "7546eb93aa60c6570efdca95836276d03fe70a94",
++    "mlx_header_revision": "651c39cd3d26d0a62587ca639a52ea1efa4b8186",
++    "mlx_header_patches": {
++      "0004-diag-dispatch-stats.patch": "d0c0964137df914e09ef98af14995acbbea11d92e998eadaf006e367736aeea9",
++      "0005-donate-through-stream-pins.patch": "ee93abd28ea85a803c053851e5fc7cc03a4ba5551cd0491c916babcf1ffce81b",
++      "0006-skip-empty-finalize.patch": "98734dfd680fe354e5df8f645a9cd8c3cdd5d2bb9ee887ddfa5483c1bce3d0ba",
++      "0007-transient-byte-cadence.patch": "8c464d5e0eefb553d7822ad3fbbe31e34e9c1440482a911c6db7f5f388590694"
++    },
++    "mlx_header_diff_sha256": "fb7c892e3e9db4bc4e53c4c11a270db486494e0c096cb3fec35732b311cf2d09",
++    "mlx_binaries": {
++      "lib/libmlx_metaljax.dylib": "72dc8d9a4b1e07df2f6bc91383e0567acf3ce292398ae6ce4ed1d19fce0b1374",
++      "lib/libjaccl_metaljax.dylib": "48f5790b66a173170527e6ba7fac3e445787550851439870019581032d5448f9",
++      "lib/mlx.metallib": "ef1aa1ef9ef5b18bcef166b75b7b8865afe0f02f5e23980f2bdf76447fe60e6b"
++    },
++    "xla_revision": "91888df6ce85102c30220e41d952065925e10886",
++    "xla_archive_sha256": "32cb8087d88318a01f9974ead6254e1ca06d263fa1847f61503379525bd46897",
++    "bazel_sha256": "575f20fb23955e02f73519befd180df635b4ed0960c60f0e70fcc8d74014a713",
++    "patch_sha256": "938d3a0d4c4a27d6346df740f602d1f63cf46cba8855668a5c01abd6e216c76f",
++    "build_flags": [
++      "--repositories_without_autoloads=cc_compatibility_proxy",
++      "--macos_minimum_os=14.0",
++      "--host_copt=--target=arm64-apple-macosx14.0",
++      "--host_linkopt=--target=arm64-apple-macosx14.0",
++      "--jobs=16",
++      "--disk_cache=$WORKTREE/.local/bazel-disk-cache"
++    ],
++    "compiler_version": "Apple clang version 21.0.0 (clang-2100.3.34.2)\nTarget: arm64-apple-darwin27.0.0\nThread model: posix\nInstalledDir: /Library/Developer/CommandLineTools/usr/bin",
++    "python_version": "Python 3.12.15",
++    "jax_version": "0.11.2",
++    "macos": "27.0.1",
++    "sdkroot": "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk",
++    "plugin_sha256": "005ab1302a7f49ec27e1447ab31db89e78b0e22793e6e14cf66bfe7773dce2fd",
++    "wheel_sha256": "6e4b9ca8ad6e5dbaec3611d7fd827a48bd3bbb7710ac12911644739083eac50f",
++    "version": "0.11.9+fbc1",
++    "wheel": "$WORKTREE/.metaljax-src/build-tools/wheels/metaljax-0.11.9+fbc1-py3-none-macosx_14_0_arm64.whl"
++  },
++  "focused_regression": "57 passed; original backend fails the new compilation-retention assertion",
++  "freebindcraft_tests": "10 passed with the installed patched wheel",
++  "native_runtime_test": "GIL-free native runtime binary passed directly; Bazel test wrapper inherited a sandbox without GPU access.",
++  "packaging": {
++    "prefix": "$WORKTREE/.venv-metaljax-fixed",
++    "metaljax": "0.11.9+fbc1",
++    "jax": "0.11.2",
++    "private_runtime_images": [
++      "$WORKTREE/.venv-metaljax-fixed/lib/python3.12/site-packages/metaljax/lib/mlx/lib/libmlx_metaljax.dylib",
++      "$WORKTREE/.venv-metaljax-fixed/lib/python3.12/site-packages/metaljax/lib/mlx/lib/libjaccl_metaljax.dylib"
++    ]
++  },
++  "same_seed_mpnn": {
++    "seed": 42,
++    "all_fields_bitwise_equal": true,
++    "fields": {
++      "S": true,
++      "decoding_order": true,
++      "logits": true,
++      "score": true,
++      "seq": true,
++      "seqid": true
++    }
++  },
++  "downstream_differences": "The unchanged archived harness leaves MPNN seed=None (ColabDesign Key chooses Python random.randint), and OpenMM uses unseeded Langevin MD shakes and setVelocitiesToTemperature. Full-run samples/relaxed coordinates and their scores differ, so those runs are not a same-RNG equivalence test for downstream stochastic work. With explicit MPNN seed42, all six output fields including logits and sequence are bit-identical. All AlphaFold design iteration metrics and unrelaxed design/complex/binder PDBs are bit-identical; default filter outcome and selected model agree.",
++  "fixed_input_numerics": {
++    "paired-b1": {
++      "fields": {
++        "loss": {
++          "bitwise_equal": true,
++          "max_absolute_difference": 0.0
++        },
++        "grad": {
++          "bitwise_equal": true,
++          "max_absolute_difference": 0.0
++        },
++        "xyz": {
++          "bitwise_equal": true,
++          "max_absolute_difference": 0.0
++        },
++        "plddt": {
++          "bitwise_equal": true,
++          "max_absolute_difference": 0.0
++        },
++        "initial_seq": {
++          "bitwise_equal": true,
++          "max_absolute_difference": 0.0
++        },
++        "forward_loss": {
++          "bitwise_equal": true,
++          "max_absolute_difference": 0.0
++        },
++        "forward_xyz": {
++          "bitwise_equal": true,
++          "max_absolute_difference": 0.0
++        },
++        "forward_plddt": {
++          "bitwise_equal": true,
++          "max_absolute_difference": 0.0
++        },
++        "loss_con": {
++          "bitwise_equal": true,
++          "max_absolute_difference": 0.0
++        },
++        "loss_exp_res": {
++          "bitwise_equal": true,
++          "max_absolute_difference": 0.0
++        },
++        "loss_helix": {
++          "bitwise_equal": true,
++          "max_absolute_difference": 0.0
++        },
++        "loss_i_con": {
++          "bitwise_equal": true,
++          "max_absolute_difference": 0.0
++        },
++        "loss_i_pae": {
++          "bitwise_equal": true,
++          "max_absolute_difference": 0.0
++        },
++        "loss_i_ptm": {
++          "bitwise_equal": true,
++          "max_absolute_difference": 0.0
++        },
++        "loss_pae": {
++          "bitwise_equal": true,
++          "max_absolute_difference": 0.0
++        },
++        "loss_plddt": {
++          "bitwise_equal": true,
++          "max_absolute_difference": 0.0
++        },
++        "loss_rg": {
++          "bitwise_equal": true,
++          "max_absolute_difference": 0.0
++        },
++        "loss_seq_ent": {
++          "bitwise_equal": true,
++          "max_absolute_difference": 0.0
++        }
++      },
++      "all_fields_bitwise_equal": true,
++      "gradient_cosine": 0.9999999999999998,
++      "gradient_relative_l2": 0.0
++    },
++    "paired-b2": {
++      "fields": {
++        "loss": {
++          "bitwise_equal": true,
++          "max_absolute_difference": 0.0
++        },
++        "grad": {
++          "bitwise_equal": true,
++          "max_absolute_difference": 0.0
++        },
++        "xyz": {
++          "bitwise_equal": true,
++          "max_absolute_difference": 0.0
++        },
++        "plddt": {
++          "bitwise_equal": true,
++          "max_absolute_difference": 0.0
++        },
++        "initial_seq": {
++          "bitwise_equal": true,
++          "max_absolute_difference": 0.0
++        },
++        "forward_loss": {
++          "bitwise_equal": true,
++          "max_absolute_difference": 0.0
++        },
++        "forward_xyz": {
++          "bitwise_equal": true,
++          "max_absolute_difference": 0.0
++        },
++        "forward_plddt": {
++          "bitwise_equal": true,
++          "max_absolute_difference": 0.0
++        },
++        "loss_con": {
++          "bitwise_equal": true,
++          "max_absolute_difference": 0.0
++        },
++        "loss_exp_res": {
++          "bitwise_equal": true,
++          "max_absolute_difference": 0.0
++        },
++        "loss_helix": {
++          "bitwise_equal": true,
++          "max_absolute_difference": 0.0
++        },
++        "loss_i_con": {
++          "bitwise_equal": true,
++          "max_absolute_difference": 0.0
++        },
++        "loss_i_pae": {
++          "bitwise_equal": true,
++          "max_absolute_difference": 0.0
++        },
++        "loss_i_ptm": {
++          "bitwise_equal": true,
++          "max_absolute_difference": 0.0
++        },
++        "loss_pae": {
++          "bitwise_equal": true,
++          "max_absolute_difference": 0.0
++        },
++        "loss_plddt": {
++          "bitwise_equal": true,
++          "max_absolute_difference": 0.0
++        },
++        "loss_rg": {
++          "bitwise_equal": true,
++          "max_absolute_difference": 0.0
++        },
++        "loss_seq_ent": {
++          "bitwise_equal": true,
++          "max_absolute_difference": 0.0
++        }
++      },
++      "all_fields_bitwise_equal": true,
++      "gradient_cosine": 0.9999999999999998,
++      "gradient_relative_l2": 0.0
++    },
++    "paired-a2": {
++      "fields": {
++        "loss": {
++          "bitwise_equal": true,
++          "max_absolute_difference": 0.0
++        },
++        "grad": {
++          "bitwise_equal": true,
++          "max_absolute_difference": 0.0
++        },
++        "xyz": {
++          "bitwise_equal": true,
++          "max_absolute_difference": 0.0
++        },
++        "plddt": {
++          "bitwise_equal": true,
++          "max_absolute_difference": 0.0
++        },
++        "initial_seq": {
++          "bitwise_equal": true,
++          "max_absolute_difference": 0.0
++        },
++        "forward_loss": {
++          "bitwise_equal": true,
++          "max_absolute_difference": 0.0
++        },
++        "forward_xyz": {
++          "bitwise_equal": true,
++          "max_absolute_difference": 0.0
++        },
++        "forward_plddt": {
++          "bitwise_equal": true,
++          "max_absolute_difference": 0.0
++        },
++        "loss_con": {
++          "bitwise_equal": true,
++          "max_absolute_difference": 0.0
++        },
++        "loss_exp_res": {
++          "bitwise_equal": true,
++          "max_absolute_difference": 0.0
++        },
++        "loss_helix": {
++          "bitwise_equal": true,
++          "max_absolute_difference": 0.0
++        },
++        "loss_i_con": {
++          "bitwise_equal": true,
++          "max_absolute_difference": 0.0
++        },
++        "loss_i_pae": {
++          "bitwise_equal": true,
++          "max_absolute_difference": 0.0
++        },
++        "loss_i_ptm": {
++          "bitwise_equal": true,
++          "max_absolute_difference": 0.0
++        },
++        "loss_pae": {
++          "bitwise_equal": true,
++          "max_absolute_difference": 0.0
++        },
++        "loss_plddt": {
++          "bitwise_equal": true,
++          "max_absolute_difference": 0.0
++        },
++        "loss_rg": {
++          "bitwise_equal": true,
++          "max_absolute_difference": 0.0
++        },
++        "loss_seq_ent": {
++          "bitwise_equal": true,
++          "max_absolute_difference": 0.0
++        }
++      },
++      "all_fields_bitwise_equal": true,
++      "gradient_cosine": 0.9999999999999998,
++      "gradient_relative_l2": 0.0
++    }
++  },
++  "initial_forward_recycle_outputs_equal": {
++    "paired-a1": {
++      "prev_msa_first_row": true,
++      "prev_pair": true,
++      "prev_pos": true
++    },
++    "paired-b1": {
++      "prev_msa_first_row": true,
++      "prev_pair": true,
++      "prev_pos": true
++    },
++    "paired-b2": {
++      "prev_msa_first_row": true,
++      "prev_pair": true,
++      "prev_pos": true
++    },
++    "paired-a2": {
++      "prev_msa_first_row": true,
++      "prev_pair": true,
++      "prev_pos": true
++    }
++  },
++  "steady_state": {
++    "conditions": "Sequential fresh-process A-B-B-A, 6 materialized warmed VJPs per arm, one shared frozen previous state, high/BF16/remat/dropout/seed42; persistent JAX cache disabled; no concurrent test workload; OS/driver caches retained; desktop not quiesced.",
++    "measurements": {
++      "baseline": {
++        "samples_seconds": [
++          2.175376040977426,
++          2.21774120797636,
++          2.1680612079799175,
++          2.2038307919865474,
++          2.1754087079898454,
++          2.1795220840140246,
++          2.201335666992236,
++          2.1934884170186706,
++          2.1820428339997306,
++          2.2210204580333084,
++          2.1908513749949634,
++          2.1937916669994593
++        ],
++        "median_seconds": 2.192169896006817,
++        "process_medians_seconds": {
++          "paired-a1": 2.177465396001935,
++          "paired-a2": 2.193640042009065
++        },
++        "first_forward_seconds": {
++          "paired-a1": 1.6653958749957383,
++          "paired-a2": 1.7758996660122648
++        },
++        "first_gradient_seconds": {
++          "paired-a1": 4.480533582973294,
++          "paired-a2": 4.592222750012297
++        },
++        "peak_physical_footprint_bytes": [
++          4214573000,
++          4045440992
++        ],
++        "median_counters": {
++          "flushes": 367.0,
++          "compiled_calls": 178.0,
++          "dispatches": 293027.0,
++          "cbufs": 897.0,
++          "gpu_busy_ms": 1585.355,
++          "gpu_idle_ms": 596.5799999999999,
++          "wall_ms": 2183.02
++        },
++        "initial_compiles_and_drops": {
++          "paired-a1": [
++            {
++              "flushes": 105,
++              "compiles": 8,
++              "compiled_calls": 66,
++              "unrolls": 0,
++              "dispatches": 127406,
++              "cbufs": 334,
++              "gpu_busy_ms": 510.7,
++              "gpu_idle_ms": 272.55,
++              "wall_ms": 783.25,
++              "drops": [
++                3,
++                0
++              ]
++            },
++            {
++              "flushes": 367,
++              "compiles": 18,
++              "compiled_calls": 184,
++              "unrolls": 0,
++              "dispatches": 292937,
++              "cbufs": 902,
++              "gpu_busy_ms": 1602.23,
++              "gpu_idle_ms": 701.1,
++              "wall_ms": 2303.33,
++              "drops": [
++                6,
++                0
++              ]
++            }
++          ],
++          "paired-a2": [
++            {
++              "flushes": 105,
++              "compiles": 8,
++              "compiled_calls": 66,
++              "unrolls": 0,
++              "dispatches": 127406,
++              "cbufs": 334,
++              "gpu_busy_ms": 511.37,
++              "gpu_idle_ms": 291.82,
++              "wall_ms": 803.2,
++              "drops": [
++                3,
++                0
++              ]
++            },
++            {
++              "flushes": 367,
++              "compiles": 18,
++              "compiled_calls": 184,
++              "unrolls": 0,
++              "dispatches": 292937,
++              "cbufs": 902,
++              "gpu_busy_ms": 1610.21,
++              "gpu_idle_ms": 688.98,
++              "wall_ms": 2299.19,
++              "drops": [
++                6,
++                0
++              ]
++            }
++          ]
++        },
++        "caught_body_fallbacks": {
++          "paired-a1": 9,
++          "paired-a2": 9
++        }
++      },
++      "fixed": {
++        "samples_seconds": [
++          1.2628737079794519,
++          1.262805209029466,
++          1.323040708026383,
++          1.300735542026814,
++          1.2861677500186488,
++          1.2864119580481201,
++          1.2733084579813294,
++          1.268354875035584,
++          1.2972222089883871,
++          1.3052470419788733,
++          1.280352125002537,
++          1.2758814999833703
++        ],
++        "median_seconds": 1.2832599375105929,
++        "process_medians_seconds": {
++          "paired-b1": 1.2862898540333845,
++          "paired-b2": 1.2781168124929536
++        },
++        "first_forward_seconds": {
++          "paired-b1": 1.3968776249676012,
++          "paired-b2": 1.3885829169885255
++        },
++        "first_gradient_seconds": {
++          "paired-b1": 3.6174792089732364,
++          "paired-b2": 3.6397856660187244
++        },
++        "peak_physical_footprint_bytes": [
++          7250315640,
++          7251560920
++        ],
++        "median_counters": {
++          "flushes": 3.0,
++          "compiled_calls": 124.0,
++          "dispatches": 141615.0,
++          "cbufs": 310.0,
++          "gpu_busy_ms": 1129.895,
++          "gpu_idle_ms": 141.14,
++          "wall_ms": 1273.9099999999999
++        },
++        "initial_compiles_and_drops": {
++          "paired-b1": [
++            {
++              "flushes": 1,
++              "compiles": 5,
++              "compiled_calls": 62,
++              "unrolls": 3,
++              "dispatches": 56531,
++              "cbufs": 125,
++              "gpu_busy_ms": 356.9,
++              "gpu_idle_ms": 131.37,
++              "wall_ms": 488.26,
++              "drops": [
++                0,
++                0
++              ]
++            },
++            {
++              "flushes": 3,
++              "compiles": 10,
++              "compiled_calls": 124,
++              "unrolls": 8,
++              "dispatches": 141615,
++              "cbufs": 312,
++              "gpu_busy_ms": 1149.4,
++              "gpu_idle_ms": 221.86,
++              "wall_ms": 1371.27,
++              "drops": [
++                0,
++                0
++              ]
++            }
++          ],
++          "paired-b2": [
++            {
++              "flushes": 1,
++              "compiles": 5,
++              "compiled_calls": 62,
++              "unrolls": 3,
++              "dispatches": 56531,
++              "cbufs": 125,
++              "gpu_busy_ms": 355.82,
++              "gpu_idle_ms": 131.92,
++              "wall_ms": 487.74,
++              "drops": [
++                0,
++                0
++              ]
++            },
++            {
++              "flushes": 3,
++              "compiles": 10,
++              "compiled_calls": 124,
++              "unrolls": 8,
++              "dispatches": 141615,
++              "cbufs": 312,
++              "gpu_busy_ms": 1154.35,
++              "gpu_idle_ms": 223.46,
++              "wall_ms": 1377.82,
++              "drops": [
++                0,
++                0
++              ]
++            }
++          ]
++        },
++        "caught_body_fallbacks": {
++          "paired-b1": 0,
++          "paired-b2": 0
++        }
++      }
++    },
++    "speedup": 1.7082820338484395
++  },
++  "fixed_work_trajectory": {
++    "conditions": "One fresh process per backend, original archived fixed-budget harness, two identical clean c6f8994 source extractions, same fixture and seed121958, no PyRosetta, OpenCL/OpenMM/FASPR, debug counters on in both, 1-second monitor; first-call compilation included.",
++    "benchmark_sha256": "e73d95f8c09f4e5dec907ac68fd2240e2220242873250e7c07eb93cf3462075a",
++    "stage_seconds": {
++      "baseline": {
++        "startup": 11.513202792033553,
++        "design_140_iterations": 404.0684333340032,
++        "trajectory_relaxation_and_scoring": 13.956392124993727,
++        "mpnn": 0.5339847919531167,
++        "validation_model_setup": 2.92732870799955,
++        "complex_prediction_and_relaxation": 24.77367820800282,
++        "complex_scoring": 3.122159708000254,
++        "binder_prediction_and_alignment": 1.3111455000471324,
++        "filter_evaluation_and_selection": 0.0038525419658981264
++      },
++      "fixed": {
++        "startup": 15.754574291000608,
++        "design_140_iterations": 233.42055920796702,
++        "trajectory_relaxation_and_scoring": 12.291986458993051,
++        "mpnn": 0.5583287089830264,
++        "validation_model_setup": 2.9354212079779245,
++        "complex_prediction_and_relaxation": 25.001887707971036,
++        "complex_scoring": 3.357941833033692,
++        "binder_prediction_and_alignment": 1.3044882080284879,
++        "filter_evaluation_and_selection": 0.003630499995779246
++      }
++    },
++    "internal_total_seconds": {
++      "baseline": 462.362067250011,
++      "fixed": 294.7750429159496
++    },
++    "process_elapsed_seconds": {
++      "baseline": 463.46337683300953,
++      "fixed": 295.85384904104285
++    },
++    "peak_physical_footprint_bytes": {
++      "baseline": 5899455128,
++      "fixed": 9505098272
++    },
++    "work_counts": {
++      "design_backprop": 125,
++      "design_forward": 16,
++      "scored_complexes": 3,
++      "dssp_complete_structures": 3,
++      "mpnn_samples": 1,
++      "complex_forward": 2,
++      "binder_forward": 2,
++      "filter_evaluations": 1,
++      "best_model_selections": 1
++    },
++    "scientific_report_fields_equal": {
++      "work_counts": true,
++      "nominal_design_iterations": true,
++      "sequence": true,
++      "target_residues": true,
++      "binder_residues": true,
++      "trajectory_seed": true,
++      "packages": true,
++      "fixture_hashes": true,
++      "original_design_function_sha256": true,
++      "design_confidences": true,
++      "original_final_trajectory_decision": true,
++      "mpnn_sample": false,
++      "trajectory_scores": false,
++      "complex_statistics": false,
++      "binder_statistics": true,
++      "selected_model": true,
++      "would_pass_default_filters": true,
++      "unmet_filters": true
++    },
++    "printed_design_iterations_equal": true,
++    "printed_design_iteration_count": 140,
++    "pdb_comparisons": {
++      "selection/best_model.pdb": {
++        "baseline_sha256": "f90f48ca0b5814e88f091c2ce39007ba87a55a2c7a676b274f9b958789421bc3",
++        "fixed_sha256": "94db1c506a71d5ef982397a33eff53ec9f662b826c49eeed6df7fd00b81aa4ab",
++        "bitwise_equal": false
++      },
++      "MPNN/fixed_ubiquitin_benchmark_model1.pdb": {
++        "baseline_sha256": "fb36de15c16f4dd603eee971a21683919828319988411aede4ecd204d90bf83d",
++        "fixed_sha256": "fb36de15c16f4dd603eee971a21683919828319988411aede4ecd204d90bf83d",
++        "bitwise_equal": true
++      },
++      "MPNN/fixed_ubiquitin_benchmark_model2.pdb": {
++        "baseline_sha256": "298da65fdf8b2767a5b93f5557c2c2b3592a058782f53374fd8989e468cf8dc4",
++        "fixed_sha256": "298da65fdf8b2767a5b93f5557c2c2b3592a058782f53374fd8989e468cf8dc4",
++        "bitwise_equal": true
++      },
++      "Trajectory/LowConfidence/fixed_ubiquitin_benchmark.pdb": {
++        "baseline_sha256": "c2a36b18202d8c1eb2a56051ec31e46c0eb4bd44000702cabbbbb519633ba62c",
++        "fixed_sha256": "c2a36b18202d8c1eb2a56051ec31e46c0eb4bd44000702cabbbbb519633ba62c",
++        "bitwise_equal": true
++      },
++      "Trajectory/Relaxed/fixed_fixture.pdb": {
++        "baseline_sha256": "7440afa75117b7fe528ac625075a859fba3f7e89022221d41b1932aca36c3f6c",
++        "fixed_sha256": "602c0f26c9092592d247cca45499df96c3eb8257496a40e4da8783a660c5abd0",
++        "bitwise_equal": false
++      },
++      "MPNN/Binder/fixed_ubiquitin_benchmark_model1.pdb": {
++        "baseline_sha256": "30b8522af76351b5393f59b0e06db10970d15eed5e7fa265f6f32f6d334d5e0d",
++        "fixed_sha256": "30b8522af76351b5393f59b0e06db10970d15eed5e7fa265f6f32f6d334d5e0d",
++        "bitwise_equal": true
++      },
++      "MPNN/Binder/fixed_ubiquitin_benchmark_model2.pdb": {
++        "baseline_sha256": "798952ce6d2532cfa6592e5952236df20503c651f83eb5cdeeda4e4dd80f2e69",
++        "fixed_sha256": "798952ce6d2532cfa6592e5952236df20503c651f83eb5cdeeda4e4dd80f2e69",
++        "bitwise_equal": true
++      },
++      "MPNN/Relaxed/fixed_ubiquitin_benchmark_model1.pdb": {
++        "baseline_sha256": "d378640267cfbfd5388b6be691f809d18249d4a64e387201a583499348760a55",
++        "fixed_sha256": "c4cb6dbe626a52c57be7ff904da41b68a738045eb64e0403a6c932fe0535a54c",
++        "bitwise_equal": false
++      },
++      "MPNN/Relaxed/fixed_ubiquitin_benchmark_model2.pdb": {
++        "baseline_sha256": "f90f48ca0b5814e88f091c2ce39007ba87a55a2c7a676b274f9b958789421bc3",
++        "fixed_sha256": "94db1c506a71d5ef982397a33eff53ec9f662b826c49eeed6df7fd00b81aa4ab",
++        "bitwise_equal": false
++      }
++    },
++    "caught_body_fallbacks": {
++      "baseline": 12,
++      "fixed": 0
++    },
++    "design_speedup": 1.7310747378254576,
++    "total_speedup": 1.5665281298020726
++  },
++  "limits": [
++    "Small 146-residue fixture, not acceptance throughput or large-target generalization.",
++    "Higher memory; not validated on the 24 GiB M2.",
++    "Backend dispatch/GPU-time counters, not an independent Instruments trace.",
++    "Single full trajectory per build and small correlated steady-state samples; desktop and thermal state uncontrolled.",
++    "CUDA source untouched; CUDA numerical equivalence not tested."
++  ]
++}
+diff --git a/tests/test_apple_dependency_install.py b/tests/test_apple_dependency_install.py
+new file mode 100644
+index 0000000..f815f81
+--- /dev/null
++++ b/tests/test_apple_dependency_install.py
+@@ -0,0 +1,75 @@
++"""Dependency selection and fail-closed checks, without installing packages."""
++import hashlib
++import importlib.util
++import os
++from pathlib import Path
++import tempfile
++import unittest
++from unittest.mock import patch
++
++
++spec = importlib.util.spec_from_file_location(
++    'apple_dependencies', Path(__file__).resolve().parents[1]/'installation/install_apple_python.py')
++installer = importlib.util.module_from_spec(spec)
++spec.loader.exec_module(installer)
++
++
++class AppleDependencyInstallTests(unittest.TestCase):
++    def test_checksum_failure_preserves_cache_and_removes_partial(self):
++        with tempfile.TemporaryDirectory() as temporary:
++            root = Path(temporary)
++            source = root/'source/backend.whl'
++            source.parent.mkdir()
++            source.write_bytes(b'bad download')
++            cache = root/'cache'
++            cache.mkdir()
++            (cache/source.name).write_bytes(b'previous cached bytes')
++            asset = {'url': source.as_uri(), 'sha256': '0'*64}
++            with self.assertRaisesRegex(RuntimeError, 'checksum mismatch'):
++                installer.download_verified(asset, cache)
++            self.assertEqual((cache/source.name).read_bytes(), b'previous cached bytes')
++            self.assertEqual(list(cache.iterdir()), [cache/source.name])
++
++    def test_corrupt_cache_is_replaced_by_verified_download(self):
++        with tempfile.TemporaryDirectory() as temporary:
++            root = Path(temporary)
++            source = root/'source/backend.whl'
++            source.parent.mkdir()
++            source.write_bytes(b'correct download')
++            cache = root/'cache'
++            cache.mkdir()
++            (cache/source.name).write_bytes(b'corrupted cache')
++            asset = {'url': source.as_uri(), 'sha256': hashlib.sha256(source.read_bytes()).hexdigest()}
++            wheel = installer.download_verified(asset, cache)
++            self.assertEqual(wheel.read_bytes(), source.read_bytes())
++
++    def test_local_override_takes_precedence_over_stock_without_download(self):
++        with tempfile.TemporaryDirectory() as temporary:
++            wheel = Path(temporary)/'override.whl'
++            wheel.write_bytes(b'local developer wheel')
++            with patch.dict(os.environ, {'FREEBINDCRAFT_METALJAX': 'stock',
++                                        'FREEBINDCRAFT_METALJAX_WHEEL': str(wheel)}, clear=True):
++                with patch.object(installer, 'download_verified') as download:
++                    mode, selected, digest = installer.select_wheel({}, Path(temporary))
++                    download.assert_not_called()
++            self.assertEqual((mode, selected), ('local override', wheel))
++            self.assertEqual(digest, hashlib.sha256(wheel.read_bytes()).hexdigest())
++
++    def test_default_and_stock_choose_their_exact_assets(self):
++        release = {'wheel': {'sha256': 'frozen'}, 'stock_wheel': {'sha256': 'stock'}}
++        for mode, field in [('frozen', 'wheel'), ('stock', 'stock_wheel')]:
++            with self.subTest(mode=mode), patch.dict(os.environ, {} if mode == 'frozen' else
++                    {'FREEBINDCRAFT_METALJAX': mode}, clear=True):
++                with patch.object(installer, 'download_verified', return_value=Path('/wheel')) as download:
++                    result = installer.select_wheel(release, Path('/cache'))
++                    download.assert_called_once_with(release[field], Path('/cache'))
++                    self.assertEqual(result, (mode, Path('/wheel'), release[field]['sha256']))
++
++    def test_invalid_mode_is_rejected(self):
++        with patch.dict(os.environ, {'FREEBINDCRAFT_METALJAX': 'typo'}, clear=True):
++            with self.assertRaisesRegex(ValueError, 'must be frozen or stock'):
++                installer.select_wheel({}, Path('/unused'))
++
++
++if __name__ == '__main__':
++    unittest.main()

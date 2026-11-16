@@ -1,0 +1,65 @@
+version = "1.0"
+
+[task]
+name = "default/OATML-Markslab__ProteinGym-67"
+description = "[New Model] RSALOR"
+
+[metadata]
+difficulty = "large"
+category = "bugfix"
+keywords = [
+    "ProteinGym",
+    "pr_diff",
+]
+
+[metadata.repo2env]
+pipeline = "pr_diff"
+pipeline_version = "0.3.0"
+repo = "OATML-Markslab/ProteinGym"
+ref = "e1d603d28ed8c6a27959c993de30312a83203a16"
+reference = "https://github.com/OATML-Markslab/ProteinGym/pull/67"
+source_access = "auto"
+built_at = "2026-11-15T22:30:24.297372+00:00"
+reward_kinds = [
+    "diff_similarity",
+]
+spec_version = "0.2.0"
+content_hash = "sha256:b0efe4c64746b3c54372a43156ca69c810a159914998086fdaa3bfe2986beeb6"
+
+[metadata.repo2env.pr_diff]
+pr_merged_at = "2025-03-06T06:11:04Z"
+diff_format = "unified"
+context_files = [
+    "config.json",
+    "proteingym/baselines/RSALOR/run_rsalor.py",
+    "proteingym/constants.json",
+    "scripts/scoring_DMS_zero_shot/scoring_RSALOR_substitutions.sh",
+]
+
+[metadata.repo2env.reward_calibration]
+baseline_reward = 0.0
+loc_changed = 165
+difficulty = "large"
+
+[metadata.repo2env.evaluation]
+schema_version = "1"
+status = "unverified"
+stage = "generation"
+reason_codes = [
+    "validation_not_run",
+]
+detail = "Generated task; validation has not been established."
+provenance = "unknown"
+evidence = []
+
+[metadata.repo2env.reproducibility]
+mode = "local_only"
+image_ref = "python:3.12-slim"
+image_tag = "python:3.12-slim"
+image_visibility = "private"
+
+[agent]
+timeout_sec = 1800.0
+
+[verifier]
+timeout_sec = 300.0

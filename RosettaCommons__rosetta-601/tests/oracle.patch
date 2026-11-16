@@ -1,0 +1,14 @@
+diff --git a/source/src/python/PyRosetta/src/setup.py b/source/src/python/PyRosetta/src/setup.py
+index 33e799492f4..cb286189ce7 100644
+--- a/source/src/python/PyRosetta/src/setup.py
++++ b/source/src/python/PyRosetta/src/setup.py
+@@ -75,6 +75,9 @@ def setup_package():
+             },
+             distclass = PyRosettaDistribution,
+             zip_safe = False,
++            install_requires=[
++                "numpy",  
++            ],
+             extras_require = {
+                 "distributed" : [
+                     "numpy",

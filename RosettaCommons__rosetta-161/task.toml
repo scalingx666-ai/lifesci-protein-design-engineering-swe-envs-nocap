@@ -1,0 +1,66 @@
+version = "1.0"
+
+[task]
+name = "default/RosettaCommons__rosetta-161"
+description = "Remove is_surface() from Residue/ResidueType."
+
+[metadata]
+difficulty = "medium"
+category = "bugfix"
+keywords = [
+    "rosetta",
+    "pr_diff",
+]
+
+[metadata.repo2env]
+pipeline = "pr_diff"
+pipeline_version = "0.3.0"
+repo = "RosettaCommons/rosetta"
+ref = "200d5f9a7d8cdd7afdd078f156da6b5a7d97543f"
+reference = "https://github.com/RosettaCommons/rosetta/pull/161"
+source_access = "auto"
+built_at = "2026-11-15T22:37:54.985035+00:00"
+reward_kinds = [
+    "diff_similarity",
+]
+spec_version = "0.2.0"
+content_hash = "sha256:a713dd7197f679a84790c888bd7b9fd48f19f87c1a086f6f2e00186a6051461f"
+
+[metadata.repo2env.pr_diff]
+pr_merged_at = "2024-12-17T00:21:40Z"
+diff_format = "unified"
+context_files = [
+    "source/src/core/chemical/ResidueType.cc",
+    "source/src/core/chemical/ResidueType.hh",
+    "source/src/core/conformation/Residue.hh",
+    "source/src/devel/scientific_tests/PDBDiagnosticMover.cc",
+    "source/src/protocols/vip/VIP_Mover.cc",
+]
+
+[metadata.repo2env.reward_calibration]
+baseline_reward = 0.0
+loc_changed = 22
+difficulty = "medium"
+
+[metadata.repo2env.evaluation]
+schema_version = "1"
+status = "unverified"
+stage = "generation"
+reason_codes = [
+    "validation_not_run",
+]
+detail = "Generated task; validation has not been established."
+provenance = "unknown"
+evidence = []
+
+[metadata.repo2env.reproducibility]
+mode = "local_only"
+image_ref = "python:3.12-slim"
+image_tag = "python:3.12-slim"
+image_visibility = "private"
+
+[agent]
+timeout_sec = 1800.0
+
+[verifier]
+timeout_sec = 300.0

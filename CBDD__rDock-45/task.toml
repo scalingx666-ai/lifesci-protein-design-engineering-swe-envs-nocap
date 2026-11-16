@@ -1,0 +1,62 @@
+version = "1.0"
+
+[task]
+name = "default/CBDD__rDock-45"
+description = "create release and upload artifacts on merge"
+
+[metadata]
+difficulty = "medium"
+category = "bugfix"
+keywords = [
+    "rDock",
+    "pr_diff",
+]
+
+[metadata.repo2env]
+pipeline = "pr_diff"
+pipeline_version = "0.3.0"
+repo = "CBDD/rDock"
+ref = "9c0fe58f375416a97cf0ac1599520e2aab74f422"
+reference = "https://github.com/CBDD/rDock/pull/45"
+source_access = "auto"
+built_at = "2026-11-16T05:54:48.081486+00:00"
+reward_kinds = [
+    "diff_similarity",
+]
+spec_version = "0.2.0"
+content_hash = "sha256:ccacf577a36f8063c77cc27bc6518af9b8fec0faa2641668b6efaa46e09f06b4"
+
+[metadata.repo2env.pr_diff]
+pr_merged_at = "2023-11-17T23:25:47Z"
+diff_format = "unified"
+context_files = [
+    ".github/workflows/build_matrix.yml",
+]
+
+[metadata.repo2env.reward_calibration]
+baseline_reward = 0.0
+loc_changed = 25
+difficulty = "medium"
+
+[metadata.repo2env.evaluation]
+schema_version = "1"
+status = "unverified"
+stage = "generation"
+reason_codes = [
+    "validation_not_run",
+]
+detail = "Generated task; validation has not been established."
+provenance = "unknown"
+evidence = []
+
+[metadata.repo2env.reproducibility]
+mode = "local_only"
+image_ref = "python:3.12-slim"
+image_tag = "python:3.12-slim"
+image_visibility = "private"
+
+[agent]
+timeout_sec = 1800.0
+
+[verifier]
+timeout_sec = 300.0

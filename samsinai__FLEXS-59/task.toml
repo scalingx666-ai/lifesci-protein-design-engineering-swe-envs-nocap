@@ -1,0 +1,65 @@
+version = "1.0"
+
+[task]
+name = "default/samsinai__FLEXS-59"
+description = "Remove debug print statement from CbAS"
+
+[metadata]
+difficulty = "small"
+category = "bugfix"
+keywords = [
+    "FLEXS",
+    "pr_diff",
+]
+
+[metadata.repo2env]
+pipeline = "pr_diff"
+pipeline_version = "0.3.0"
+repo = "samsinai/FLEXS"
+ref = "744e792456d93e8c48fc58220689c0b4cff6ded9"
+reference = "https://github.com/samsinai/FLEXS/pull/59"
+source_access = "auto"
+built_at = "2026-11-16T03:16:19.783359+00:00"
+reward_kinds = [
+    "diff_similarity",
+]
+spec_version = "0.2.0"
+content_hash = "sha256:639d4da4e48c995c03af739e60c502e753a38513158403888587f5411e7658f0"
+
+[metadata.repo2env.pr_diff]
+pr_merged_at = "2022-05-01T19:57:44Z"
+diff_format = "unified"
+context_files = [
+    "flexs/baselines/explorers/cbas_dbas.py",
+    "flexs/baselines/explorers/genetic_algorithm.py",
+    "flexs/baselines/models/noisy_abstract_model.py",
+    "flexs/utils/replay_buffers.py",
+]
+
+[metadata.repo2env.reward_calibration]
+baseline_reward = 0.0
+loc_changed = 13
+difficulty = "small"
+
+[metadata.repo2env.evaluation]
+schema_version = "1"
+status = "unverified"
+stage = "generation"
+reason_codes = [
+    "validation_not_run",
+]
+detail = "Generated task; validation has not been established."
+provenance = "unknown"
+evidence = []
+
+[metadata.repo2env.reproducibility]
+mode = "local_only"
+image_ref = "python:3.12-slim"
+image_tag = "python:3.12-slim"
+image_visibility = "private"
+
+[agent]
+timeout_sec = 1800.0
+
+[verifier]
+timeout_sec = 300.0

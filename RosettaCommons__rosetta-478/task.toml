@@ -1,0 +1,64 @@
+version = "1.0"
+
+[task]
+name = "default/RosettaCommons__rosetta-478"
+description = "Refactor PyRosetta unit tests to always run in fresh venv, temporary disable distributed tests for Python-3.12 builds."
+
+[metadata]
+difficulty = "small"
+category = "bugfix"
+keywords = [
+    "rosetta",
+    "pr_diff",
+]
+
+[metadata.repo2env]
+pipeline = "pr_diff"
+pipeline_version = "0.3.0"
+repo = "RosettaCommons/rosetta"
+ref = "fce88fc4bd527d5f2e5903499b30e7c1c401b2f1"
+reference = "https://github.com/RosettaCommons/rosetta/pull/478"
+source_access = "auto"
+built_at = "2026-11-15T22:36:55.018493+00:00"
+reward_kinds = [
+    "diff_similarity",
+]
+spec_version = "0.2.0"
+content_hash = "sha256:552ff66a02decd2eb83b9fb32353b34adf3da440a1b4a15e2cf38072301c57b8"
+
+[metadata.repo2env.pr_diff]
+pr_merged_at = "2025-07-30T00:27:42Z"
+diff_format = "unified"
+context_files = [
+    "README.md",
+    "tests/benchmark/tests/PyRosetta.py",
+    "tests/benchmark/tests/__init__.py",
+]
+
+[metadata.repo2env.reward_calibration]
+baseline_reward = 0.0
+loc_changed = 20
+difficulty = "small"
+
+[metadata.repo2env.evaluation]
+schema_version = "1"
+status = "unverified"
+stage = "generation"
+reason_codes = [
+    "validation_not_run",
+]
+detail = "Generated task; validation has not been established."
+provenance = "unknown"
+evidence = []
+
+[metadata.repo2env.reproducibility]
+mode = "local_only"
+image_ref = "python:3.12-slim"
+image_tag = "python:3.12-slim"
+image_visibility = "private"
+
+[agent]
+timeout_sec = 1800.0
+
+[verifier]
+timeout_sec = 300.0

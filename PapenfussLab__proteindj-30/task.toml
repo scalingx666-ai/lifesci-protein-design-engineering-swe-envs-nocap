@@ -1,0 +1,66 @@
+version = "1.0"
+
+[task]
+name = "default/PapenfussLab__proteindj-30"
+description = "ipSAE scoring"
+
+[metadata]
+difficulty = "large"
+category = "bugfix"
+keywords = [
+    "proteindj",
+    "pr_diff",
+]
+
+[metadata.repo2env]
+pipeline = "pr_diff"
+pipeline_version = "0.3.0"
+repo = "PapenfussLab/proteindj"
+ref = "93774b129119b3426fa40bfda7e207c3d3a321e2"
+reference = "https://github.com/PapenfussLab/proteindj/pull/30"
+source_access = "auto"
+built_at = "2026-11-16T03:26:48.777668+00:00"
+reward_kinds = [
+    "diff_similarity",
+]
+spec_version = "0.2.0"
+content_hash = "sha256:b7edbe83c8639b1f1f5d515bb4d93f648cd6cd14ad933f313a490f95fb8aded3"
+
+[metadata.repo2env.pr_diff]
+pr_merged_at = "2025-12-17T00:29:14Z"
+diff_format = "unified"
+context_files = [
+    "README.md",
+    "main.nf",
+    "modules/boltz.nf",
+    "scripts/ipsae_w_ipae.py",
+    "scripts/run_ipsae_batch.py",
+]
+
+[metadata.repo2env.reward_calibration]
+baseline_reward = 0.0
+loc_changed = 1385
+difficulty = "large"
+
+[metadata.repo2env.evaluation]
+schema_version = "1"
+status = "unverified"
+stage = "generation"
+reason_codes = [
+    "validation_not_run",
+]
+detail = "Generated task; validation has not been established."
+provenance = "unknown"
+evidence = []
+
+[metadata.repo2env.reproducibility]
+mode = "local_only"
+image_ref = "python:3.12-slim"
+image_tag = "python:3.12-slim"
+image_visibility = "private"
+
+[agent]
+timeout_sec = 1800.0
+
+[verifier]
+timeout_sec = 300.0

@@ -1,0 +1,13 @@
+diff --git a/source/src/core/simple_metrics/composite_metrics/ProtocolSettingsMetric.cc b/source/src/core/simple_metrics/composite_metrics/ProtocolSettingsMetric.cc
+index 98c589b6e7a..c99d6da6cb4 100644
+--- a/source/src/core/simple_metrics/composite_metrics/ProtocolSettingsMetric.cc
++++ b/source/src/core/simple_metrics/composite_metrics/ProtocolSettingsMetric.cc
+@@ -147,7 +147,7 @@ ProtocolSettingsMetric::parse_my_tag(
+ 		set_only_report_these_options(limit_to);
+ 	}
+ 	if ( datamap.has_resource("options") ) {
+-		parse_options(*datamap.get_resource<OptionCollection const>("options"), base_name_only, get_user_options, get_script_vars, skip_corrections);
++		parse_options(*datamap.get_resource<OptionCollection const>("options"), base_name_only, get_script_vars, get_user_options, skip_corrections);
+ 	} else {
+ 		parse_options(basic::options::option, base_name_only, get_script_vars, get_user_options, skip_corrections);
+ 	}

@@ -1,0 +1,26 @@
+diff --git a/source/src/protocols/recces/sampler/MC_OneTorsion.cc b/source/src/protocols/recces/sampler/MC_OneTorsion.cc
+index fd59a3aa001..cccd1ebf428 100644
+--- a/source/src/protocols/recces/sampler/MC_OneTorsion.cc
++++ b/source/src/protocols/recces/sampler/MC_OneTorsion.cc
+@@ -23,6 +23,8 @@
+ // Numeric Headers
+ #include <numeric/random/random.hh>
+ 
++#include <cmath>
++
+ using namespace core;
+ static basic::Tracer TR( "protocols.recces.sampler.MC_OneTorsion" );
+ 
+diff --git a/source/src/protocols/recces/sampler/rna/MC_RNA_KIC_Sampler.cc b/source/src/protocols/recces/sampler/rna/MC_RNA_KIC_Sampler.cc
+index a57929df459..ea3155e022f 100644
+--- a/source/src/protocols/recces/sampler/rna/MC_RNA_KIC_Sampler.cc
++++ b/source/src/protocols/recces/sampler/rna/MC_RNA_KIC_Sampler.cc
+@@ -31,6 +31,8 @@
+ #include <utility/string_util.hh>
+ #include <basic/Tracer.hh>
+ 
++#include <cmath>
++
+ using namespace core;
+ using namespace core::chemical::rna;
+ using namespace core::pose::rna;

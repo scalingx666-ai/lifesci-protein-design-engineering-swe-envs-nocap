@@ -1,0 +1,74 @@
+version = "1.0"
+
+[task]
+name = "default/RosettaCommons__rosetta-426"
+description = "Fixes for failing tests in main"
+
+[metadata]
+difficulty = "large"
+category = "bugfix"
+keywords = [
+    "rosetta",
+    "pr_diff",
+]
+
+[metadata.repo2env]
+pipeline = "pr_diff"
+pipeline_version = "0.3.0"
+repo = "RosettaCommons/rosetta"
+ref = "e6f643b818cda63c8e00156a266c408faac3c3dd"
+reference = "https://github.com/RosettaCommons/rosetta/pull/426"
+source_access = "auto"
+built_at = "2026-11-15T22:37:13.232718+00:00"
+reward_kinds = [
+    "diff_similarity",
+]
+spec_version = "0.2.0"
+content_hash = "sha256:127b3efd1be6a63ee6e6765d338768bfd57a2952012497184e2ae4938a68bcb7"
+
+[metadata.repo2env.pr_diff]
+pr_merged_at = "2025-06-06T14:20:57Z"
+diff_format = "unified"
+context_files = [
+    "documentation",
+    "source/external/rdkit/rdkit.upstream",
+    "source/src/basic/database/schema_generator/Column.cc",
+    "source/src/protocols/antibody/design/AntibodyDesignMover.cc",
+    "source/src/protocols/drug_design/ChemicalReaction.hh",
+    "source/src/protocols/drug_design/DrugPolishMoverCreator.hh",
+    "source/src/protocols/drug_design/LigandLocationFilter.hh",
+    "source/src/protocols/drug_design/LigandLocationFilterCreator.hh",
+    "source/src/protocols/drug_design/ReactionBasedAnalogSampler.hh",
+    "source/src/protocols/drug_design/ReactionBasedAnalogSamplerCreator.hh",
+    "source/src/protocols/drug_design/ReactionMultiTransform.cc",
+    "tests/benchmark/tests/code_quality.py",
+    "tests/scientific/tests/peptide_pnear_vs_ic50/3.plot.py",
+]
+
+[metadata.repo2env.reward_calibration]
+baseline_reward = 0.0
+loc_changed = 97
+difficulty = "large"
+
+[metadata.repo2env.evaluation]
+schema_version = "1"
+status = "unverified"
+stage = "generation"
+reason_codes = [
+    "validation_not_run",
+]
+detail = "Generated task; validation has not been established."
+provenance = "unknown"
+evidence = []
+
+[metadata.repo2env.reproducibility]
+mode = "local_only"
+image_ref = "python:3.12-slim"
+image_tag = "python:3.12-slim"
+image_visibility = "private"
+
+[agent]
+timeout_sec = 1800.0
+
+[verifier]
+timeout_sec = 300.0

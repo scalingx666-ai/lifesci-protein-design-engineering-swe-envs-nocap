@@ -1,0 +1,68 @@
+version = "1.0"
+
+[task]
+name = "default/CBDD__rDock-90"
+description = "Issue 76 migrate sdsplit"
+
+[metadata]
+difficulty = "large"
+category = "bugfix"
+keywords = [
+    "rDock",
+    "pr_diff",
+]
+
+[metadata.repo2env]
+pipeline = "pr_diff"
+pipeline_version = "0.3.0"
+repo = "CBDD/rDock"
+ref = "2e675ca8d1201fc27d9db8e2ace230dace95e97e"
+reference = "https://github.com/CBDD/rDock/pull/90"
+source_access = "auto"
+built_at = "2026-11-16T05:53:53.163391+00:00"
+reward_kinds = [
+    "diff_similarity",
+]
+spec_version = "0.2.0"
+content_hash = "sha256:f73e28c2c3afadf7f87684038bbec21e4c4114c49ed31668028c6140cf9974dc"
+
+[metadata.repo2env.pr_diff]
+pr_merged_at = "2024-02-12T20:48:53Z"
+diff_format = "unified"
+context_files = [
+    "rdock-utils/pyproject.toml",
+    "rdock-utils/rdock_utils/sdsplit.py",
+    "rdock-utils/tests/fixtures/sdsplit/input.sdf",
+    "rdock-utils/tests/sdfilter/test_integration.py",
+    "rdock-utils/tests/sdsplit/__init__.py",
+    "rdock-utils/tests/sdsplit/conftest.py",
+    "rdock-utils/tests/sdsplit/test_integration.py",
+]
+
+[metadata.repo2env.reward_calibration]
+baseline_reward = 0.0
+loc_changed = 392
+difficulty = "large"
+
+[metadata.repo2env.evaluation]
+schema_version = "1"
+status = "unverified"
+stage = "generation"
+reason_codes = [
+    "validation_not_run",
+]
+detail = "Generated task; validation has not been established."
+provenance = "unknown"
+evidence = []
+
+[metadata.repo2env.reproducibility]
+mode = "local_only"
+image_ref = "python:3.12-slim"
+image_tag = "python:3.12-slim"
+image_visibility = "private"
+
+[agent]
+timeout_sec = 1800.0
+
+[verifier]
+timeout_sec = 300.0

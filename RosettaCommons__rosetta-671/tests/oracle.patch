@@ -1,0 +1,31 @@
+diff --git a/source/src/utility/keys/KeyLookup.hh b/source/src/utility/keys/KeyLookup.hh
+index 34420a95ad9..756f177301a 100644
+--- a/source/src/utility/keys/KeyLookup.hh
++++ b/source/src/utility/keys/KeyLookup.hh
+@@ -97,24 +97,13 @@ private: // Creation
+ 	= default;
+ 
+ 
+-	/// @brief Copy constructor
+-	inline
+-	KeyLookup( KeyLookup const & a ); // Undefined
+-
+-
+ 	/// @brief Destructor
+ 	inline
+ 	~KeyLookup()
+ 	= default;
+ 
+-
+-private: // Assignment
+-
+-
+-	/// @brief Copy assignment
+-	inline
+-	KeyLookup &
+-	operator =( KeyLookup const & a ); // Undefined
++	KeyLookup( KeyLookup const & ) = delete;
++	KeyLookup & operator =( KeyLookup const & ) = delete;
+ 
+ 
+ public: // Methods

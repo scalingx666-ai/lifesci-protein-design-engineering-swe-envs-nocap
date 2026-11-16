@@ -1,0 +1,64 @@
+version = "1.0"
+
+[task]
+name = "default/RosettaCommons__rosetta-131"
+description = "add bindings for vector1<WaterBuilder> and test script"
+
+[metadata]
+difficulty = "medium"
+category = "bugfix"
+keywords = [
+    "rosetta",
+    "pr_diff",
+]
+
+[metadata.repo2env]
+pipeline = "pr_diff"
+pipeline_version = "0.3.0"
+repo = "RosettaCommons/rosetta"
+ref = "1a5e0485141fc341dfdcc64150cbcd82a3cd821e"
+reference = "https://github.com/RosettaCommons/rosetta/pull/131"
+source_access = "auto"
+built_at = "2026-11-15T22:38:01.285635+00:00"
+reward_kinds = [
+    "diff_similarity",
+]
+spec_version = "0.2.0"
+content_hash = "sha256:584fd3292e519489dda753f5a98a3d9ca22ada8cf73682c188ad6a9b3ce895cf"
+
+[metadata.repo2env.pr_diff]
+pr_merged_at = "2024-08-28T17:40:28Z"
+diff_format = "unified"
+context_files = [
+    "source/src/core/scoring/lkball/LK_BallInfo.cc",
+    "source/src/core/scoring/lkball/LK_BallInfo.hh",
+    "source/src/python/PyRosetta/src/test/T150_core.misc.lkball.py",
+]
+
+[metadata.repo2env.reward_calibration]
+baseline_reward = 0.0
+loc_changed = 59
+difficulty = "medium"
+
+[metadata.repo2env.evaluation]
+schema_version = "1"
+status = "unverified"
+stage = "generation"
+reason_codes = [
+    "validation_not_run",
+]
+detail = "Generated task; validation has not been established."
+provenance = "unknown"
+evidence = []
+
+[metadata.repo2env.reproducibility]
+mode = "local_only"
+image_ref = "python:3.12-slim"
+image_tag = "python:3.12-slim"
+image_visibility = "private"
+
+[agent]
+timeout_sec = 1800.0
+
+[verifier]
+timeout_sec = 300.0

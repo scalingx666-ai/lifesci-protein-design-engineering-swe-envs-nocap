@@ -1,0 +1,63 @@
+version = "1.0"
+
+[task]
+name = "default/RosettaCommons__rosetta-690"
+description = "Apply Rule of Zero to BitSet and BitVector"
+
+[metadata]
+difficulty = "small"
+category = "bugfix"
+keywords = [
+    "rosetta",
+    "pr_diff",
+]
+
+[metadata.repo2env]
+pipeline = "pr_diff"
+pipeline_version = "0.3.0"
+repo = "RosettaCommons/rosetta"
+ref = "b8e64ecdc0338b77c231760f7f9bdcd4d500a240"
+reference = "https://github.com/RosettaCommons/rosetta/pull/690"
+source_access = "auto"
+built_at = "2026-11-15T22:35:01.281486+00:00"
+reward_kinds = [
+    "diff_similarity",
+]
+spec_version = "0.2.0"
+content_hash = "sha256:af729922e8a38ad0417caa7bbf5a8b0e8ab3de1adef2a97969b81f07ffbbe98a"
+
+[metadata.repo2env.pr_diff]
+pr_merged_at = "2026-05-13T15:37:17Z"
+diff_format = "unified"
+context_files = [
+    "source/src/utility/BitSet.hh",
+    "source/src/utility/BitVector.hh",
+]
+
+[metadata.repo2env.reward_calibration]
+baseline_reward = 0.0
+loc_changed = 12
+difficulty = "small"
+
+[metadata.repo2env.evaluation]
+schema_version = "1"
+status = "unverified"
+stage = "generation"
+reason_codes = [
+    "validation_not_run",
+]
+detail = "Generated task; validation has not been established."
+provenance = "unknown"
+evidence = []
+
+[metadata.repo2env.reproducibility]
+mode = "local_only"
+image_ref = "python:3.12-slim"
+image_tag = "python:3.12-slim"
+image_visibility = "private"
+
+[agent]
+timeout_sec = 1800.0
+
+[verifier]
+timeout_sec = 300.0

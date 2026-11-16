@@ -1,0 +1,62 @@
+version = "1.0"
+
+[task]
+name = "default/cytokineking__FreeBindCraft-11"
+description = "change PR channel to rosettacommons from graylab"
+
+[metadata]
+difficulty = "small"
+category = "bugfix"
+keywords = [
+    "FreeBindCraft",
+    "pr_diff",
+]
+
+[metadata.repo2env]
+pipeline = "pr_diff"
+pipeline_version = "0.3.0"
+repo = "cytokineking/FreeBindCraft"
+ref = "4dfe0297d356bfc4a0b513bf48292a7f15d42b99"
+reference = "https://github.com/cytokineking/FreeBindCraft/pull/11"
+source_access = "auto"
+built_at = "2026-11-16T03:23:57.984623+00:00"
+reward_kinds = [
+    "diff_similarity",
+]
+spec_version = "0.2.0"
+content_hash = "sha256:ba41557942429014f95f47226db7781f1f8c2fd7484af1ae48458803fc8b6aed"
+
+[metadata.repo2env.pr_diff]
+pr_merged_at = "2025-09-01T05:02:00Z"
+diff_format = "unified"
+context_files = [
+    "install_bindcraft.sh",
+]
+
+[metadata.repo2env.reward_calibration]
+baseline_reward = 0.0
+loc_changed = 20
+difficulty = "small"
+
+[metadata.repo2env.evaluation]
+schema_version = "1"
+status = "unverified"
+stage = "generation"
+reason_codes = [
+    "validation_not_run",
+]
+detail = "Generated task; validation has not been established."
+provenance = "unknown"
+evidence = []
+
+[metadata.repo2env.reproducibility]
+mode = "local_only"
+image_ref = "python:3.12-slim"
+image_tag = "python:3.12-slim"
+image_visibility = "private"
+
+[agent]
+timeout_sec = 1800.0
+
+[verifier]
+timeout_sec = 300.0

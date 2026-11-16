@@ -1,0 +1,63 @@
+version = "1.0"
+
+[task]
+name = "default/RosettaCommons__rosetta-457"
+description = "Add cartesian option to RosettaLigand FinalMinimizer."
+
+[metadata]
+difficulty = "medium"
+category = "bugfix"
+keywords = [
+    "rosetta",
+    "pr_diff",
+]
+
+[metadata.repo2env]
+pipeline = "pr_diff"
+pipeline_version = "0.3.0"
+repo = "RosettaCommons/rosetta"
+ref = "931f7d9046b1ae0a0b62c826dea7edc4a33f52ab"
+reference = "https://github.com/RosettaCommons/rosetta/pull/457"
+source_access = "auto"
+built_at = "2026-11-15T22:36:59.683344+00:00"
+reward_kinds = [
+    "diff_similarity",
+]
+spec_version = "0.2.0"
+content_hash = "sha256:f6243caa15149b5d4c7881046c5b32cf1e042b3308d5b3f560c3f8c99b836f29"
+
+[metadata.repo2env.pr_diff]
+pr_merged_at = "2025-07-10T20:33:05Z"
+diff_format = "unified"
+context_files = [
+    "source/src/protocols/ligand_docking/FinalMinimizer.cc",
+    "source/src/protocols/ligand_docking/FinalMinimizer.hh",
+]
+
+[metadata.repo2env.reward_calibration]
+baseline_reward = 0.0
+loc_changed = 22
+difficulty = "medium"
+
+[metadata.repo2env.evaluation]
+schema_version = "1"
+status = "unverified"
+stage = "generation"
+reason_codes = [
+    "validation_not_run",
+]
+detail = "Generated task; validation has not been established."
+provenance = "unknown"
+evidence = []
+
+[metadata.repo2env.reproducibility]
+mode = "local_only"
+image_ref = "python:3.12-slim"
+image_tag = "python:3.12-slim"
+image_visibility = "private"
+
+[agent]
+timeout_sec = 1800.0
+
+[verifier]
+timeout_sec = 300.0

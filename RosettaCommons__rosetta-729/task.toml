@@ -1,0 +1,63 @@
+version = "1.0"
+
+[task]
+name = "default/RosettaCommons__rosetta-729"
+description = "Fix clang_tidy and documentation tests in main."
+
+[metadata]
+difficulty = "small"
+category = "bugfix"
+keywords = [
+    "rosetta",
+    "pr_diff",
+]
+
+[metadata.repo2env]
+pipeline = "pr_diff"
+pipeline_version = "0.3.0"
+repo = "RosettaCommons/rosetta"
+ref = "8ebeca78061b79e9fbbc68db33a78b2fd0361428"
+reference = "https://github.com/RosettaCommons/rosetta/pull/729"
+source_access = "auto"
+built_at = "2026-11-15T22:34:29.020316+00:00"
+reward_kinds = [
+    "diff_similarity",
+]
+spec_version = "0.2.0"
+content_hash = "sha256:93846e47724e1f605aed7012379ed938f4e1029f106a6bb1130737a1dce38048"
+
+[metadata.repo2env.pr_diff]
+pr_merged_at = "2026-07-03T18:40:19Z"
+diff_format = "unified"
+context_files = [
+    "documentation",
+    "source/src/utility/string_util.cc",
+]
+
+[metadata.repo2env.reward_calibration]
+baseline_reward = 0.0
+loc_changed = 18
+difficulty = "small"
+
+[metadata.repo2env.evaluation]
+schema_version = "1"
+status = "unverified"
+stage = "generation"
+reason_codes = [
+    "validation_not_run",
+]
+detail = "Generated task; validation has not been established."
+provenance = "unknown"
+evidence = []
+
+[metadata.repo2env.reproducibility]
+mode = "local_only"
+image_ref = "python:3.12-slim"
+image_tag = "python:3.12-slim"
+image_visibility = "private"
+
+[agent]
+timeout_sec = 1800.0
+
+[verifier]
+timeout_sec = 300.0

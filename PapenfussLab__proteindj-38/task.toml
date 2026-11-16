@@ -1,0 +1,64 @@
+version = "1.0"
+
+[task]
+name = "default/PapenfussLab__proteindj-38"
+description = "Fix MacOS incompatible xargs flag"
+
+[metadata]
+difficulty = "small"
+category = "bugfix"
+keywords = [
+    "proteindj",
+    "pr_diff",
+]
+
+[metadata.repo2env]
+pipeline = "pr_diff"
+pipeline_version = "0.3.0"
+repo = "PapenfussLab/proteindj"
+ref = "7db6ac1da0cc137ef7904c0b42feecf041d99139"
+reference = "https://github.com/PapenfussLab/proteindj/pull/38"
+source_access = "auto"
+built_at = "2026-11-16T03:26:41.965301+00:00"
+reward_kinds = [
+    "diff_similarity",
+]
+spec_version = "0.2.0"
+content_hash = "sha256:d1b3e536c59105665481d04b1172ff0ab2c4c7975180e02f3d9009473bcf58d5"
+
+[metadata.repo2env.pr_diff]
+pr_merged_at = "2026-03-26T00:39:15Z"
+diff_format = "unified"
+context_files = [
+    "bindsweeper/pyproject.toml",
+    "nextflow.config",
+    "scripts/download_models.sh",
+]
+
+[metadata.repo2env.reward_calibration]
+baseline_reward = 0.0
+loc_changed = 6
+difficulty = "small"
+
+[metadata.repo2env.evaluation]
+schema_version = "1"
+status = "unverified"
+stage = "generation"
+reason_codes = [
+    "validation_not_run",
+]
+detail = "Generated task; validation has not been established."
+provenance = "unknown"
+evidence = []
+
+[metadata.repo2env.reproducibility]
+mode = "local_only"
+image_ref = "python:3.12-slim"
+image_tag = "python:3.12-slim"
+image_visibility = "private"
+
+[agent]
+timeout_sec = 1800.0
+
+[verifier]
+timeout_sec = 300.0

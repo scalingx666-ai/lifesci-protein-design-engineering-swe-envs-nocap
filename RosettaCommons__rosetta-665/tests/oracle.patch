@@ -1,0 +1,16 @@
+diff --git a/source/src/basic/gpu/Timer.hh b/source/src/basic/gpu/Timer.hh
+index 275fe0bd096..04740804c74 100644
+--- a/source/src/basic/gpu/Timer.hh
++++ b/source/src/basic/gpu/Timer.hh
+@@ -38,6 +38,11 @@ public:
+ 	Timer(basic::Tracer::TracerProxy& t, const char *tag =nullptr);
+ 	Timer();
+ 	~Timer();
++
++	// ~Timer() calls Report(), so a copy would fire a second Report() on its
++	// own destruction, silently logging a duplicate timing entry.
++	Timer(Timer const &) = delete;
++	Timer & operator=(Timer const &) = delete;
+ 	void Report(const char *tag =nullptr);
+ 	void Reset();
+ 	double GetTime();

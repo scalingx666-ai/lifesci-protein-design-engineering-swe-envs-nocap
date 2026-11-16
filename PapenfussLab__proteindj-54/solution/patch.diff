@@ -1,0 +1,46 @@
+diff --git a/bindsweeper/pyproject.toml b/bindsweeper/pyproject.toml
+index 5563553..3f0a9e2 100644
+--- a/bindsweeper/pyproject.toml
++++ b/bindsweeper/pyproject.toml
+@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
+ 
+ [project]
+ name = "bindsweeper"
+-version = "3.0.0" 
++version = "3.0.1" 
+ authors = [
+     { name = "Dylan Silke", email = "silke.dy@wehi.edu.au"},
+     { name = "Josh Hardy", email = "hardy.j@wehi.edu.au"}
+diff --git a/nextflow.config b/nextflow.config
+index c40f8a1..79d4fa6 100644
+--- a/nextflow.config
++++ b/nextflow.config
+@@ -718,6 +718,12 @@ profiles {
+         params.bg_models = '/vast/projects/alphafold/databases/predictedDb/containers/proteinDJ/boltzgenmodels'
+         params.af2_jax_compilation_cache_dir = "/vast/scratch/users/${System.getenv('USER')}/.af2_cache"
+         params.gpu_queue = 'gpuq'
++
++        process {
++            withLabel: gpu {
++                clusterOptions = '--gres=gpu:' + "${params.gpu_model}" + ':1'
++            }
++        }
+     }
+     debug {
+         cleanup = false
+@@ -728,7 +734,6 @@ process {
+     cpus = "${params.cpus}"
+     memory = "${params.memory_cpu}"
+     withLabel: gpu {
+-        clusterOptions = '--gres=gpu:' + "${params.gpu_model}" + ':1'
+         cpus = "${params.cpus_per_gpu}"
+         memory = "${params.memory_gpu}"
+         queue = params.gpu_queue ?: null
+@@ -845,6 +850,6 @@ manifest {
+     description = 'Nextflow pipeline for protein design using RFdiffusion, BindCraft, ProteinMPNN, FullAtom MPNN, AlphaFold2 Initial-Guess, and Boltz-2.'
+     mainScript = 'main.nf'
+     nextflowVersion = '!>=24.04.0'
+-    version = '3.0.0'
++    version = '3.0.1'
+     doi = '10.1101/2025.09.24.678028'
+ }

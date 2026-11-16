@@ -1,0 +1,17 @@
+diff --git a/.github/workflows/build_generic.yml b/.github/workflows/build_generic.yml
+index 53c8b615..84b069cb 100644
+--- a/.github/workflows/build_generic.yml
++++ b/.github/workflows/build_generic.yml
+@@ -16,10 +16,11 @@ jobs:
+       uses: docker/build-push-action@v4
+       with:
+         context: .
+-        push: false
+         tags: rdock-${{ inputs.distribution }}:base
+         file: .github/docker/Dockerfile.${{ inputs.distribution }}
+         target: base
++        cache-from: type=gha,scope=${{ inputs.distribution }}
++        cache-to: type=gha,mode=max,scope=${{ inputs.distribution }}
+         load: true
+ 
+     - name: Build rDock

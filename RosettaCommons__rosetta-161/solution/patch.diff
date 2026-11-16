@@ -1,0 +1,91 @@
+diff --git a/source/src/core/chemical/ResidueType.cc b/source/src/core/chemical/ResidueType.cc
+index 78a9b1aa2db..e8d93c78f52 100644
+--- a/source/src/core/chemical/ResidueType.cc
++++ b/source/src/core/chemical/ResidueType.cc
+@@ -661,12 +661,6 @@ ResidueType::is_membrane() const
+ 	return properties().has_property( MEMBRANE );
+ }
+ 
+-bool
+-ResidueType::is_surface() const
+-{
+-	return properties().has_property( SURFACE );
+-}
+-
+ bool
+ ResidueType::has_sc_orbitals() const
+ {
+diff --git a/source/src/core/chemical/ResidueType.hh b/source/src/core/chemical/ResidueType.hh
+index eed22f30ca5..a69213ab625 100644
+--- a/source/src/core/chemical/ResidueType.hh
++++ b/source/src/core/chemical/ResidueType.hh
+@@ -1171,9 +1171,6 @@ public:
+ 	/// @brief is membrane?
+ 	bool is_membrane() const;
+ 
+-	/// @brief is surface? (e.g. enamel)
+-	bool is_surface() const;
+-
+ 	/// @brief does this residue have sidechain orbitals?
+ 	bool has_sc_orbitals() const;
+ 
+diff --git a/source/src/core/conformation/Residue.hh b/source/src/core/conformation/Residue.hh
+index 023c198f3e8..b06aa1f8b15 100644
+--- a/source/src/core/conformation/Residue.hh
++++ b/source/src/core/conformation/Residue.hh
+@@ -2004,14 +2004,6 @@ public:
+ 		return rsd_type_.is_metalbinding();
+ 	}
+ 
+-	/// @brief Returns true if this residue is a surface residue
+-	bool
+-	is_surface() const
+-	{
+-		return rsd_type_.is_surface();
+-	}
+-
+-
+ 	/// @brief Returns true if the residue has side chain orbitals
+ 	bool
+ 	has_sc_orbitals() const
+diff --git a/source/src/devel/scientific_tests/PDBDiagnosticMover.cc b/source/src/devel/scientific_tests/PDBDiagnosticMover.cc
+index 97a8799d3a0..8e40c3df286 100644
+--- a/source/src/devel/scientific_tests/PDBDiagnosticMover.cc
++++ b/source/src/devel/scientific_tests/PDBDiagnosticMover.cc
+@@ -260,7 +260,6 @@ void PDBDiagnosticMover::residue_type_statistics( core::pose::Pose const & pose,
+ 	core::Size is_metal(0);
+ 	core::Size is_metalbinding(0);
+ 	core::Size is_membrane(0);
+-	core::Size is_surface(0);
+ 	core::Size has_sc_orbitals(0);
+ 	core::Size is_polar(0);
+ 	core::Size is_charged(0);
+@@ -302,7 +301,6 @@ void PDBDiagnosticMover::residue_type_statistics( core::pose::Pose const & pose,
+ 		if ( pose.residue_type(i).is_metal() ) ++is_metal;
+ 		if ( pose.residue_type(i).is_metalbinding() ) ++is_metalbinding;
+ 		if ( pose.residue_type(i).is_membrane() ) ++is_membrane;
+-		if ( pose.residue_type(i).is_surface() ) ++is_surface;
+ 		if ( pose.residue_type(i).has_sc_orbitals() ) ++has_sc_orbitals;
+ 		if ( pose.residue_type(i).is_polar() ) ++is_polar;
+ 		if ( pose.residue_type(i).is_charged() ) ++is_charged;
+@@ -348,7 +346,6 @@ void PDBDiagnosticMover::residue_type_statistics( core::pose::Pose const & pose,
+ 	job_me->add_string_real_pair("is_metal", is_metal);
+ 	job_me->add_string_real_pair("is_metalbinding", is_metalbinding);
+ 	job_me->add_string_real_pair("is_membrane", is_membrane);
+-	job_me->add_string_real_pair("is_surface", is_surface);
+ 	job_me->add_string_real_pair("has_sc_orbitals", has_sc_orbitals);
+ 	job_me->add_string_real_pair("is_polar", is_polar);
+ 	job_me->add_string_real_pair("is_charged", is_charged);
+diff --git a/source/src/protocols/vip/VIP_Mover.cc b/source/src/protocols/vip/VIP_Mover.cc
+index 1aa0971431e..30cd9533264 100644
+--- a/source/src/protocols/vip/VIP_Mover.cc
++++ b/source/src/protocols/vip/VIP_Mover.cc
+@@ -198,7 +198,7 @@ VIP_Mover::cull_mutatable_residues(){
+ 
+ 	utility::vector1<core::Size> mutatable_residues;
+ 	for ( core::Size i = 1; i <= void_neighbors.size(); i+=2 ) {
+-		if ( (initial_pose.residue(void_neighbors[i]).is_surface() == false) &&
++		if ( (initial_pose.residue_type(void_neighbors[i]).properties().has_property( core::chemical::SURFACE ) == false) &&
+ 				(initial_pose.residue(void_neighbors[i]).is_polar() == false) &&
+ 				(std::find( excluded_positions.begin(), excluded_positions.end(), void_neighbors[i]) == excluded_positions.end() ) &&
+ 				(initial_pose.residue(void_neighbors[i]).aa() < core::chemical::num_canonical_aas ) && // Don't try amino acid if APOLAR will choke on it

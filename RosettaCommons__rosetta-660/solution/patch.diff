@@ -1,0 +1,50 @@
+diff --git a/source/src/utility/SimulateMPI.cc b/source/src/utility/SimulateMPI.cc
+index 3cf5f7d8697..e0a6b1e129c 100644
+--- a/source/src/utility/SimulateMPI.cc
++++ b/source/src/utility/SimulateMPI.cc
+@@ -112,7 +112,7 @@ void SimulateMPIMessage::set_doubles_msg( utility::vector1< double > const & set
+ }
+ 
+ // initialize private static data
+-SimulateMPIData * SimulateMPI::simulation_( nullptr );
++std::unique_ptr< SimulateMPIData > SimulateMPI::simulation_;
+ int SimulateMPI::rank_( 0 );
+ 
+ SimulateMPIData::SimulateMPIData( platform::Size nprocs ) :
+@@ -236,13 +236,13 @@ void SimulateMPIData::clear_processed_msgs( MsgQueue & message_queue )
+ 
+ void
+ SimulateMPI::initialize_simulation( int nprocs ) {
+-	simulation_ = new SimulateMPIData( nprocs );
++	simulation_.reset( new SimulateMPIData( nprocs ) );
+ 	rank_ = 0;
+ }
+ 
+ bool
+ SimulateMPI::simulate_mpi() {
+-	return simulation_;
++	return simulation_ != nullptr;
+ }
+ 
+ 
+diff --git a/source/src/utility/SimulateMPI.hh b/source/src/utility/SimulateMPI.hh
+index cb01a1f1a30..4c10f8deda9 100644
+--- a/source/src/utility/SimulateMPI.hh
++++ b/source/src/utility/SimulateMPI.hh
+@@ -30,6 +30,7 @@
+ 
+ // C++ headers
+ #include <list>
++#include <memory>
+ #include <string>
+ 
+ namespace utility {
+@@ -277,7 +278,7 @@ public:
+ 
+ private:
+ 
+-	static SimulateMPIData * simulation_;
++	static std::unique_ptr< SimulateMPIData > simulation_;
+ 	static int rank_;
+ 
+ };

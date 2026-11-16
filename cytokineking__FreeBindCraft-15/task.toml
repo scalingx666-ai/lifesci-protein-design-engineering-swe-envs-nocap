@@ -1,0 +1,71 @@
+version = "1.0"
+
+[task]
+name = "default/cytokineking__FreeBindCraft-15"
+description = "Improve OpenMM relax with introduction of FASPR"
+
+[metadata]
+difficulty = "large"
+category = "bugfix"
+keywords = [
+    "FreeBindCraft",
+    "pr_diff",
+]
+
+[metadata.repo2env]
+pipeline = "pr_diff"
+pipeline_version = "0.3.0"
+repo = "cytokineking/FreeBindCraft"
+ref = "8f3a1c2595a867537df936c98cb2dfe9a91b3398"
+reference = "https://github.com/cytokineking/FreeBindCraft/pull/15"
+source_access = "auto"
+built_at = "2026-11-16T03:23:54.962903+00:00"
+reward_kinds = [
+    "diff_similarity",
+]
+spec_version = "0.2.0"
+content_hash = "sha256:47a8998db47f2287e5f54aeddf9de5bb0ba18de956e24dc3b0c07e56a8397fe5"
+
+[metadata.repo2env.pr_diff]
+pr_merged_at = "2025-09-08T02:06:41Z"
+diff_format = "unified"
+context_files = [
+    ".gitignore",
+    "README.md",
+    "bindcraft.py",
+    "extras/README.md",
+    "extras/test_openmm_relax.py",
+    "functions/FASPR",
+    "functions/dun2010bbdep.bin",
+    "functions/pr_alternative_utils.py",
+    "functions/pyrosetta_utils.py",
+    "install_bindcraft.sh",
+]
+
+[metadata.repo2env.reward_calibration]
+baseline_reward = 0.0
+loc_changed = 1246
+difficulty = "large"
+
+[metadata.repo2env.evaluation]
+schema_version = "1"
+status = "unverified"
+stage = "generation"
+reason_codes = [
+    "validation_not_run",
+]
+detail = "Generated task; validation has not been established."
+provenance = "unknown"
+evidence = []
+
+[metadata.repo2env.reproducibility]
+mode = "local_only"
+image_ref = "python:3.12-slim"
+image_tag = "python:3.12-slim"
+image_visibility = "private"
+
+[agent]
+timeout_sec = 1800.0
+
+[verifier]
+timeout_sec = 300.0

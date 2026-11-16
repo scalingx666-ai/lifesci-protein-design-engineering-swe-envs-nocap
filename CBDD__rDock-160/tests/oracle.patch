@@ -1,0 +1,103 @@
+diff --git a/.github/docker/Dockerfile.centos-stream10 b/.github/docker/Dockerfile.centos-stream10
+new file mode 100644
+index 0000000..2f3e083
+--- /dev/null
++++ b/.github/docker/Dockerfile.centos-stream10
+@@ -0,0 +1,4 @@
++FROM quay.io/centos/centos:stream10 AS base
++
++# Install dependencies
++RUN yum install -y popt-devel gcc-c++ make
+diff --git a/.github/docker/Dockerfile.debian-10 b/.github/docker/Dockerfile.debian-13
+similarity index 83%
+rename from .github/docker/Dockerfile.debian-10
+rename to .github/docker/Dockerfile.debian-13
+index 864ca86..348f674 100644
+--- a/.github/docker/Dockerfile.debian-10
++++ b/.github/docker/Dockerfile.debian-13
+@@ -1,4 +1,4 @@
+-FROM debian:10 AS base
++FROM debian:13 AS base
+ 
+ # Install dependencies
+ RUN apt-get update && apt-get install -y --no-install-recommends make g++ libpopt-dev libpopt0
+diff --git a/.github/docker/Dockerfile.ubuntu-22.04 b/.github/docker/Dockerfile.ubuntu-22.04
+index eaa4c2a..bd411c9 100644
+--- a/.github/docker/Dockerfile.ubuntu-22.04
++++ b/.github/docker/Dockerfile.ubuntu-22.04
+@@ -1,4 +1,4 @@
+-FROM ubuntu:24.04 AS base
++FROM ubuntu:22.04 AS base
+ 
+ # Install dependencies
+ RUN apt-get update && apt-get install -y --no-install-recommends make g++ libpopt-dev libpopt0
+diff --git a/.github/docker/Dockerfile.ubuntu-24.04 b/.github/docker/Dockerfile.ubuntu-24.04
+index bd411c9..eaa4c2a 100644
+--- a/.github/docker/Dockerfile.ubuntu-24.04
++++ b/.github/docker/Dockerfile.ubuntu-24.04
+@@ -1,4 +1,4 @@
+-FROM ubuntu:22.04 AS base
++FROM ubuntu:24.04 AS base
+ 
+ # Install dependencies
+ RUN apt-get update && apt-get install -y --no-install-recommends make g++ libpopt-dev libpopt0
+diff --git a/.github/workflows/build_generic.yml b/.github/workflows/build_generic.yml
+index 46eba1f..775b219 100644
+--- a/.github/workflows/build_generic.yml
++++ b/.github/workflows/build_generic.yml
+@@ -17,7 +17,7 @@ jobs:
+   build:
+     runs-on: ubuntu-latest
+     steps:
+-    - uses: actions/checkout@v4
++    - uses: actions/checkout@v6
+     - name: Set up Docker Buildx
+       uses: docker/setup-buildx-action@v3
+     - name: Build base image
+diff --git a/.github/workflows/build_matrix.yml b/.github/workflows/build_matrix.yml
+index 25cacbc..7ceac52 100644
+--- a/.github/workflows/build_matrix.yml
++++ b/.github/workflows/build_matrix.yml
+@@ -10,7 +10,7 @@ jobs:
+   check-lint:
+     runs-on: ubuntu-22.04
+     steps:
+-    - uses: actions/checkout@v4
++    - uses: actions/checkout@v6
+     - name: setup-lint
+       run: |
+         sudo apt-get update
+@@ -27,9 +27,10 @@ jobs:
+           - ubuntu-24.04
+           - ubuntu-22.04
+           - ubuntu-20.04
++          - debian-13
+           - debian-12
+           - debian-11
+-          - debian-10
++          - centos-stream10
+           - centos-stream9
+         compiler:
+           - g++
+@@ -48,7 +49,7 @@ jobs:
+     runs-on: ubuntu-latest
+ 
+     steps:
+-    - uses: actions/checkout@v4  # probably not needed, but just in case
++    - uses: actions/checkout@v6  # probably not needed, but just in case
+     - name: Download artifacts
+       uses: actions/download-artifact@v4
+       with:
+diff --git a/.github/workflows/rdock-utils.yaml b/.github/workflows/rdock-utils.yaml
+index 2dafd7f..d4b1a78 100644
+--- a/.github/workflows/rdock-utils.yaml
++++ b/.github/workflows/rdock-utils.yaml
+@@ -14,7 +14,7 @@ jobs:
+     runs-on: ubuntu-latest
+     steps:
+     - name: Checkout
+-      uses: actions/checkout@v4
++      uses: actions/checkout@v6
+     
+     - name: lint
+       uses: chartboost/ruff-action@v1

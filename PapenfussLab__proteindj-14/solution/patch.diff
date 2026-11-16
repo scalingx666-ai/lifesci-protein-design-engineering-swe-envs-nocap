@@ -1,0 +1,13 @@
+diff --git a/scripts/filter_boltz.py b/scripts/filter_boltz.py
+index 24ece02..386ca25 100644
+--- a/scripts/filter_boltz.py
++++ b/scripts/filter_boltz.py
+@@ -22,7 +22,7 @@ def parse_arguments():
+                     help='Minimum confidence score')
+     parser.add_argument('--boltz-min-ptm', type=float, 
+                     help='Minimum pTM score')
+-    parser.add_argument('--boltz-min-ptm_interface', type=float,
++    parser.add_argument('--boltz-min-ptm-interface', type=float,
+                     help='Minimum interface pTM score')
+     parser.add_argument('--boltz-min-plddt', type=float,
+                     help='Minimum complex pLDDT score')

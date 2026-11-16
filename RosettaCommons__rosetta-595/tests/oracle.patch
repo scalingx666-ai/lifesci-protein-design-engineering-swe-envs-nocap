@@ -1,0 +1,186 @@
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/bindings/scores/simple_metrics.py b/source/src/python/PyRosetta/src/pyrosetta/bindings/scores/simple_metrics.py
+index a8ea157155e..04812692797 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/bindings/scores/simple_metrics.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/bindings/scores/simple_metrics.py
+@@ -18,6 +18,7 @@
+     # For python < 3.3
+     from collections import MutableMapping
+ 
++from pyrosetta.rosetta.core.pose.datacache import CacheableDataType
+ from pyrosetta.rosetta.core.simple_metrics import clear_sm_data, get_sm_data
+ 
+ from pyrosetta.bindings.scores.base import PoseCacheAccessorBase
+@@ -51,6 +52,9 @@ def __delitem__(self, key):
+         else:
+             raise KeyError(key)
+ 
++    def _has_sm_data(self, pose):
++        return pose.data().has(CacheableDataType.SIMPLE_METRIC_DATA)
++
+     def _format_metric(self, raw_data, as_dict=False):
+         out_data = {} 
+         for name, data in raw_data.items():
+@@ -106,7 +110,7 @@ def __init__(self, pose):
+     @property
+     def all(self):
+         return types.MappingProxyType(
+-            dict(get_sm_data(self.pose).get_string_metric_data())
++            dict(get_sm_data(self.pose).get_string_metric_data()) if self._has_sm_data(self.pose) else {}
+         )
+ 
+     def __setitem__(self, key, value):
+@@ -142,7 +146,7 @@ def __init__(self, pose):
+     @property
+     def all(self):
+         return types.MappingProxyType(
+-            dict(get_sm_data(self.pose).get_real_metric_data())
++            dict(get_sm_data(self.pose).get_real_metric_data()) if self._has_sm_data(self.pose) else {}
+         )
+ 
+     def __setitem__(self, key, value):
+@@ -180,7 +184,7 @@ def all(self):
+         return types.MappingProxyType(
+             self.format_composite_string(
+                 get_sm_data(self.pose).get_composite_string_metric_data()
+-            )
++            ) if self._has_sm_data(self.pose) else {}
+         )
+ 
+     def __setitem__(self, key, value):
+@@ -199,7 +203,7 @@ def all(self):
+         return types.MappingProxyType(
+             self.format_composite_real(
+                 get_sm_data(self.pose).get_composite_real_metric_data()
+-            )
++            ) if self._has_sm_data(self.pose) else {}
+         )
+ 
+     def __setitem__(self, key, value):
+@@ -218,7 +222,7 @@ def all(self):
+         return types.MappingProxyType(
+             self.format_per_residue_string(
+                 get_sm_data(self.pose).get_per_residue_string_metric_output()
+-            )
++            ) if self._has_sm_data(self.pose) else {}
+         )
+ 
+     def __setitem__(self, key, value):
+@@ -237,7 +241,7 @@ def all(self):
+         return types.MappingProxyType(
+             self.format_per_residue_real(
+                 get_sm_data(self.pose).get_per_residue_real_metric_output()
+-            )
++            ) if self._has_sm_data(self.pose) else {}
+         )
+ 
+     def __setitem__(self, key, value):
+@@ -256,7 +260,7 @@ def all(self):
+         return types.MappingProxyType(
+             self.format_per_residue_probabilities(
+                 get_sm_data(self.pose).get_per_residue_probabilities_metric_output()
+-            )
++            ) if self._has_sm_data(self.pose) else {}
+         )
+ 
+     def __setitem__(self, key, value):
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/tests/bindings/core/test_pose.py b/source/src/python/PyRosetta/src/pyrosetta/tests/bindings/core/test_pose.py
+index 3c1006c3979..bec8bf21f17 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/tests/bindings/core/test_pose.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/tests/bindings/core/test_pose.py
+@@ -17,8 +17,10 @@
+ import pyrosetta.rosetta.core.pose as pose
+ import sys
+ import tempfile
++import types
+ import unittest
+ 
++from functools import partial
+ from pyrosetta.bindings.scores import ClobberWarning, PoseScoreSerializer
+ from pyrosetta.rosetta.core.pose import (
+     getPoseExtraFloatScores,
+@@ -29,6 +31,7 @@
+     clearPoseExtraScore,
+     clearPoseExtraScores,
+ )
++from pyrosetta.rosetta.core.pose.datacache import CacheableDataType
+ from pyrosetta.rosetta.core.scoring import all_atom_rmsd
+ from pyrosetta.rosetta.core.simple_metrics import TestRealMetric, TestStringMetric
+ from pyrosetta.rosetta.core.simple_metrics.metrics import (
+@@ -773,6 +776,40 @@ def test_pose_cache(self):
+         with self.assertWarns(ClobberWarning):
+             dict(self.pose.cache)
+ 
++        # Test that `CacheableDataType.SIMPLE_METRIC_DATA` pose data is not automatically set by accessing `Pose.cache`
++        pose = pyrosetta.io.pose_from_sequence("TEST/SIMPLE/METRIC/DATA")
++        pickler = partial(pickle.dumps, protocol=pickle.DEFAULT_PROTOCOL)
++        bytes_start_1 = pickler(pose)
++        self.assertFalse(pose.data().has(CacheableDataType.SIMPLE_METRIC_DATA))
++        _ = dict(pose.cache) # Access `Pose.cache`
++        self.assertFalse(pose.data().has(CacheableDataType.SIMPLE_METRIC_DATA))
++        bytes_final_1 = pickler(pose)
++        self.assertEqual(bytes_start_1, bytes_final_1, msg="Pose is not bitwise identical after accessing `Pose.cache`.")
++        pose.cache.metrics["pi"] = math.pi # Add SimpleMetrics data
++        bytes_start_2 = pickler(pose)
++        self.assertTrue(pose.data().has(CacheableDataType.SIMPLE_METRIC_DATA))
++        _ = dict(pose.cache) # Access `Pose.cache`
++        self.assertTrue(pose.data().has(CacheableDataType.SIMPLE_METRIC_DATA))
++        bytes_final_2 = pickler(pose)
++        self.assertEqual(bytes_start_2, bytes_final_2, msg="Pose is not bitwise identical after accessing `Pose.cache`.")
++        self.assertNotEqual(bytes_final_1, bytes_final_2, msg="Pose is bitwise identical after adding SimpleMetrics data to `Pose.cache`.")
++
++        # Test `Pose.cache` access to SimpleMetrics data when `CacheableDataType.SIMPLE_METRIC_DATA` is not yet set up
++        pose = pyrosetta.io.pose_from_sequence("EMPTY/DATA/CACHE")
++        self.assertFalse(pose.data().has(CacheableDataType.SIMPLE_METRIC_DATA))
++        for _attr in (
++            "real",
++            "string",
++            "composite_real",
++            "composite_string",
++            "per_residue_real",
++            "per_residue_string",
++            "per_residue_probabilities",
++        ):
++            data = getattr(pose.cache.metrics, _attr)
++            self.assertIsInstance(data.all, types.MappingProxyType)
++            self.assertDictEqual(dict(data), {})
++        self.assertFalse(pose.data().has(CacheableDataType.SIMPLE_METRIC_DATA))
+ 
+ class TestPoseResidueLabelAccessor(unittest.TestCase):
+ 
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/tests/distributed/test_smoke.py b/source/src/python/PyRosetta/src/pyrosetta/tests/distributed/test_smoke.py
+index eaae2e9b004..82a96775b98 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/tests/distributed/test_smoke.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/tests/distributed/test_smoke.py
+@@ -294,6 +294,32 @@ def test_packed_pose_io(self):
+             for ext, func in ext_func_dict.items():
+                 self.roundtrip(func, ext, input_packed_pose.clone(), workdir, scorefxn)
+ 
++    def test_to_packed_determinism(self):
++        if not pyrosetta.rosetta.basic.was_init_called():
++            pyrosetta.init(options="-run:constant_seed 1 -mute all", extra_options="", silent=True)
++        pose = pyrosetta.io.pose_from_sequence("TEST/DETERMINISM")
++        # Get reference bytes
++        bytes_ref = pyrosetta.secure_unpickle.SecureSerializerBase.to_pickle(pose)
++        # Get test bytes through `io.to_packed` interface, which sets up `PackedPose.scores`
++        # that accesses `Pose.cache` that should not call `get_sm_data()` which alters bytes
++        bytes_src = io.to_packed(pose).pickled_pose
++        self.assertEqual(
++            bytes_ref,
++            bytes_src,
++            msg="Pickled pose is not bitwise identical after setting up `PackedPose.scores` attribute without SimpleMetrics data.",
++        )
++        # Update `Pose.cache` dictionary
++        pose.cache.metrics["testing"] = dict(foo="String", bar=1.2, baz=complex(3, 4))
++        # Get reference bytes
++        bytes_ref = pyrosetta.secure_unpickle.SecureSerializerBase.to_pickle(pose)
++        # Get test bytes
++        bytes_src = io.to_packed(pose).pickled_pose
++        self.assertEqual(
++            bytes_ref,
++            bytes_src,
++            msg="Pickled pose is not bitwise identical after setting up `PackedPose.scores` attribute with SimpleMetrics data.",
++        )
++
+     def test_poses_from_sequences_io(self):
+         # Test `io.poses_from_sequences`
+         seqs = ["DESIGN" * i for i in range(3, 8)]

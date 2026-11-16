@@ -1,0 +1,177 @@
+diff --git a/source/src/protocols/antibody/clusters/CDRClusterSet.cc b/source/src/protocols/antibody/clusters/CDRClusterSet.cc
+index 85818ff2d6d..09da2761d67 100644
+--- a/source/src/protocols/antibody/clusters/CDRClusterSet.cc
++++ b/source/src/protocols/antibody/clusters/CDRClusterSet.cc
+@@ -48,8 +48,6 @@ CDRClusterSet::CDRClusterSet(AntibodyInfo * ab_info){
+ 	clear();
+ }
+ 
+-CDRClusterSet::~CDRClusterSet()= default;
+-
+ void
+ CDRClusterSet::identify_and_set_cdr_cluster(core::pose::Pose const & pose, CDRNameEnum cdr){
+ 	clear(cdr);
+diff --git a/source/src/protocols/antibody/clusters/CDRClusterSet.hh b/source/src/protocols/antibody/clusters/CDRClusterSet.hh
+index f4435217909..f7e4e0563e4 100644
+--- a/source/src/protocols/antibody/clusters/CDRClusterSet.hh
++++ b/source/src/protocols/antibody/clusters/CDRClusterSet.hh
+@@ -47,8 +47,6 @@ public:
+ 
+ 	// Undefined, commenting out to fix PyRosetta build  CDRClusterSet(CDRClusterSet const & src);
+ 
+-	~CDRClusterSet() override;
+-
+ 	/// @brief Identify the cluster of the CDR, using numbering information held in AntibodyInfo. Replace data if already present.
+ 	void
+ 	identify_and_set_cdr_cluster( core::pose::Pose const & pose, CDRNameEnum cdr);
+diff --git a/source/src/protocols/hbnet/NetworkState.hh b/source/src/protocols/hbnet/NetworkState.hh
+index 60ce97a4b86..75eba94b6ef 100644
+--- a/source/src/protocols/hbnet/NetworkState.hh
++++ b/source/src/protocols/hbnet/NetworkState.hh
+@@ -37,8 +37,6 @@ public:
+ 		core::scoring::hbonds::graph::HBondGraphOP const & hbond_graph
+ 	);
+ 
+-	~NetworkState(){}
+-
+ 	bool operator < ( NetworkState const & rhs) const {
+ 		return full_twobody_energy_ < rhs.full_twobody_energy_;
+ 	}
+diff --git a/source/src/protocols/jobdist/JobDistributors.cc b/source/src/protocols/jobdist/JobDistributors.cc
+index 36afd82a903..d5f63aa0325 100644
+--- a/source/src/protocols/jobdist/JobDistributors.cc
++++ b/source/src/protocols/jobdist/JobDistributors.cc
+@@ -548,8 +548,6 @@ AtomTreeDiffJobDistributor::AtomTreeDiffJobDistributor(JobVector jobs, std::stri
+ 	}
+ }
+ 
+-AtomTreeDiffJobDistributor::~AtomTreeDiffJobDistributor() = default;
+-
+ void AtomTreeDiffJobDistributor::dump_pose(
+ 	std::string const & tag,
+ 	std::map< std::string, core::Real > const & scores,
+diff --git a/source/src/protocols/jobdist/JobDistributors.hh b/source/src/protocols/jobdist/JobDistributors.hh
+index a2dedfe47c8..cfcd99fb37c 100644
+--- a/source/src/protocols/jobdist/JobDistributors.hh
++++ b/source/src/protocols/jobdist/JobDistributors.hh
+@@ -270,7 +270,6 @@ protected:
+ public:
+ 
+ 	AtomTreeDiffJobDistributor(JobVector jobs, std::string outfile_name);
+-	~AtomTreeDiffJobDistributor() override;
+ 
+ 	/// @brief Appends pose to the silent file
+ 	virtual void dump_pose(
+diff --git a/source/src/protocols/nmr/pcs/PCSLigandTransformMover.cc b/source/src/protocols/nmr/pcs/PCSLigandTransformMover.cc
+index 26abe5ca1df..ae113562887 100644
+--- a/source/src/protocols/nmr/pcs/PCSLigandTransformMover.cc
++++ b/source/src/protocols/nmr/pcs/PCSLigandTransformMover.cc
+@@ -90,8 +90,6 @@ AtomGridPoint::AtomGridPoint(
+ 	residue_(&residue)
+ {}
+ 
+-AtomGridPoint::~AtomGridPoint() {}
+-
+ 
+ AtomGrid::AtomGrid(
+ 	Real const & resolution,
+diff --git a/source/src/protocols/nmr/pcs/PCSLigandTransformMover.hh b/source/src/protocols/nmr/pcs/PCSLigandTransformMover.hh
+index 13c681294b7..b2f1504bae1 100644
+--- a/source/src/protocols/nmr/pcs/PCSLigandTransformMover.hh
++++ b/source/src/protocols/nmr/pcs/PCSLigandTransformMover.hh
+@@ -66,9 +66,6 @@ public:
+ 		core::conformation::Residue const & residue
+ 	);
+ 
+-	/// @brief Destructor
+-	~AtomGridPoint() override;
+-
+ 	/// @brief Is relevant for neighbor search
+ 	bool is_relevant_neighbor() const { return true; }
+ 
+diff --git a/source/src/protocols/noesy_assign/FloatingResonance.cc b/source/src/protocols/noesy_assign/FloatingResonance.cc
+index df46babdebb..43e9f082ac2 100644
+--- a/source/src/protocols/noesy_assign/FloatingResonance.cc
++++ b/source/src/protocols/noesy_assign/FloatingResonance.cc
+@@ -56,9 +56,6 @@ FloatingResonance::FloatingResonance( Resonance const& resin, FloatList const& p
+ 	}
+ }
+ 
+-FloatingResonance::~FloatingResonance() = default;
+-
+-
+ core::Size FloatingResonance::float_label( core::Size ifloat ) const {
+ 	for ( auto it = partner_ids_.begin(); it!=partner_ids_.end(); ++it, --ifloat ) {
+ 		if ( ifloat==1 ) return *it;
+diff --git a/source/src/protocols/noesy_assign/FloatingResonance.hh b/source/src/protocols/noesy_assign/FloatingResonance.hh
+index 946762891fe..576292f1659 100644
+--- a/source/src/protocols/noesy_assign/FloatingResonance.hh
++++ b/source/src/protocols/noesy_assign/FloatingResonance.hh
+@@ -51,7 +51,6 @@ private:
+ public:
+ 	FloatingResonance();
+ 	FloatingResonance( Resonance const& res, FloatList const&, ResonanceList* );
+-	~FloatingResonance() override;
+ 
+ 	ResonanceOP clone() override {
+ 		return utility::pointer::make_shared< FloatingResonance >( *this );
+diff --git a/source/src/protocols/noesy_assign/PeakAssignment.cc b/source/src/protocols/noesy_assign/PeakAssignment.cc
+index 20338c36c96..ec9bd932a65 100644
+--- a/source/src/protocols/noesy_assign/PeakAssignment.cc
++++ b/source/src/protocols/noesy_assign/PeakAssignment.cc
+@@ -49,8 +49,6 @@ static basic::Tracer tr( "protocols.noesy_assign.assignments" );
+ namespace protocols {
+ namespace noesy_assign {
+ 
+-/// @details Auto-generated virtual destructor
+-PeakAssignment::~PeakAssignment() = default;
+ using namespace core;
+ 
+ PeakAssignment::PeakAssignment( CrossPeak * cp, core::Size assign_spin1, core::Size assign_spin2 )
+diff --git a/source/src/protocols/noesy_assign/PeakAssignment.hh b/source/src/protocols/noesy_assign/PeakAssignment.hh
+index 51666423d21..e0af1a01d78 100644
+--- a/source/src/protocols/noesy_assign/PeakAssignment.hh
++++ b/source/src/protocols/noesy_assign/PeakAssignment.hh
+@@ -53,8 +53,6 @@ namespace noesy_assign {
+ /// WHICH RELIES ON THREAD-UNSAFE SINGLETON CovalentCompliance
+ class PeakAssignment : public utility::VirtualBase {
+ public:
+-	/// @brief Automatically generated virtual destructor for class deriving directly from VirtualBase
+-	~PeakAssignment() override;
+ 	typedef core::scoring::constraints::AmbiguousNMRDistanceConstraintOP NmrConstraintOP;
+ 	typedef core::scoring::constraints::AmbiguousNMRDistanceConstraint NmrConstraint;
+ 
+diff --git a/source/src/protocols/peptide_deriver/PeptideDeriverBasicStreamOutputter.cc b/source/src/protocols/peptide_deriver/PeptideDeriverBasicStreamOutputter.cc
+index 7ba5d66e368..d2bc26d14a8 100644
+--- a/source/src/protocols/peptide_deriver/PeptideDeriverBasicStreamOutputter.cc
++++ b/source/src/protocols/peptide_deriver/PeptideDeriverBasicStreamOutputter.cc
+@@ -42,14 +42,6 @@ PeptideDeriverBasicStreamOutputter::PeptideDeriverBasicStreamOutputter(utility::
+ 
+ }
+ 
+-PeptideDeriverBasicStreamOutputter::~PeptideDeriverBasicStreamOutputter()= default;
+-
+-PeptideDeriverBasicStreamOutputter::PeptideDeriverBasicStreamOutputter( PeptideDeriverBasicStreamOutputter const & src ) {
+-	out_p_=src.out_p_;
+-	prefix_=src.prefix_;
+-
+-}
+-
+ PeptideDeriverBasicStreamOutputterOP
+ PeptideDeriverBasicStreamOutputter::clone() const {
+ 	return utility::pointer::make_shared< PeptideDeriverBasicStreamOutputter >( *this );
+diff --git a/source/src/protocols/peptide_deriver/PeptideDeriverBasicStreamOutputter.hh b/source/src/protocols/peptide_deriver/PeptideDeriverBasicStreamOutputter.hh
+index 9bf18d2a2db..a2950245452 100644
+--- a/source/src/protocols/peptide_deriver/PeptideDeriverBasicStreamOutputter.hh
++++ b/source/src/protocols/peptide_deriver/PeptideDeriverBasicStreamOutputter.hh
+@@ -40,10 +40,6 @@ public:
+ 	/// @param prefix a string prefix to prepend to each output line
+ 	PeptideDeriverBasicStreamOutputter(utility::io::orstream & out, std::string prefix);
+ 
+-	PeptideDeriverBasicStreamOutputter(PeptideDeriverBasicStreamOutputter const & src);
+-
+-	~PeptideDeriverBasicStreamOutputter() override;
+-
+ 	PeptideDeriverBasicStreamOutputterOP clone() const;
+ 
+ 	void begin_structure(core::pose::Pose const &, std::string const &) override;

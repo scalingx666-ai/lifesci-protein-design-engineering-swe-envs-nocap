@@ -1,0 +1,670 @@
+diff --git a/examples/GPR BO.ipynb b/examples/GPR BO.ipynb
+index b01f9fa..c9a2acd 100644
+--- a/examples/GPR BO.ipynb	
++++ b/examples/GPR BO.ipynb	
+@@ -160,7 +160,7 @@
+     "\n",
+     "    def _initialize(self):\n",
+     "        start_sequence = list(self.model.measured_sequences)[0]\n",
+-    "        self.state = translate_string_to_one_hot(start_sequence, self.alphabet)\n",
++    "        self.state = one_hot_to_string(start_sequence, self.alphabet)\n",
+     "        self.seq_len = len(start_sequence)\n",
+     "        self._seed_gaussian_process()\n",
+     "        \n",
+@@ -170,7 +170,7 @@
+     "        random_sequences = generate_random_sequences(\n",
+     "            self.seq_len, num_samples, self.alphabet\n",
+     "        )\n",
+-    "        random_states = [translate_string_to_one_hot(seq, self.alphabet) for seq in random_sequences]\n",
++    "        random_states = [one_hot_to_string(seq, self.alphabet) for seq in random_sequences]\n",
+     "        random_states_num = [self._one_hot_to_num(state) for state in random_states]\n",
+     "        fitnesses = [self.model.get_fitness(seq) for seq in random_sequences]\n",
+     "        \n",
+@@ -229,7 +229,7 @@
+     "        def enum_and_eval(curr_seq):\n",
+     "            # if we have a full sequence, then let's evaluate\n",
+     "            if len(curr_seq) == self.seq_len:\n",
+-    "                curr_state = translate_string_to_one_hot(curr_seq, self.alphabet)\n",
++    "                curr_state = one_hot_to_string(curr_seq, self.alphabet)\n",
+     "                v = acq_fn(curr_state)\n",
+     "                if v > self.max_val:\n",
+     "                    self.max_val = v\n",
+@@ -261,7 +261,7 @@
+     "                [(self.model.get_fitness(seq), seq) for seq in last_batch]\n",
+     "            )\n",
+     "            sampled_seq = self.Thompson_sample(measured_batch)\n",
+-    "            self.state = translate_string_to_one_hot(sampled_seq, self.alphabet)\n",
++    "            self.state = one_hot_to_string(sampled_seq, self.alphabet)\n",
+     "            initial_seq = self.state.copy()\n",
+     "            \n",
+     "        self._reset = False\n",
+@@ -272,7 +272,7 @@
+     "            self.gpr.fit(self.X_sample, self.y_sample)\n",
+     "            \n",
+     "            new_seq = self.propose_new_sequence(self.EI)\n",
+-    "            new_state = translate_string_to_one_hot(new_seq, self.alphabet)\n",
++    "            new_state = one_hot_to_string(new_seq, self.alphabet)\n",
+     "            \n",
+     "            fitness = self.model.get_fitness(new_seq)\n",
+     "            if new_seq not in self.model.measured_sequences:\n",
+@@ -390,7 +390,7 @@
+       "\u001b[0;32m~/Dropbox/ICML_FLSD/FLSD-Sandbox/evaluators/Evaluator.py\u001b[0m in \u001b[0;36mconsistency_robustness_independence\u001b[0;34m(self, oracle, start_seq, landscape_id, start_seq_id)\u001b[0m\n\u001b[1;32m    284\u001b[0m                 \u001b[0;34m\"signal_strength\"\u001b[0m\u001b[0;34m:\u001b[0m \u001b[0mss\u001b[0m\u001b[0;34m,\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m    285\u001b[0m             }\n\u001b[0;32m--> 286\u001b[0;31m             \u001b[0mself\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mrun_on_NAM\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0moracle\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0mlandscape_idents\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0mstart_seq\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0mverbose\u001b[0m\u001b[0;34m=\u001b[0m\u001b[0;32mTrue\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0m\u001b[1;32m    287\u001b[0m         \u001b[0mlandscape_idents\u001b[0m \u001b[0;34m=\u001b[0m \u001b[0;34m{\u001b[0m\u001b[0;34m\"landscape_id\"\u001b[0m\u001b[0;34m:\u001b[0m \u001b[0mlandscape_id\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0;34m\"start_id\"\u001b[0m\u001b[0;34m:\u001b[0m \u001b[0mstart_seq_id\u001b[0m\u001b[0;34m}\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m    288\u001b[0m         \u001b[0mself\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mrun_on_NNmodel\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0moracle\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0mlandscape_idents\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0mstart_seq\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0mverbose\u001b[0m\u001b[0;34m=\u001b[0m\u001b[0;32mTrue\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n",
+       "\u001b[0;32m~/Dropbox/ICML_FLSD/FLSD-Sandbox/evaluators/Evaluator.py\u001b[0m in \u001b[0;36mrun_on_NAM\u001b[0;34m(self, landscape_oracle, NAM_args, start_seq, num_batches, hot_start, verbose, overwrite)\u001b[0m\n\u001b[1;32m    201\u001b[0m                 \u001b[0mnam_ensemble_landscape\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mupdate_model\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0;34m[\u001b[0m\u001b[0mstart_seq\u001b[0m\u001b[0;34m]\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m    202\u001b[0m             \u001b[0mself\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mexplorer\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mset_model\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0mnam_ensemble_landscape\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0;32m--> 203\u001b[0;31m             \u001b[0mself\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mexplorer\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mrun\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0mnum_batches\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0moverwrite\u001b[0m\u001b[0;34m=\u001b[0m\u001b[0moverwrite\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0mverbose\u001b[0m\u001b[0;34m=\u001b[0m\u001b[0mverbose\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0m\u001b[1;32m    204\u001b[0m \u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m    205\u001b[0m     def run_on_NNmodel(\n",
+       "\u001b[0;32m~/Dropbox/ICML_FLSD/FLSD-Sandbox/explorers/base_explorer.py\u001b[0m in \u001b[0;36mrun\u001b[0;34m(self, rounds, overwrite, verbose)\u001b[0m\n\u001b[1;32m     88\u001b[0m                     \u001b[0;34mf\"round: {r}, cost: {self.model.cost}, evals: {self.model.evals}, top: {max(self.model.measured_sequences.values())}\"\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m     89\u001b[0m                 )\n\u001b[0;32m---> 90\u001b[0;31m             \u001b[0mnew_samples\u001b[0m \u001b[0;34m=\u001b[0m \u001b[0mself\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mpropose_samples\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0m\u001b[1;32m     91\u001b[0m             \u001b[0mself\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mmeasure_proposals\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0mnew_samples\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m     92\u001b[0m             \u001b[0;32mif\u001b[0m \u001b[0;32mnot\u001b[0m \u001b[0mself\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mdebug\u001b[0m\u001b[0;34m:\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n",
+-      "\u001b[0;32m<ipython-input-5-1e95c19932a0>\u001b[0m in \u001b[0;36mpropose_samples\u001b[0;34m(self)\u001b[0m\n\u001b[1;32m    174\u001b[0m             \u001b[0mself\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mgpr\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mfit\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0mself\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mX_sample\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0mself\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0my_sample\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m    175\u001b[0m \u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0;32m--> 176\u001b[0;31m             \u001b[0mnew_seq\u001b[0m \u001b[0;34m=\u001b[0m \u001b[0mself\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mpropose_new_sequence\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0mself\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mEI\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0m\u001b[1;32m    177\u001b[0m             \u001b[0mnew_state\u001b[0m \u001b[0;34m=\u001b[0m \u001b[0mtranslate_string_to_one_hot\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0mnew_seq\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0mself\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0malphabet\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m    178\u001b[0m \u001b[0;34m\u001b[0m\u001b[0m\n",
++      "\u001b[0;32m<ipython-input-5-1e95c19932a0>\u001b[0m in \u001b[0;36mpropose_samples\u001b[0;34m(self)\u001b[0m\n\u001b[1;32m    174\u001b[0m             \u001b[0mself\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mgpr\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mfit\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0mself\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mX_sample\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0mself\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0my_sample\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m    175\u001b[0m \u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0;32m--> 176\u001b[0;31m             \u001b[0mnew_seq\u001b[0m \u001b[0;34m=\u001b[0m \u001b[0mself\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mpropose_new_sequence\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0mself\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mEI\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0m\u001b[1;32m    177\u001b[0m             \u001b[0mnew_state\u001b[0m \u001b[0;34m=\u001b[0m \u001b[0mone_hot_to_string\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0mnew_seq\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0mself\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0malphabet\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m    178\u001b[0m \u001b[0;34m\u001b[0m\u001b[0m\n",
+       "\u001b[0;32m<ipython-input-5-1e95c19932a0>\u001b[0m in \u001b[0;36mpropose_new_sequence\u001b[0;34m(self, acq_fn)\u001b[0m\n\u001b[1;32m    141\u001b[0m                 \u001b[0;32mfor\u001b[0m \u001b[0mchar\u001b[0m \u001b[0;32min\u001b[0m \u001b[0mlist\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0mself\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0malphabet\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m:\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m    142\u001b[0m                     \u001b[0menum_and_eval\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0mcurr_seq\u001b[0m \u001b[0;34m+\u001b[0m \u001b[0mchar\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0;32m--> 143\u001b[0;31m         \u001b[0menum_and_eval\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0;34m\"\"\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0m\u001b[1;32m    144\u001b[0m \u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m    145\u001b[0m         \u001b[0;32mreturn\u001b[0m \u001b[0mself\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mmax_seq\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n",
+       "\u001b[0;32m<ipython-input-5-1e95c19932a0>\u001b[0m in \u001b[0;36menum_and_eval\u001b[0;34m(curr_seq)\u001b[0m\n\u001b[1;32m    140\u001b[0m             \u001b[0;32melse\u001b[0m\u001b[0;34m:\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m    141\u001b[0m                 \u001b[0;32mfor\u001b[0m \u001b[0mchar\u001b[0m \u001b[0;32min\u001b[0m \u001b[0mlist\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0mself\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0malphabet\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m:\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0;32m--> 142\u001b[0;31m                     \u001b[0menum_and_eval\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0mcurr_seq\u001b[0m \u001b[0;34m+\u001b[0m \u001b[0mchar\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0m\u001b[1;32m    143\u001b[0m         \u001b[0menum_and_eval\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0;34m\"\"\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m    144\u001b[0m \u001b[0;34m\u001b[0m\u001b[0m\n",
+       "\u001b[0;32m<ipython-input-5-1e95c19932a0>\u001b[0m in \u001b[0;36menum_and_eval\u001b[0;34m(curr_seq)\u001b[0m\n\u001b[1;32m    140\u001b[0m             \u001b[0;32melse\u001b[0m\u001b[0;34m:\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m    141\u001b[0m                 \u001b[0;32mfor\u001b[0m \u001b[0mchar\u001b[0m \u001b[0;32min\u001b[0m \u001b[0mlist\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0mself\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0malphabet\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m:\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0;32m--> 142\u001b[0;31m                     \u001b[0menum_and_eval\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0mcurr_seq\u001b[0m \u001b[0;34m+\u001b[0m \u001b[0mchar\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0m\u001b[1;32m    143\u001b[0m         \u001b[0menum_and_eval\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0;34m\"\"\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m    144\u001b[0m \u001b[0;34m\u001b[0m\u001b[0m\n",
+@@ -400,7 +400,7 @@
+       "\u001b[0;32m<ipython-input-5-1e95c19932a0>\u001b[0m in \u001b[0;36menum_and_eval\u001b[0;34m(curr_seq)\u001b[0m\n\u001b[1;32m    140\u001b[0m             \u001b[0;32melse\u001b[0m\u001b[0;34m:\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m    141\u001b[0m                 \u001b[0;32mfor\u001b[0m \u001b[0mchar\u001b[0m \u001b[0;32min\u001b[0m \u001b[0mlist\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0mself\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0malphabet\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m:\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0;32m--> 142\u001b[0;31m                     \u001b[0menum_and_eval\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0mcurr_seq\u001b[0m \u001b[0;34m+\u001b[0m \u001b[0mchar\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0m\u001b[1;32m    143\u001b[0m         \u001b[0menum_and_eval\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0;34m\"\"\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m    144\u001b[0m \u001b[0;34m\u001b[0m\u001b[0m\n",
+       "\u001b[0;32m<ipython-input-5-1e95c19932a0>\u001b[0m in \u001b[0;36menum_and_eval\u001b[0;34m(curr_seq)\u001b[0m\n\u001b[1;32m    140\u001b[0m             \u001b[0;32melse\u001b[0m\u001b[0;34m:\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m    141\u001b[0m                 \u001b[0;32mfor\u001b[0m \u001b[0mchar\u001b[0m \u001b[0;32min\u001b[0m \u001b[0mlist\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0mself\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0malphabet\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m:\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0;32m--> 142\u001b[0;31m                     \u001b[0menum_and_eval\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0mcurr_seq\u001b[0m \u001b[0;34m+\u001b[0m \u001b[0mchar\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0m\u001b[1;32m    143\u001b[0m         \u001b[0menum_and_eval\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0;34m\"\"\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m    144\u001b[0m \u001b[0;34m\u001b[0m\u001b[0m\n",
+       "\u001b[0;32m<ipython-input-5-1e95c19932a0>\u001b[0m in \u001b[0;36menum_and_eval\u001b[0;34m(curr_seq)\u001b[0m\n\u001b[1;32m    140\u001b[0m             \u001b[0;32melse\u001b[0m\u001b[0;34m:\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m    141\u001b[0m                 \u001b[0;32mfor\u001b[0m \u001b[0mchar\u001b[0m \u001b[0;32min\u001b[0m \u001b[0mlist\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0mself\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0malphabet\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m:\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0;32m--> 142\u001b[0;31m                     \u001b[0menum_and_eval\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0mcurr_seq\u001b[0m \u001b[0;34m+\u001b[0m \u001b[0mchar\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0m\u001b[1;32m    143\u001b[0m         \u001b[0menum_and_eval\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0;34m\"\"\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m    144\u001b[0m \u001b[0;34m\u001b[0m\u001b[0m\n",
+-      "\u001b[0;32m<ipython-input-5-1e95c19932a0>\u001b[0m in \u001b[0;36menum_and_eval\u001b[0;34m(curr_seq)\u001b[0m\n\u001b[1;32m    133\u001b[0m             \u001b[0;32mif\u001b[0m \u001b[0mlen\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0mcurr_seq\u001b[0m\u001b[0;34m)\u001b[0m \u001b[0;34m==\u001b[0m \u001b[0mself\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mseq_len\u001b[0m\u001b[0;34m:\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m    134\u001b[0m                 \u001b[0mcurr_state\u001b[0m \u001b[0;34m=\u001b[0m \u001b[0mtranslate_string_to_one_hot\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0mcurr_seq\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0mself\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0malphabet\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0;32m--> 135\u001b[0;31m                 \u001b[0mv\u001b[0m \u001b[0;34m=\u001b[0m \u001b[0macq_fn\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0mcurr_state\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0m\u001b[1;32m    136\u001b[0m                 \u001b[0;32mif\u001b[0m \u001b[0mv\u001b[0m \u001b[0;34m>\u001b[0m \u001b[0mself\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mmax_val\u001b[0m\u001b[0;34m:\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m    137\u001b[0m                     \u001b[0mself\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mmax_val\u001b[0m \u001b[0;34m=\u001b[0m \u001b[0mv\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n",
++      "\u001b[0;32m<ipython-input-5-1e95c19932a0>\u001b[0m in \u001b[0;36menum_and_eval\u001b[0;34m(curr_seq)\u001b[0m\n\u001b[1;32m    133\u001b[0m             \u001b[0;32mif\u001b[0m \u001b[0mlen\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0mcurr_seq\u001b[0m\u001b[0;34m)\u001b[0m \u001b[0;34m==\u001b[0m \u001b[0mself\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mseq_len\u001b[0m\u001b[0;34m:\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m    134\u001b[0m                 \u001b[0mcurr_state\u001b[0m \u001b[0;34m=\u001b[0m \u001b[0mone_hot_to_string\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0mcurr_seq\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0mself\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0malphabet\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0;32m--> 135\u001b[0;31m                 \u001b[0mv\u001b[0m \u001b[0;34m=\u001b[0m \u001b[0macq_fn\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0mcurr_state\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0m\u001b[1;32m    136\u001b[0m                 \u001b[0;32mif\u001b[0m \u001b[0mv\u001b[0m \u001b[0;34m>\u001b[0m \u001b[0mself\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mmax_val\u001b[0m\u001b[0;34m:\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m    137\u001b[0m                     \u001b[0mself\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mmax_val\u001b[0m \u001b[0;34m=\u001b[0m \u001b[0mv\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n",
+       "\u001b[0;32m<ipython-input-5-1e95c19932a0>\u001b[0m in \u001b[0;36mEI\u001b[0;34m(self, X, xi)\u001b[0m\n\u001b[1;32m     99\u001b[0m         \u001b[0mX\u001b[0m \u001b[0;34m=\u001b[0m \u001b[0mself\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0m_one_hot_to_num\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0mX\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m    100\u001b[0m         \u001b[0mmu\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0msigma\u001b[0m \u001b[0;34m=\u001b[0m \u001b[0mself\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mgpr\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mpredict\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0mX\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mreshape\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0;36m1\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0;34m-\u001b[0m\u001b[0;36m1\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0mreturn_std\u001b[0m\u001b[0;34m=\u001b[0m\u001b[0;32mTrue\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0;32m--> 101\u001b[0;31m         \u001b[0mmu_sample\u001b[0m \u001b[0;34m=\u001b[0m \u001b[0mself\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mgpr\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mpredict\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0mself\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mX_sample\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0m\u001b[1;32m    102\u001b[0m \u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m    103\u001b[0m         \u001b[0msigma\u001b[0m \u001b[0;34m=\u001b[0m \u001b[0msigma\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mreshape\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0;34m-\u001b[0m\u001b[0;36m1\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0;36m1\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n",
+       "\u001b[0;32m/anaconda3/envs/tf3/lib/python3.6/site-packages/sklearn/gaussian_process/gpr.py\u001b[0m in \u001b[0;36mpredict\u001b[0;34m(self, X, return_std, return_cov)\u001b[0m\n\u001b[1;32m    295\u001b[0m                 \"returning full covariance.\")\n\u001b[1;32m    296\u001b[0m \u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0;32m--> 297\u001b[0;31m         \u001b[0mX\u001b[0m \u001b[0;34m=\u001b[0m \u001b[0mcheck_array\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0mX\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0m\u001b[1;32m    298\u001b[0m \u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m    299\u001b[0m         \u001b[0;32mif\u001b[0m \u001b[0;32mnot\u001b[0m \u001b[0mhasattr\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0mself\u001b[0m\u001b[0;34m,\u001b[0m \u001b[0;34m\"X_train_\"\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m:\u001b[0m  \u001b[0;31m# Unfitted;predict based on GP prior\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n",
+       "\u001b[0;32m/anaconda3/envs/tf3/lib/python3.6/site-packages/sklearn/utils/validation.py\u001b[0m in \u001b[0;36mcheck_array\u001b[0;34m(array, accept_sparse, dtype, order, copy, force_all_finite, ensure_2d, allow_nd, ensure_min_samples, ensure_min_features, warn_on_dtype, estimator)\u001b[0m\n\u001b[1;32m    451\u001b[0m                              % (array.ndim, estimator_name))\n\u001b[1;32m    452\u001b[0m         \u001b[0;32mif\u001b[0m \u001b[0mforce_all_finite\u001b[0m\u001b[0;34m:\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0;32m--> 453\u001b[0;31m             \u001b[0m_assert_all_finite\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0marray\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n\u001b[0m\u001b[1;32m    454\u001b[0m \u001b[0;34m\u001b[0m\u001b[0m\n\u001b[1;32m    455\u001b[0m     \u001b[0mshape_repr\u001b[0m \u001b[0;34m=\u001b[0m \u001b[0m_shape_repr\u001b[0m\u001b[0;34m(\u001b[0m\u001b[0marray\u001b[0m\u001b[0;34m.\u001b[0m\u001b[0mshape\u001b[0m\u001b[0;34m)\u001b[0m\u001b[0;34m\u001b[0m\u001b[0m\n",
+diff --git a/examples/Tutorial.ipynb b/examples/Tutorial.ipynb
+index 72d48a7..a78a74d 100644
+--- a/examples/Tutorial.ipynb
++++ b/examples/Tutorial.ipynb
+@@ -119,7 +119,7 @@
+   },
+   {
+    "cell_type": "code",
+-   "execution_count": 111,
++   "execution_count": 6,
+    "metadata": {},
+    "outputs": [
+     {
+@@ -128,7 +128,7 @@
+        "array([0.32585082])"
+       ]
+      },
+-     "execution_count": 111,
++     "execution_count": 6,
+      "metadata": {},
+      "output_type": "execute_result"
+     }
+@@ -1976,6 +1976,46 @@
+     "cbas_sequences"
+    ]
+   },
++  {
++   "cell_type": "code",
++   "execution_count": 15,
++   "metadata": {},
++   "outputs": [],
++   "source": [
++    "cnn = baselines.models.CNN(len(wt), alphabet=s_utils.RNAA,\n",
++    "                         num_filters=32, hidden_size=100, loss='MSE')\n",
++    "\n",
++    "dqn_explorer = baselines.explorers.DQN(\n",
++    "    cnn,\n",
++    "    landscape,\n",
++    "    \n",
++    "    rounds=5,\n",
++    "    starting_sequence=wt,\n",
++    "    sequences_batch_size=100,\n",
++    "    model_queries_per_batch=1000,\n",
++    "    alphabet=s_utils.RNAA\n",
++    ")"
++   ]
++  },
++  {
++   "cell_type": "code",
++   "execution_count": null,
++   "metadata": {},
++   "outputs": [
++    {
++     "name": "stdout",
++     "output_type": "stream",
++     "text": [
++      "round: 0, top: 1.1689251877114897\n",
++      "round: 1, top: 1.2034067570585447\n"
++     ]
++    }
++   ],
++   "source": [
++    "dqn_sequences, metadata = dqn_explorer.run()\n",
++    "dqn_sequences"
++   ]
++  },
+   {
+    "cell_type": "code",
+    "execution_count": null,
+diff --git a/flexs/baselines/explorers/__init__.py b/flexs/baselines/explorers/__init__.py
+index 58bff53..167af94 100644
+--- a/flexs/baselines/explorers/__init__.py
++++ b/flexs/baselines/explorers/__init__.py
+@@ -1,6 +1,8 @@
+ from flexs.baselines.explorers.adalead import Adalead
++from flexs.baselines.explorers.bo import BO, GPR_BO
+ from flexs.baselines.explorers.cbas_dbas import CbAS, VAE
+ from flexs.baselines.explorers.cmaes import CMAES
++from flexs.baselines.explorers.dqn import DQN
+ from flexs.baselines.explorers.dyna_ppo import DynaPPO
+ from flexs.baselines.explorers.genetic_algorithm import GeneticAlgorithm
+ from flexs.baselines.explorers.random import Random
+diff --git a/flexs/baselines/explorers/bo_explorer.py b/flexs/baselines/explorers/bo.py
+similarity index 78%
+rename from flexs/baselines/explorers/bo_explorer.py
+rename to flexs/baselines/explorers/bo.py
+index b9551ad..b27722d 100644
+--- a/flexs/baselines/explorers/bo_explorer.py
++++ b/flexs/baselines/explorers/bo.py
+@@ -9,12 +9,12 @@
+ from flexs.utils.sequence_utils import (
+     construct_mutant_from_sample,
+     generate_random_sequences,
++    string_to_one_hot,
+     one_hot_to_string,
+-    translate_string_to_one_hot,
+ )
+ 
+ 
+-class BO_Explorer(flexs.Explorer):
++class BO(flexs.Explorer):
+     """Explorer using Bayesian Optimization."""
+ 
+     def __init__(
+@@ -22,11 +22,11 @@ def __init__(
+         model,
+         landscape,
+         rounds,
+-        starting_sequence,
+         sequences_batch_size,
+         model_queries_per_batch,
++        starting_sequence,
+         alphabet,
+-        batch_size=100,
++        log_file=None,
+         virtual_screen=10,
+         method="EI",
+         recomb_rate=0,
+@@ -50,7 +50,7 @@ def __init__(
+                         sequence
+                     Thompson sample another starting sequence
+         """
+-        name = "BO_Explorer_method={method}"
++        name = "BO-optimization_method={optimization_method}"
+         super().__init__(
+             model,
+             landscape,
+@@ -59,6 +59,7 @@ def __init__(
+             sequences_batch_size,
+             model_queries_per_batch,
+             starting_sequence,
++            log_file,
+         )
+         self.alphabet = alphabet
+         self.method = method
+@@ -66,6 +67,7 @@ def __init__(
+         self.best_fitness = 0
+         self.top_sequence = []
+         self.num_actions = 0
++        self.virtual_screen = virtual_screen 
+         # use PER buffer, same as in DQN
+         self.model_type = "blank"
+         self.state = None
+@@ -75,11 +77,10 @@ def __init__(
+ 
+     def initialize_data_structures(self):
+         """Initialize."""
+-        start_sequence = list(self.model.measured_sequences)[0]
+-        self.state = translate_string_to_one_hot(start_sequence, self.alphabet)
+-        self.seq_len = len(start_sequence)
++        self.state = string_to_one_hot(self.starting_sequence, self.alphabet)
++        self.seq_len = len(self.starting_sequence)
+         self.memory = PrioritizedReplayBuffer(
+-            len(self.alphabet) * self.seq_len, 100000, self.batch_size, 0.6
++            len(self.alphabet) * self.seq_len, 100000, self.sequences_batch_size, 0.6
+         )
+ 
+     def reset(self):
+@@ -154,7 +155,7 @@ def sample_actions(self):
+                 actions.append(tuple(action))
+         return actions
+ 
+-    def pick_action(self):
++    def pick_action(self, all_measured_seqs):
+         """Pick action."""
+         state = self.state.copy()
+         actions = self.sample_actions()
+@@ -179,10 +180,10 @@ def pick_action(self):
+         uncertainty = np.std(method_pred[action_ind])
+         action = actions_to_screen[action_ind]
+         new_state_string = states_to_screen[action_ind]
+-        self.state = translate_string_to_one_hot(new_state_string, self.alphabet)
++        self.state = string_to_one_hot(new_state_string, self.alphabet)
+         new_state = self.state
+         reward = np.mean(ensemble_preds[action_ind])
+-        if not new_state_string in self.model.measured_sequences:
++        if not new_state_string in all_measured_seqs:
+             if reward >= self.best_fitness:
+                 self.top_sequence.append((reward, new_state, self.model.cost))
+             self.best_fitness = max(self.best_fitness, reward)
+@@ -200,21 +201,23 @@ def Thompson_sample(measured_batch):
+         sequences = [x[1] for x in measured_batch]
+         return sequences[index]
+ 
+-    def propose_samples(self):
++    def propose_sequences(self, measured_sequences):
+         """Propose `batch_size` samples."""
+         if self.num_actions == 0:
+             # indicates model was reset
+             self.initialize_data_structures()
+         else:
+             # set state to best measured sequence from prior batch
+-            last_batch = self.batches[self.get_last_batch()]
++            last_round_num = measured_sequences['round'].max()
++            last_batch = measured_sequences[measured_sequences['round'] == last_round_num]
++            last_batch_seqs = last_batch['sequence'].values
+             if self.recomb_rate > 0 and len(last_batch) > 1:
+-                last_batch = self._recombine_population(list(last_batch))
++                last_batch_seqs = self._recombine_population(list(last_batch_seqs))
+             measured_batch = sorted(
+                 [(self.model.get_fitness(seq), seq) for seq in last_batch]
+             )
+             sampled_seq = self.Thompson_sample(measured_batch)
+-            self.state = translate_string_to_one_hot(sampled_seq, self.alphabet)
++            self.state = string_to_one_hot(sampled_seq, self.alphabet)
+         # generate next batch by picking actions
+         self.initial_uncertainty = None
+         samples = set()
+@@ -222,31 +225,35 @@ def propose_samples(self):
+             copy.deepcopy(self.model.cost),
+             copy.deepcopy(self.model.evals),
+         )
+-        while (self.model.cost - prev_cost < self.batch_size) and (
+-            self.model.evals - prev_evals < self.batch_size * self.virtual_screen
++        all_measured_seqs = set(measured_sequences['sequence'].values)
++        while (self.model.cost - prev_cost < self.sequences_batch_size) and (
++            self.model.evals - prev_evals < self.sequences_batch_size * self.virtual_screen
+         ):
+-            uncertainty, new_state_string, _ = self.pick_action()
++            uncertainty, new_state_string, _ = self.pick_action(all_measured_seqs)
++            all_measured_seqs.add(new_state_string)
+             samples.add(new_state_string)
+             if self.initial_uncertainty is None:
+                 self.initial_uncertainty = uncertainty
+             if uncertainty > 2 * self.initial_uncertainty:
+                 # reset sequence to starting sequence if we're in territory that's too uncharted
+                 sampled_seq = self.Thompson_sample(measured_batch)
+-                self.state = translate_string_to_one_hot(sampled_seq, self.alphabet)
++                self.state = string_to_one_hot(sampled_seq, self.alphabet)
+                 self.initial_uncertainty = None
+ 
+-        if len(samples) < self.batch_size:
++        if len(samples) < self.sequences_batch_size:
+             random_sequences = generate_random_sequences(
+-                self.seq_len, self.batch_size - len(samples), self.alphabet
++                self.seq_len, self.sequences_batch_size - len(samples), self.alphabet
+             )
+             samples.update(random_sequences)
++        # get predicted fitnesses of samples 
++        preds = [self.model.get_fitness(sample) for sample in samples]
+         # train ensemble model before returning samples
+         self.train_models()
+ 
+-        return list(samples)
++        return list(samples), preds 
+ 
+ 
+-class GPR_BO_Explorer(Base_explorer):
++class GPR_BO(flexs.Explorer):
+     """Explorer using Bayesian Optimization.
+ 
+     Uses Gaussian process with RBF kernel on black box function.
+@@ -258,34 +265,40 @@ class GPR_BO_Explorer(Base_explorer):
+ 
+     def __init__(
+         self,
+-        batch_size=100,
+-        alphabet="UCGA",
++        model,
++        landscape,
++        rounds,
++        sequences_batch_size,
++        model_queries_per_batch,
++        starting_sequence,
++        alphabet,
++        log_file=None,
+         virtual_screen=10,
+-        path="./simulations/",
+-        debug=False,
+         method="EI",
++        seq_proposal_method="Thompson",
+     ):
+         """Initialize the explorer."""
+-        super(GPR_BO_Explorer, self).__init__(
+-            batch_size=batch_size,
+-            alphabet=alphabet,
+-            virtual_screen=virtual_screen,
+-            path=path,
+-            debug=debug,
++        name = "GPR_BO_Explorer-method={method}-seq_proposal_method={seq_proposal_method}"
++        super().__init__(
++            model,
++            landscape,
++            name,
++            rounds,
++            sequences_batch_size,
++            model_queries_per_batch,
++            starting_sequence,
++            log_file,
+         )
+-        self.explorer_type = "GPR_BO_Explorer"
++        self.alphabet = alphabet 
+         self.alphabet_len = len(alphabet)
+         self.method = method
++        self.seq_proposal_method = seq_proposal_method
+         self.best_fitness = 0
+         self.top_sequence = []
++        self.virtual_screen = virtual_screen 
+ 
+         self.seq_len = None
+         self.maxima = None
+-        self._reset = False
+-
+-    def _initialize(self):
+-        start_sequence = list(self.model.measured_sequences)[0]
+-        self.seq_len = len(start_sequence)
+ 
+     def reset(self):
+         """Reset."""
+@@ -363,31 +376,34 @@ def enum_and_eval(curr_seq):
+         # Sort descending based on the value.
+         return sorted(self.maxima, reverse=True, key=lambda x: x[0])
+ 
+-    def propose_samples(self):
++    def propose_sequences(self, measured_sequences):
+         """Propose `batch_size` samples."""
+-        if self._reset:
+-            # indicates model was reset
+-            self._initialize()
+-        self._reset = False
+-
+         samples = set()
+ 
+-        new_seqs = self.propose_sequences_via_thompson()
++        seq_proposal_funcs = {
++            "Thompson": self.propose_sequences_via_thompson,
++            "Greedy": self.propose_sequences_via_greedy,
++            "UCB": self.propose_sequences_via_ucb
++        }
++        seq_proposal_func = seq_proposal_funcs[self.seq_proposal_method]
++        new_seqs = seq_proposal_func()
+         new_states = []
+         new_fitnesses = []
+         i = 0
+-        while (len(new_states) < self.batch_size) and i < len(new_seqs):
++        all_measured_seqs = set(measured_sequences['sequence'].values)
++        while (len(new_states) < self.sequences_batch_size) and i < len(new_seqs):
+             new_fitness, new_seq = new_seqs[i]
+-            if new_seq not in self.model.measured_sequences:
+-                new_state = translate_string_to_one_hot(new_seq, self.alphabet)
++            if new_seq not in all_measured_seqs:
++                new_state = one_hot_to_string(new_seq, self.alphabet)
+                 if new_fitness >= self.best_fitness:
+                     self.top_sequence.append((new_fitness, new_state, self.model.cost))
+                     self.best_fitness = new_fitness
+                 samples.add(new_seq)
++                all_measured_seqs.add(new_seq)
+                 new_states.append(new_state)
+                 new_fitnesses.append(new_fitness)
+             i += 1
+ 
+         print("Current best fitness:", self.best_fitness)
+ 
+-        return list(samples)
++        return list(samples), new_fitnesses 
+diff --git a/flexs/baselines/explorers/dqn_explorer.py b/flexs/baselines/explorers/dqn.py
+similarity index 82%
+rename from flexs/baselines/explorers/dqn_explorer.py
+rename to flexs/baselines/explorers/dqn.py
+index 4be39cf..82e2d15 100644
+--- a/flexs/baselines/explorers/dqn_explorer.py
++++ b/flexs/baselines/explorers/dqn.py
+@@ -19,7 +19,7 @@
+     sample_greedy,
+     sample_random,
+     one_hot_to_string,
+-    translate_string_to_one_hot,
++    string_to_one_hot,
+ )
+ 
+ 
+@@ -53,7 +53,7 @@ def build_q_network(sequence_len, alphabet_len, device):
+     return model
+ 
+ 
+-class DQN_Explorer(flexs.Explorer):
++class DQN(flexs.Explorer):
+     """Explorer for DQN."""
+ 
+     def __init__(
+@@ -61,12 +61,11 @@ def __init__(
+         model,
+         landscape,
+         rounds,
+-        starting_sequence,
+         sequences_batch_size,
+         model_queries_per_batch,
++        starting_sequence,
+         alphabet,
+-        batch_size=100,
+-        virtual_screen=10,
++        log_file=None,
+         memory_size=100000,
+         train_epochs=20,
+         gamma=0.9,
+@@ -100,8 +99,8 @@ def __init__(
+             sequences_batch_size,
+             model_queries_per_batch,
+             starting_sequence,
++            log_file,
+         )
+-        self.explorer_type = "DQN_Explorer"
+         self.alphabet = alphabet
+         self.alphabet_size = len(alphabet)
+         self.memory_size = memory_size
+@@ -122,24 +121,20 @@ def __init__(
+ 
+     def initialize_data_structures(self):
+         """Initialize internal data structures."""
+-        start_sequence = list(self.model.measured_sequences)[0]
+-        self.state = translate_string_to_one_hot(start_sequence, self.alphabet)
+-        self.seq_len = len(start_sequence)
++        self.state = string_to_one_hot(self.starting_sequence, self.alphabet)
++        self.seq_len = len(self.starting_sequence)
+         self.q_network = build_q_network(self.seq_len, len(self.alphabet), self.device)
+         self.q_network.eval()
+         self.memory = PrioritizedReplayBuffer(
+-            len(self.alphabet) * self.seq_len, self.memory_size, self.batch_size, 0.6
++            len(self.alphabet) * self.seq_len,
++            self.memory_size,
++            self.sequences_batch_size,
++            0.6,
+         )
+ 
+-    def reset(self):
+-        """Reset the explorer."""
+-        self.best_fitness = 0
+-        self.batches = {-1: ""}
+-        self.num_actions = 0
+-
+     def sample(self):
+         """Sample a random `batch_size` subset of the memory."""
+-        indices = np.random.choice(len(self.memory), self.batch_size)
++        indices = np.random.choice(len(self.memory), self.sequences_batch_size)
+         rewards, actions, states, next_states = zip(
+             *[self.memory[ind] for ind in indices]
+         )
+@@ -204,7 +199,7 @@ def get_action_and_mutant(self, epsilon):
+         """Return an action and the resulting mutant."""
+         state_tensor = torch.FloatTensor([self.state.ravel()])
+         prediction = self.calculate_next_q_values(state_tensor).detach().numpy()
+-        prediction = prediction.reshape((len(self.alphabet), self.seq_len))
++        prediction = prediction.reshape((self.seq_len, len(self.alphabet)))
+         moves = renormalize_moves(self.state, prediction)
+         # make action
+         if moves.sum() > 0:
+@@ -220,19 +215,20 @@ def get_action_and_mutant(self, epsilon):
+ 
+         return action, mutant
+ 
+-    def pick_action(self):
++    def pick_action(self, all_measured_seqs):
+         """Pick an action.
+ 
+         Generates a new string representing the state, along with its associated reward.
+         """
+         eps = max(
+-            self.epsilon_min, (0.5 - self.model.cost / (self.batch_size * self.rounds)),
++            self.epsilon_min,
++            (0.5 - self.model.cost / (self.sequences_batch_size * self.rounds)),
+         )
+         state = self.state.copy()
+         action, new_state = self.get_action_and_mutant(eps)
+         new_state_string = one_hot_to_string(new_state, self.alphabet)
+-        reward = self.model.get_fitness(new_state_string)
+-        if not new_state_string in self.model.measured_sequences:
++        reward = self.model.get_fitness([new_state_string]).item()
++        if not new_state_string in all_measured_seqs:
+             if reward >= self.best_fitness:
+                 state_tensor = torch.FloatTensor([self.state.ravel()])
+                 prediction = self.calculate_next_q_values(state_tensor).detach().numpy()
+@@ -242,30 +238,31 @@ def pick_action(self):
+             self.memory.store(state.ravel(), action.ravel(), reward, new_state.ravel())
+         if (
+             self.model.cost > 0
+-            and self.model.cost % self.batch_size == 0
+-            and len(self.memory) >= self.batch_size
++            and self.model.cost % self.sequences_batch_size == 0
++            and len(self.memory) >= self.sequences_batch_size
+         ):
+             self.train_actor(self.train_epochs)
+         self.num_actions += 1
+         return new_state_string, reward
+ 
+-    def propose_samples(self):
++    def propose_sequences(self, measured_sequences_data):
+         """Propose `batch_size` samples."""
+         if self.num_actions == 0:
+             # indicates model was reset
+             self.initialize_data_structures()
+-        samples = set()
+-        prev_cost = copy.deepcopy(self.model.cost)
+-        total_evals = 0
+-        while (self.model.cost - prev_cost < self.batch_size) and (
+-            total_evals < self.batch_size * self.virtual_screen
+-        ):
+-            new_state_string, _ = self.pick_action()
+-            samples.add(new_state_string)
+-            total_evals += 1
+-        if len(samples) < self.batch_size:
+-            random_sequences = generate_random_sequences(
+-                self.seq_len, self.batch_size - len(samples), self.alphabet
+-            )
+-            samples.update(random_sequences)
+-        return list(samples)
++
++        all_measured_seqs = set(measured_sequences_data["sequence"].values)
++        sequences = {}
++
++        prev_cost = self.model.cost
++        while self.model.cost - prev_cost < self.model_queries_per_batch:
++            new_state_string, pred = self.pick_action(all_measured_seqs)
++            all_measured_seqs.add(new_state_string)
++            sequences[new_state_string] = pred
++
++        # We propose the top `self.sequences_batch_size` new sequences we have generated
++        new_seqs = np.array(list(sequences.keys()))
++        preds = np.array(list(sequences.values()))
++        sorted_order = np.argsort(preds)[: -self.sequences_batch_size : -1]
++
++        return new_seqs[sorted_order], preds[sorted_order]
+diff --git a/flexs/baselines/explorers/environments/PPO_environment.py b/flexs/baselines/explorers/environments/PPO_environment.py
+index fa15e34..bc689c2 100644
+--- a/flexs/baselines/explorers/environments/PPO_environment.py
++++ b/flexs/baselines/explorers/environments/PPO_environment.py
+@@ -9,7 +9,7 @@
+ from utils.sequence_utils import (
+     construct_mutant_from_sample,
+     one_hot_to_string,
+-    translate_string_to_one_hot,
++    one_hot_to_string,
+ )
+ 
+ module_path = os.path.abspath(os.path.join(".."))
+@@ -49,7 +49,7 @@ def __init__(
+         # sequence
+         self.seq = starting_seq
+         self.seq_len = len(self.seq)
+-        self._state = translate_string_to_one_hot(self.seq, self.alphabet)
++        self._state = one_hot_to_string(self.seq, self.alphabet)
+         self.episode_seqs = {}  # the sequences seen this episode
+ 
+         # tf_agents environment
+@@ -71,7 +71,7 @@ def __init__(
+ 
+     def _reset(self):
+         self.previous_fitness = -float("inf")
+-        self._state = translate_string_to_one_hot(self.seq, self.alphabet)
++        self._state = one_hot_to_string(self.seq, self.alphabet)
+         self.episode_seqs = {}
+         self.num_steps = 0
+         return ts.restart(np.array(self._state, dtype=np.float32))
+diff --git a/tests/test_explorers.py b/tests/test_explorers.py
+index f680d19..ca03356 100644
+--- a/tests/test_explorers.py
++++ b/tests/test_explorers.py
+@@ -39,6 +39,46 @@ def test_adalead():
+ 
+     # See @TODOs in adalead.py
+ 
++def test_bo():
++    explorer = baselines.explorers.BO(
++        model=fakeModel,
++        landscape=fakeLandscape,
++        rounds=1,
++        ground_truth_measurements_per_round=2,
++        model_queries_per_round=1,
++        starting_sequence="A",
++        alphabet="ATCG",
++    )
++
++    sequences, _ = explorer.run()
++    print(sequences)
++
++def test_gpr_bo():
++    explorer = baselines.explorers.GPR_BO(
++        model=fakeModel,
++        landscape=fakeLandscape,
++        rounds=1,
++        model_queries_per_round=1,
++        starting_sequence="A",
++        alphabet="ATCG",
++    )
++
++    sequences, _ = explorer.run()
++    print(sequences)
++
++def test_dqn():
++    explorer = baselines.explorers.DQN(
++        model=fakeModel,
++        landscape=fakeLandscape,
++        rounds=1,
++        sequences_batch_size=5,
++        model_queries_per_batch=1,
++        starting_sequence="A",
++        alphabet="ATCG",
++    )
++
++    sequences, _ = explorer.run()
++    print(sequences)
+ 
+ def test_dynappo():
+     explorer = baselines.explorers.DynaPPO(

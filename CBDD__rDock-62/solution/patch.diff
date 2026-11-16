@@ -1,0 +1,191 @@
+diff --git a/rdock-utils/pyproject.toml b/rdock-utils/pyproject.toml
+index cfe556ba..a31aa5cd 100644
+--- a/rdock-utils/pyproject.toml
++++ b/rdock-utils/pyproject.toml
+@@ -1,3 +1,15 @@
++[project]
++name = "rdock-utils"
++version = "0.1.0"
++description = "Utilities for working with RDock and operating on SD files"
++requires-python = ">=3.10.0"
++
++[project.scripts]
++sdfield = "rdock_utils.sdfield:main"
++
++[project.urls]
++Repository = "https://github.com/CBDD/rDock.git"
++
+ [tool.black]
+ line-length = 119
+ target-version = ['py312']
+diff --git a/rdock-utils/rdock_utils/parser.py b/rdock-utils/rdock_utils/parser.py
+new file mode 100644
+index 00000000..01e2d729
+--- /dev/null
++++ b/rdock-utils/rdock_utils/parser.py
+@@ -0,0 +1,76 @@
++# Standard Library
++import logging
++from io import StringIO
++from typing import Any, TextIO
++
++logger = logging.getLogger("SDParser")
++
++
++class FastSDMol:
++    def __init__(self, lines: list[str], data: dict[str, str]) -> None:
++        self.lines = lines
++        self.data = data
++
++    @classmethod
++    def read(cls, source: TextIO) -> "FastSDMol | None":
++        lines: list[str] = []
++        data: dict[str, str] = {}
++        terminator_found = False
++        for line in source:
++            if line.startswith("$$$$"):
++                terminator_found = True
++                break
++            if not line.startswith(">"):
++                lines.append(line)
++                continue
++
++            # dealing with fields
++            field_name = cls.parse_field_name(line)
++            field_value = source.readline()
++            if field_value.startswith("$$$$"):
++                terminator_found = True
++                logger.warning(
++                    f"found end of molecule {lines[0]} while looking for field {field_name} value."
++                    " defaulting to empty string."
++                )
++                data[field_name] = ""
++                break
++            data[field_name] = field_value.strip("\n")
++            discard_line = source.readline()
++            if discard_line.startswith("$$$$"):
++                terminator_found = True
++                logger.warning(f"found end of molecule {lines[0]} while expecting empty line after field {field_name}")
++                break
++
++        if not terminator_found and all(line.strip() == "" for line in lines):
++            return None
++
++        if len(lines) >= 4:
++            return cls(lines, data)
++
++        # if we've reached this point, we have an invalid molecule
++        raise ValueError(f"invalid molecule: {lines}")
++
++    @staticmethod
++    def parse_field_name(field_line: str) -> str:
++        field_start = field_line.find("<") + 1
++        field_end = field_line.find(">", 1)
++        return field_line[field_start:field_end]
++
++    @staticmethod
++    def str_field(field_name: str, field_value: Any) -> str:
++        return f">  <{field_name}>\n{field_value}\n\n"
++
++    def __repr__(self) -> str:
++        str_io = StringIO()
++        self.write(str_io)
++        return str_io.getvalue()
++
++    def __str__(self) -> str:
++        return f"<Molecule {self.lines[0]}>"
++
++    def write(self, dest: TextIO) -> None:
++        dest.writelines(self.lines)
++        for field_name, field_value in self.data.items():
++            dest.write(self.str_field(field_name, field_value))
++        dest.write("$$$$")
+diff --git a/rdock-utils/rdock_utils/sdfield.py b/rdock-utils/rdock_utils/sdfield.py
+new file mode 100644
+index 00000000..f64dd521
+--- /dev/null
++++ b/rdock-utils/rdock_utils/sdfield.py
+@@ -0,0 +1,55 @@
++# Standard Library
++import argparse
++import sys
++from logging import getLogger
++from typing import Iterable, TextIO
++
++# Local imports
++from .parser import FastSDMol
++
++logger = getLogger("sdfield")
++
++
++def get_parser() -> argparse.ArgumentParser:
++    parser = argparse.ArgumentParser(description="Adding fields to SD files")
++    parser.add_argument("fieldname", type=str, help="name of the field to be added")
++    parser.add_argument("value", type=str, help="value of the field to be added")
++    infile_help = "input file[s] to be processed. if not provided, stdin is used."
++    parser.add_argument("infile", type=str, nargs="*", help=infile_help)
++    outfile_help = "output file. if not provided, stdout is used."
++    parser.add_argument("-o", "--outfile", default=None, type=str, help=outfile_help)
++
++    return parser
++
++
++def inputs_generator(inputs: list[str]) -> Iterable[TextIO]:
++    if not inputs:
++        yield sys.stdin
++    else:
++        for infile in inputs:
++            yield open(infile, "r")
++
++
++def read_molecules(file: TextIO) -> Iterable[FastSDMol]:
++    while True:
++        try:
++            mol = FastSDMol.read(file)
++            if mol is None:
++                break
++            yield mol
++        except ValueError as e:
++            logger.warning(f"error reading molecule: {e}")
++
++
++def main(argv: list[str] | None = None) -> None:
++    parser = get_parser()
++    args = parser.parse_args(argv)
++    inputs = inputs_generator(args.infile)
++    for source in inputs:
++        for molecule in read_molecules(source):
++            molecule.data[args.fieldname] = args.value
++            print(repr(molecule))
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/rdock-utils/setup.py b/rdock-utils/setup.py
+index 174b367f..520df305 100644
+--- a/rdock-utils/setup.py
++++ b/rdock-utils/setup.py
+@@ -1,20 +1,12 @@
+ #!/usr/bin/env python
+ 
+ # Dependencies
+-from setuptools import setup
+-
+-raise Exception("Please make sure you have modified all necessary attributes before pip installing the package")
++from setuptools import find_packages, setup
+ 
+ setup(
+     name="rdock-utils",
+     version="0.01",
+-    description="",
+-    author="",
+-    author_email="",
+-    url="",
+-    packages=[],
+-    # inlcude_package_data=True,
+-    # package_data={'package.module':[folder/with/data/*]}
+-    # scripts=[],
++    url="https://github.com/CBDD/rDock.git",
++    packages=find_packages(include=["rdock_utils"]),
+     install_requires=[],
+ )

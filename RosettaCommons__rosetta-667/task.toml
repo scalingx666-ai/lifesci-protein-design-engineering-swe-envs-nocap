@@ -1,0 +1,64 @@
+version = "1.0"
+
+[task]
+name = "default/RosettaCommons__rosetta-667"
+description = "Refactor ozstream raw pointers to unique_ptr; modernize orstream copy ops"
+
+[metadata]
+difficulty = "medium"
+category = "bugfix"
+keywords = [
+    "rosetta",
+    "pr_diff",
+]
+
+[metadata.repo2env]
+pipeline = "pr_diff"
+pipeline_version = "0.3.0"
+repo = "RosettaCommons/rosetta"
+ref = "8556abcecef09877257656a5144b1902b5f7c699"
+reference = "https://github.com/RosettaCommons/rosetta/pull/667"
+source_access = "auto"
+built_at = "2026-11-15T22:35:21.732228+00:00"
+reward_kinds = [
+    "diff_similarity",
+]
+spec_version = "0.2.0"
+content_hash = "sha256:47bd7f268e0432354be514d0101d7cfd16f314152f9e6f0affc677624fff9881"
+
+[metadata.repo2env.pr_diff]
+pr_merged_at = "2026-05-07T17:56:28Z"
+diff_format = "unified"
+context_files = [
+    "source/src/utility/io/orstream.hh",
+    "source/src/utility/io/ozstream.cc",
+    "source/src/utility/io/ozstream.hh",
+]
+
+[metadata.repo2env.reward_calibration]
+baseline_reward = 0.0
+loc_changed = 66
+difficulty = "medium"
+
+[metadata.repo2env.evaluation]
+schema_version = "1"
+status = "unverified"
+stage = "generation"
+reason_codes = [
+    "validation_not_run",
+]
+detail = "Generated task; validation has not been established."
+provenance = "unknown"
+evidence = []
+
+[metadata.repo2env.reproducibility]
+mode = "local_only"
+image_ref = "python:3.12-slim"
+image_tag = "python:3.12-slim"
+image_visibility = "private"
+
+[agent]
+timeout_sec = 1800.0
+
+[verifier]
+timeout_sec = 300.0

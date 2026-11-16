@@ -1,0 +1,48 @@
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/__init__.py b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/__init__.py
+index 0bf3c45c1de..c79d9bef5e9 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/__init__.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/__init__.py
+@@ -53,7 +53,7 @@
+     "secure_read_pickle",
+     "update_scores",
+ ]
+-__version__: str = "5.0.1"
++__version__: str = "5.0.2"
+ 
+ with warnings.catch_warnings() and suppress(NameError):
+     warnings.simplefilter("ignore", category=UserWarning)
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/logging_listeners.py b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/logging_listeners.py
+index b94bc1c3d2f..624f62789e1 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/logging_listeners.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/logging_listeners.py
+@@ -88,7 +88,7 @@ def handle(self) -> None:
+ 
+     def unPickle(self, msg: bytes) -> Dict[str, Any]:
+         """
+-        Log record decompress method override using MessagePack and hash-based message authentication codes
++        Log record decompress method override using `MessagePack` and hash-based message authentication codes
+         (HMAC).
+         """
+ 
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/security.py b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/security.py
+index 729e8e74e3b..1d276afc56f 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/security.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/security.py
+@@ -33,7 +33,7 @@
+ 
+ from pyrosetta.distributed.cluster.hkdf import (
+     MaskedBytes,
+-    derive_task_key,
++    derive_instance_key,
+ )
+ from pyrosetta.distributed.cluster.serialization import NonceCache
+ from pyrosetta.distributed.cluster.type_defs import (
+@@ -51,7 +51,7 @@ class SecurityIO:
+     def _setup_task_security_plugin(self, clients: Dict[int, Client]) -> None:
+         """Setup task security worker plugin(s)."""
+ 
+-        prk = MaskedBytes(derive_task_key(os.urandom(32), self.instance_id))
++        prk = MaskedBytes(derive_instance_key(os.urandom(32), self.instance_id))
+         self._register_task_security_plugin(clients, prk)
+         self.serializer.prk = prk
+         assert self.serializer.__getstate__()["prk"] is None, "Pseudo-random key is not hidden on head node serializer."

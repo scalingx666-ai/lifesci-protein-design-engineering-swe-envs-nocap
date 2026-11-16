@@ -1,0 +1,62 @@
+version = "1.0"
+
+[task]
+name = "default/RosettaCommons__rosetta-716"
+description = "Fix the extras=bcl compilation."
+
+[metadata]
+difficulty = "small"
+category = "bugfix"
+keywords = [
+    "rosetta",
+    "pr_diff",
+]
+
+[metadata.repo2env]
+pipeline = "pr_diff"
+pipeline_version = "0.3.0"
+repo = "RosettaCommons/rosetta"
+ref = "bbb6a2d27c70be05b2fb2409f3920b5894967d60"
+reference = "https://github.com/RosettaCommons/rosetta/pull/716"
+source_access = "auto"
+built_at = "2026-11-15T22:34:44.548659+00:00"
+reward_kinds = [
+    "diff_similarity",
+]
+spec_version = "0.2.0"
+content_hash = "sha256:bd8c625d0099ffde2b2518b44e78c645dfc8c1b543faff6a520f3049dfb528f4"
+
+[metadata.repo2env.pr_diff]
+pr_merged_at = "2026-06-25T22:39:28Z"
+diff_format = "unified"
+context_files = [
+    "source/src/protocols/drug_design/bcl/BCLFragmentMutateMover.cc",
+]
+
+[metadata.repo2env.reward_calibration]
+baseline_reward = 0.0
+loc_changed = 12
+difficulty = "small"
+
+[metadata.repo2env.evaluation]
+schema_version = "1"
+status = "unverified"
+stage = "generation"
+reason_codes = [
+    "validation_not_run",
+]
+detail = "Generated task; validation has not been established."
+provenance = "unknown"
+evidence = []
+
+[metadata.repo2env.reproducibility]
+mode = "local_only"
+image_ref = "python:3.12-slim"
+image_tag = "python:3.12-slim"
+image_visibility = "private"
+
+[agent]
+timeout_sec = 1800.0
+
+[verifier]
+timeout_sec = 300.0

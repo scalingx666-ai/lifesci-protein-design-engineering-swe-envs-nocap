@@ -1,0 +1,277 @@
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/tools.py b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/tools.py
+index 4f3019dd6d0..73e27a44ad9 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/tools.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/tools.py
+@@ -318,6 +318,14 @@ def recreate_environment(
+     base_dir: Optional[str] = None,
+ ) -> Optional[NoReturn]:
+     """
++    *Warning*: This function runs a subprocess with one of the following commands:
++      - `conda env create ...`: when 'conda' is an executable
++      - `mamba env create ...`: when 'mamba' is an executable
++      - `uv pip ...`: when 'uv' is an executable
++      - `pixi install ...`: when 'pixi' is an executable
++    Installing certain packages may not be secure, so please only run with input files you trust.
++    Learn more about PyPI security `here <https://pypi.org/security>`_ and conda security `here <https://www.anaconda.com/docs/reference/security>`_.
++
+     Given an input file that was written by PyRosettaCluster, or a scorefile
+     and a decoy name that was written by PyRosettaCluster, recreate the
+     environment that was used to generate the decoy with a new environment name.
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/tests/distributed/cluster/recreate_environment_test_runs.py b/source/src/python/PyRosetta/src/pyrosetta/tests/distributed/cluster/recreate_environment_test_runs.py
+index ceea3cdb0a8..5161d5df6bd 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/tests/distributed/cluster/recreate_environment_test_runs.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/tests/distributed/cluster/recreate_environment_test_runs.py
+@@ -22,7 +22,7 @@ def create_tasks():
+         "options": "-ex1 0 -ex1aro 0 -ex1aro_exposed 0 -ex2 0 -ex2aro 0 -ex2aro_exposed 0 -ex3 0 -ex4 0 -lazy_ig 1",
+         "extra_options": "-out:level 300 -multithreading:total_threads 1 -ignore_unrecognized_res 1 -load_PDB_components 0",
+         "set_logging_handler": "logging",
+-        "seq": "TESTING/A/NEW/ENV",
++        "seq": "NEW/ENV",
+     }
+ 
+ 
+@@ -41,7 +41,7 @@ def my_protocol(packed_pose, **kwargs):
+     pack_rotamers = PackRotamersMover(
+         scorefxn=scorefxn,
+         task=pyrosetta.standard_packer_task(pose),
+-        nloop=10,
++        nloop=3,
+     )
+     pack_rotamers.apply(pose)
+     scorefxn(pose)
+@@ -49,10 +49,20 @@ def my_protocol(packed_pose, **kwargs):
+     return pose
+ 
+ 
++def print_logs(prc_log, protocol_log):
++    for log_file in (prc_log, protocol_log):
++        if os.path.isfile(log_file):
++            with open(log_file, "r") as f:
++                print(f"Output: '{log_file}':", f.read(), sep="\n")
++        else:
++            print(f"Warning: missing PyRosettaCluster log file: '{log_file}'")
++
++
+ def run_original_simulation(
+     env_manager,
+     output_path,
+     scorefile_name,
++    verbose=True,
+ ):
+     # Set environment manager
+     os.environ[get_environment_var()] = env_manager
+@@ -61,6 +71,9 @@ def run_original_simulation(
+         scratch_dir = os.path.join(tmp_dir, "scratch")
+         tasks = list(create_tasks())
+         decoy_dir_name = "test_decoys"
++        logs_dir_name = "logs"
++        project_name = "Original_Environment_Simulation"
++        simulation_name = env_manager
+         protocols = [my_protocol,]
+         instance_kwargs = dict(
+             tasks=tasks,
+@@ -73,21 +86,21 @@ def run_original_simulation(
+             cores=None,
+             processes=None,
+             memory=None,
+-            min_workers=2,
+-            max_workers=8,
++            min_workers=1,
++            max_workers=1,
+             nstruct=1,
+             dashboard_address=None,
+             compressed=False,
+             compression=True,
+-            logging_level="DEBUG",
++            logging_level="INFO",
+             scorefile_name=scorefile_name,
+-            project_name="Original_Environment_Simulation",
+-            simulation_name=None,
++            project_name=project_name,
++            simulation_name=simulation_name,
+             environment=None,
+             output_path=output_path,
+             simulation_records_in_scorefile=True,
+             decoy_dir_name=decoy_dir_name,
+-            logs_dir_name="logs",
++            logs_dir_name=logs_dir_name,
+             ignore_errors=False,
+             timeout=0.1,
+             max_delay_time=1.0,
+@@ -109,6 +122,11 @@ def run_original_simulation(
+         )
+         # Run simulation
+         run(**instance_kwargs)
++        # Maybe print log files
++        if verbose:
++            protocol_log = os.path.join(output_path, logs_dir_name, f"{project_name}_{simulation_name}.log")
++            prc_log = os.path.join(output_path, logs_dir_name, "PyRosettaCluster.log")
++            print_logs(prc_log, protocol_log)
+ 
+ 
+ def run_reproduce_simulation(
+@@ -117,12 +135,16 @@ def run_reproduce_simulation(
+     scorefile_name,
+     original_scorefile,
+     original_decoy_name,
++    verbose=True,
+ ):
+     # Set environment manager
+     os.environ[get_environment_var()] = env_manager
+     with tempfile.TemporaryDirectory() as tmp_dir:
+         # Setup simulation
+         scratch_dir = os.path.join(tmp_dir, "scratch")
++        logs_dir_name = "logs"
++        project_name = "Recreated_Environment_Simulation"
++        simulation_name = env_manager
+         # Run simulation
+         reproduce(
+             input_file=None,
+@@ -138,7 +160,9 @@ def run_reproduce_simulation(
+                 "scratch_dir": scratch_dir,
+                 "sha1": None,
+                 "scorefile_name": scorefile_name,
+-                "project_name": "Recreated_Environment_Simulation",
++                "logs_dir_name": logs_dir_name,
++                "project_name": project_name,
++                "simulation_name": simulation_name,
+                 "output_decoy_types": [".pdb", ".pkl_pose", ".b64_pose"],
+                 "output_scorefile_types": [".json",],
+                 "author": "Bob",
+@@ -146,6 +170,11 @@ def run_reproduce_simulation(
+                 "license": "LICENSE.PyRosetta.md"
+             },
+         )
++        # Maybe print log files
++        if verbose:
++            protocol_log = os.path.join(output_path, logs_dir_name, f"{project_name}_{simulation_name}.log")
++            prc_log = os.path.join(output_path, logs_dir_name, "PyRosettaCluster.log")
++            print_logs(prc_log, protocol_log)
+ 
+ 
+ if __name__ == "__main__":
+@@ -157,7 +186,7 @@ def run_reproduce_simulation(
+     parser.add_argument('--original_scorefile', type=str, default=None)
+     parser.add_argument('--original_decoy_name', type=str, default=None)
+     parser.add_argument('--reproduce', dest='reproduce', action='store_true')
+-    parser.set_defaults(reproduce=False)    
++    parser.set_defaults(reproduce=False)
+     args = parser.parse_args()
+     if not args.reproduce:
+         run_original_simulation(
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/tests/distributed/cluster/setup_envs.py b/source/src/python/PyRosetta/src/pyrosetta/tests/distributed/cluster/setup_envs.py
+index 434259b53aa..05a2e5f22b7 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/tests/distributed/cluster/setup_envs.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/tests/distributed/cluster/setup_envs.py
+@@ -115,11 +115,15 @@ def setup_uv_environment(env_dir):
+     )
+ 
+     # Install pyrosetta-installer
+-    print("Adding 'pyrosetta-installer' to uv environment...")
++    print("Adding 'pyrosetta-installer' and 'pip' to uv environment...")
+     subprocess.run(
+         ["uv", "add", "-p", str(env_path), "pyrosetta-installer"],
+         check=True,
+     )
++    subprocess.run(
++        ["uv", "add", "-p", str(env_path), "pip"],
++        check=True,
++    )
+ 
+     # Run PyRosetta installer with mirror fallback
+     print("Running PyRosetta installer in uv environment...")
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/tests/distributed/cluster/test_reproducibility.py b/source/src/python/PyRosetta/src/pyrosetta/tests/distributed/cluster/test_reproducibility.py
+index f099afd120b..af514b0e4d5 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/tests/distributed/cluster/test_reproducibility.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/tests/distributed/cluster/test_reproducibility.py
+@@ -1692,23 +1692,29 @@ def run_subprocess(cmd, module_dir=None, cwd=None):
+         else:
+             env = None
+         try:
+-            p = subprocess.run(
++            # Use live output streaming for GitHub Actions visibility
++            process = subprocess.Popen(
+                 shlex.split(cmd),
+                 cwd=cwd,
+                 env=env,
+-                check=True,
+                 shell=False,
+-                stdout=subprocess.PIPE,
+-                stderr=subprocess.PIPE,
++                stdout=sys.stdout,
++                stderr=sys.stderr,
+                 text=True,
+             )
++            returncode = process.wait()
++            if returncode != 0:
++                raise subprocess.CalledProcessError(returncode, cmd)
+         except subprocess.CalledProcessError as ex:
+-            print(f"Subprocess command failed (return code: {ex.returncode}): {cmd}\nStdout:\n{ex.stdout}\nStderr:\n{ex.stderr}")
++            print(f"Subprocess command failed (return code: {ex.returncode}): {cmd}", flush=True)
+             raise
++        except Exception as ex:
++            print(f"Unexpected error in subprocess: {ex}", flush=True)
++            raise
++        else:
++            print(f"Return code: {returncode}", flush=True)
+ 
+-        print("Return code: {0}".format(p.returncode))
+-
+-        return p.returncode
++        return returncode
+ 
+     def recreate_environment_test(self, environment_manager="conda"):
+         """Test for PyRosettaCluster decoy reproducibility in a recreated virtual environment."""
+@@ -1738,14 +1744,14 @@ def recreate_environment_test(self, environment_manager="conda"):
+         original_output_path = os.path.join(original_env_dir, f"{environment_manager}_original_outputs")
+         original_scorefile_name = "test_scores.json"
+         if environment_manager == "pixi":
+-            cmd = "pixi run python {0} --env_manager '{1}' --output_path '{2}' --scorefile_name '{3}'".format(
++            cmd = "pixi run python -u {0} --env_manager '{1}' --output_path '{2}' --scorefile_name '{3}'".format(
+                 test_script,
+                 environment_manager,
+                 original_output_path,
+                 original_scorefile_name,
+             )
+         elif environment_manager == "uv":
+-            cmd = "uv run -p {0} python {1} --env_manager '{2}' --output_path '{3}' --scorefile_name '{4}'".format(
++            cmd = "uv run -p {0} python -u {1} --env_manager '{2}' --output_path '{3}' --scorefile_name '{4}'".format(
+                 original_env_dir,
+                 test_script,
+                 environment_manager,
+@@ -1753,7 +1759,7 @@ def recreate_environment_test(self, environment_manager="conda"):
+                 original_scorefile_name,
+             )
+         elif environment_manager in ("conda", "mamba"):
+-            cmd = "conda run -p {0} python {1} --env_manager '{2}' --output_path '{3}' --scorefile_name '{4}'".format(
++            cmd = "conda run -p {0} python -u {1} --env_manager '{2}' --output_path '{3}' --scorefile_name '{4}'".format(
+                 original_env_dir,
+                 test_script,
+                 environment_manager,
+@@ -1831,7 +1837,7 @@ def recreate_environment_test(self, environment_manager="conda"):
+         reproduce_scorefile_name = "test_scores.json"
+         if environment_manager == "pixi":
+             cmd = (
+-                f"pixi run python {test_script} "
++                f"pixi run python -u {test_script} "
+                 f"--env_manager '{environment_manager}' "
+                 f"--output_path '{reproduce_output_path}' "
+                 f"--scorefile_name '{reproduce_scorefile_name}' "
+@@ -1841,7 +1847,7 @@ def recreate_environment_test(self, environment_manager="conda"):
+             )
+         elif environment_manager == "uv":
+             cmd = (
+-                f"uv run -p {reproduce_env_dir} python {test_script} "
++                f"uv run -p {reproduce_env_dir} python -u {test_script} "
+                 f"--env_manager '{environment_manager}' "
+                 f"--output_path '{reproduce_output_path}' "
+                 f"--scorefile_name '{reproduce_scorefile_name}' "
+@@ -1851,7 +1857,7 @@ def recreate_environment_test(self, environment_manager="conda"):
+             )
+         elif environment_manager in ("conda", "mamba"):
+             cmd = (
+-                f"conda run -p {reproduce_env_dir} python {test_script} "
++                f"conda run -p {reproduce_env_dir} python -u {test_script} "
+                 f"--env_manager '{environment_manager}' "
+                 f"--output_path '{reproduce_output_path}' "
+                 f"--scorefile_name '{reproduce_scorefile_name}' "

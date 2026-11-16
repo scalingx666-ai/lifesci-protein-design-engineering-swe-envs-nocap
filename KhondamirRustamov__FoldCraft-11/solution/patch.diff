@@ -1,0 +1,754 @@
+diff --git a/.gitignore b/.gitignore
+index 482002b..6a55d13 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -20,3 +20,8 @@ fold_cond_cmap.png
+ # OS / editor
+ .DS_Store
+ *.swp
++
++# Local venv / test caches
++.venv/
++.pytest_cache/
++.coverage
+diff --git a/FoldCraft.py b/FoldCraft.py
+index de600b2..7473707 100644
+--- a/FoldCraft.py
++++ b/FoldCraft.py
+@@ -28,6 +28,7 @@
+ from matplotlib import patches
+ from colabdesign.mpnn import mk_mpnn_model
+ from biopython_utils import *
++from cmap_utils import assemble_fold_conditioned_cmap, binarize_cmap
+ import warnings
+ 
+ 
+@@ -99,86 +100,63 @@ def main():
+ 
+     model_name = 'v_48_010'
+     os.makedirs(folder_name, exist_ok=True)
+-        
++
+     if vhh:
++        # VHH path: binder cmap comes from the fixed VHH framework, the binder
++        # length is the 127-residue VHH scaffold, and the CDR (binder) hotspots
++        # are fixed -- any user-supplied binder_hotspots/binder_mask is ignored,
++        # matching the original behavior.
+         load_np = np.load(f'framework/vhh.npy')
+-        target_hotspots_np = np.array(set_range(target_hotspots))
+         af_model = mk_afdesign_model(protocol="fixbb", use_templates=True)
+         af_model.prep_inputs(pdb_filename=pdb_target_path,
+                              ignore_missing=False,
+                              chain = chain_id,)
+-        
++
+         target_len = af_model._len
+         binder_len = 127
+-        fc_cmap = np.zeros((target_len+binder_len, target_len+binder_len))
+-        
+         binder_hotspots = '26-35,55-59,102-116'
+-        cdr_range = np.array(set_range(binder_hotspots))+target_len
+-        
+-        fc_cmap[-binder_len:,-binder_len:] = load_np
+-        
+-        for i in target_hotspots_np:
+-            for x in cdr_range:
+-                fc_cmap[x-1,i-1] = 1.
+-                fc_cmap[i-1,x-1] = 1.
++        fc_cmap = assemble_fold_conditioned_cmap(load_np, target_len, binder_len,
++                                                 target_hotspots, binder_hotspots)
+     else:
+         pdbparser = PDBParser()
+-        
++
+         structure = pdbparser.get_structure(binder_template, template_pdb)
+         chains = {chain.id:seq1(''.join(residue.resname for residue in chain)) for chain in structure.get_chains()}
+-        
++
+         query_chain = chains[chain_template]
+-        
++
+         af_binder = mk_afdesign_model(protocol="fixbb", use_templates=True)
+         af_binder.prep_inputs(pdb_filename=template_pdb,
+                              ignore_missing=False,
+                              chain = chain_template,
+                              rm_template_seq=False,
+                              rm_template_sc=False,)
+-        
++
+         #name='9had'
+         af_binder.set_seq(query_chain[:af_binder._len])
+         af_binder.predict(num_recycles=3, verbose=False)
+         print(f"CMAP of {binder_template} (monomer plddt: {af_binder.aux['log']['plddt']:.3f})")
+         #plt.imshow(af_model.aux['cmap'])
+-        
+-        
++
++
+         warnings.filterwarnings("ignore")
+-        
++
+         #Prepare target protein structure
+-        
+-        target_hotspots_np = np.array(set_range(target_hotspots))
+-        
++
+         af_model = mk_afdesign_model(protocol="fixbb", use_templates=True)
+         af_model.prep_inputs(pdb_filename=pdb_target_path,
+                              ignore_missing=False,
+                              chain = chain_id,)
+-        
++
+         target_len = af_model._len
+         binder_len = af_binder._len
+-        
++
++        # binder cmap from the AlphaFold2 prediction of the binder monomer
+         load_np = af_binder.aux['cmap']
+-        
+-        if binder_mask != '':
+-            binder_mask = set_range(binder_mask)
+-            for i in binder_mask:
+-                load_np[i,:] = 0.
+-                load_np[:,i] = 0.
+-        
+-        fc_cmap = np.zeros((target_len+binder_len, target_len+binder_len))
+-        
+-        if binder_hotspots == '':
+-            cdr_range = np.array([range(0,binder_len)])+target_len
+-        else:
+-            cdr_range = np.array(set_range(binder_hotspots))+target_len
+-        
+-        fc_cmap[-binder_len:,-binder_len:] = load_np
+-        
+-        for i in target_hotspots_np:
+-            for x in cdr_range:
+-                fc_cmap[x-1,i-1] = 1.
+-                fc_cmap[i-1,x-1] = 1.
+-    
++        fc_cmap = assemble_fold_conditioned_cmap(load_np, target_len, binder_len,
++                                                 target_hotspots, binder_hotspots,
++                                                 binder_mask)
++
+     from matplotlib import patches
+     fig, ax = plt.subplots()
+     plt.imshow(fc_cmap)
+@@ -187,11 +165,10 @@ def main():
+     ax.add_patch(rect)
+     ax.add_patch(rect2)
+     plt.savefig(f'{folder_name}/fold_cond_cmap.png')
+-    
++
+     np.save(f'{folder_name}/fold_cond_cmap.npy',fc_cmap)
+-    
+-    fc_cmap[fc_cmap>0] = 1
+-    np.save(f'{folder_name}/fold_cond_cmap_mask.npy',fc_cmap)
++
++    np.save(f'{folder_name}/fold_cond_cmap_mask.npy', binarize_cmap(fc_cmap))
+ 
+     # Start to design
+ 
+diff --git a/biopython_utils.py b/biopython_utils.py
+index dfe4b7d..35b3f5e 100644
+--- a/biopython_utils.py
++++ b/biopython_utils.py
+@@ -14,7 +14,11 @@ def set_range(hotspots_input):
+     h_range = []
+     for i in new_h:
+         if '-' in i:
+-            h_range += [x for x in range(int(i.split('-')[0]), int(i.split('-')[1]))]
++            # inclusive of both endpoints: "39-45" -> 39..45 (was exclusive of
++            # the upper bound, which silently dropped the last residue of every
++            # hotspot/mask window).
++            lo, hi = i.split('-')
++            h_range += [x for x in range(int(lo), int(hi) + 1)]
+         else:
+             h_range.append(int(i))
+     return h_range
+diff --git a/cmap_utils.py b/cmap_utils.py
+new file mode 100644
+index 0000000..cfbbe99
+--- /dev/null
++++ b/cmap_utils.py
+@@ -0,0 +1,106 @@
++"""Pure (GPU-free) construction of the fold-conditioned contact map.
++
++The fold-conditioned cmap is the artifact the design loss conditions on, so it
++is the single most accuracy-relevant *deterministic* step in the pipeline. This
++module extracts its assembly out of ``FoldCraft.py``'s ``main()`` so it can be
++unit-tested and shared by both the standard and VHH paths (which previously
++duplicated the same logic inline).
++
++Index conventions: hotspot/mask range strings are parsed by ``set_range`` into
++1-based residue numbers (inclusive of both endpoints), which map to 0-based
++array positions as ``residue R -> index R-1``. When no binder hotspots are
++given the default ``np.array([range(0, binder_len)])`` -- a 2-D
++``(1, binder_len)`` array -- drives NumPy fancy-indexing in the contact loop,
++selecting every binder position.
++
++These semantics decide which residues the design loss conditions on, so changes
++here are accuracy-relevant and should be measured against the design baseline.
++See tests/test_cmap_utils.py for the differential cross-check against an
++independent re-implementation of the assembly.
++"""
++import numpy as np
++
++from biopython_utils import set_range
++
++
++def apply_binder_mask(binder_cmap, binder_mask):
++    """Zero out masked binder rows/columns in the binder's intra-chain cmap.
++
++    ``binder_mask`` is a residue-range string (e.g. ``"14-30"``); ``set_range``
++    yields 1-based residue numbers, which map to 0-based positions as
++    ``residue R -> index R-1`` -- the same convention the hotspots use in
++    ``assemble_fold_conditioned_cmap``. A residue outside ``1..binder_len``
++    raises ``ValueError`` (rather than silently wrapping a negative index or
++    raising a bare IndexError). Operates on a copy; the input is not mutated.
++    """
++    binder_cmap = np.array(binder_cmap, copy=True)
++    if binder_mask != '':
++        n = binder_cmap.shape[0]
++        for r in set_range(binder_mask):
++            if not 1 <= r <= n:
++                raise ValueError(
++                    f"binder_mask residue {r} is out of range for a "
++                    f"{n}-residue binder (expected 1..{n})."
++                )
++            binder_cmap[r - 1, :] = 0.
++            binder_cmap[:, r - 1] = 0.
++    return binder_cmap
++
++
++def assemble_fold_conditioned_cmap(binder_cmap, target_len, binder_len,
++                                   target_hotspots, binder_hotspots,
++                                   binder_mask=''):
++    """Build the ``(target_len + binder_len)`` square fold-conditioned cmap.
++
++    Parameters
++    ----------
++    binder_cmap : array (binder_len x binder_len)
++        The binder's intra-chain contact map. In the standard path this comes
++        from an AlphaFold2 prediction of the binder monomer; in the VHH path it
++        is loaded from ``framework/vhh.npy``.
++    target_len, binder_len : int
++        Chain lengths. The binder block is placed in the bottom-right corner.
++    target_hotspots, binder_hotspots : str
++        Residue-range strings (e.g. ``"36-41,84-88"``). If ``binder_hotspots``
++        is the empty string, all binder residues are used (the original
++        default).
++    binder_mask : str, optional
++        Residue ranges in the binder to zero out before assembly. The VHH path
++        does not use a binder mask; pass ``''`` to match it.
++
++    Returns
++    -------
++    np.ndarray
++        The fold-conditioned cmap (float; target<->binder hotspot contacts
++        marked ``1.0``).
++    """
++    binder_cmap = apply_binder_mask(binder_cmap, binder_mask)
++
++    target_hotspots_np = np.array(set_range(target_hotspots))
++
++    fc_cmap = np.zeros((target_len + binder_len, target_len + binder_len))
++
++    if binder_hotspots == '':
++        cdr_range = np.array([range(0, binder_len)]) + target_len
++    else:
++        cdr_range = np.array(set_range(binder_hotspots)) + target_len
++
++    fc_cmap[-binder_len:, -binder_len:] = binder_cmap
++
++    for i in target_hotspots_np:
++        for x in cdr_range:
++            fc_cmap[x - 1, i - 1] = 1.
++            fc_cmap[i - 1, x - 1] = 1.
++
++    return fc_cmap
++
++
++def binarize_cmap(fc_cmap):
++    """Return the binary contact mask (any positive entry -> 1).
++
++    This is the ``cond_cmap_mask`` the design loop loads alongside the cmap.
++    Returns a copy; does not mutate the input.
++    """
++    mask = np.array(fc_cmap, copy=True)
++    mask[mask > 0] = 1
++    return mask
+diff --git a/pytest.ini b/pytest.ini
+new file mode 100644
+index 0000000..b9c31b2
+--- /dev/null
++++ b/pytest.ini
+@@ -0,0 +1,6 @@
++[pytest]
++testpaths = tests
++python_files = test_*.py
++python_classes = Test*
++python_functions = test_*
++addopts = -ra
+diff --git a/requirements-dev.txt b/requirements-dev.txt
+new file mode 100644
+index 0000000..770116c
+--- /dev/null
++++ b/requirements-dev.txt
+@@ -0,0 +1,6 @@
++# Test dependencies for the CPU-only test suite (the GPU-free helper functions).
++# Lower-bound ranges so the suite resolves across supported Python versions.
++biopython>=1.83
++numpy>=1.26,<3
++scipy>=1.11
++pytest>=8
+diff --git a/tests/README.md b/tests/README.md
+new file mode 100644
+index 0000000..4a18b23
+--- /dev/null
++++ b/tests/README.md
+@@ -0,0 +1,46 @@
++# FoldCraft test suite
++
++This suite was added to give the project a regression safety net before we
++refactor or tune the design pipeline. Upstream FoldCraft shipped **no tests**.
++
++## What is covered
++
++These are **characterization tests**: they assert the *current* behavior of the
++GPU-free helper functions so that refactors and performance/accuracy work do not
++silently change residue selection, interface detection, or scoring.
++
++Covered today (all CPU-only, run on a laptop in seconds):
++
++- `biopython_utils.set_range` — hotspot/mask range parsing
++- `biopython_utils.calculate_percentages` — secondary-structure fractions
++- `biopython_utils.validate_design_sequence` — composition notes
++- `biopython_utils.calculate_clash_score` — clash counting (real PDB fixtures)
++- `biopython_utils.hotspot_residues` — interface detection (synthetic complex)
++- `biopython_utils.target_pdb_rmsd` — CA RMSD after superposition
++- `cmap_utils` — fold-conditioned cmap assembly + binder_mask (differential test
++  against an independent re-implementation, plus adversarial mask inputs)
++
++## Fixed behaviors the tests lock
++
++- **`set_range` is inclusive of both endpoints.** `"39-45"` -> `39..45`,
++  `"80-81"` -> `[80, 81]`, `"80-80"` -> `[80]`. (Previously the upper bound was
++  exclusive, silently narrowing every hotspot/mask window by one residue — which
++  is accuracy-relevant, since it decides which residues the cmap loss conditions
++  on.)
++
++## What is NOT covered yet
++
++The two design drivers (`FoldCraft.py`, `FoldCraft_binder.py`) are monolithic
++`main()` functions requiring a GPU, AlphaFold2 weights, `colabdesign`, and the
++side-loaded `BindCraft` package (`from BindCraft.functions import *`, which is
++neither vendored nor declared). They have no importable seams. Covering them
++requires the planned refactor into testable units; that work is tracked
++separately.
++
++## Running
++
++```bash
++python -m venv .venv
++./.venv/bin/pip install -r requirements-dev.txt
++./.venv/bin/python -m pytest
++```
+diff --git a/tests/conftest.py b/tests/conftest.py
+new file mode 100644
+index 0000000..b9bb8bd
+--- /dev/null
++++ b/tests/conftest.py
+@@ -0,0 +1,93 @@
++"""Shared fixtures for the FoldCraft test suite.
++
++These tests are *characterization* tests: they lock in the CURRENT behavior of
++the GPU-free helper functions so we can refactor and tune the design pipeline
++without silently changing residue selection, interface detection, or scoring.
++Where current behavior looks like a latent bug, the test documents it
++explicitly (see ``test_biopython_utils.py``) rather than asserting the
++"intended" behavior — so a future fix will trip the test and force a conscious
++decision.
++"""
++import os
++import sys
++
++import pytest
++from Bio.PDB import PDBIO
++from Bio.PDB.Structure import Structure
++from Bio.PDB.Model import Model
++from Bio.PDB.Chain import Chain
++from Bio.PDB.Residue import Residue
++from Bio.PDB.Atom import Atom
++
++# Make the repo root importable so `import biopython_utils` works regardless of
++# where pytest is invoked from.
++REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
++if REPO_ROOT not in sys.path:
++    sys.path.insert(0, REPO_ROOT)
++
++@pytest.fixture(scope="session")
++def pdb_1qys():
++    """Path to a real single-chain protein structure (Top7 / 1QYS template)."""
++    path = os.path.join(REPO_ROOT, "examples", "templates", "1qys1.pdb")
++    assert os.path.exists(path), f"missing test fixture: {path}"
++    return path
++
++
++@pytest.fixture(scope="session")
++def pdb_pdl1():
++    """Path to a real single-chain protein structure (PD-L1 target)."""
++    path = os.path.join(REPO_ROOT, "examples", "targets", "pd-l1-1.pdb")
++    assert os.path.exists(path), f"missing test fixture: {path}"
++    return path
++
++
++def _add_residue(chain, resseq, resname, atoms):
++    """Add a residue with the given (name, (x, y, z)) atoms to a chain."""
++    res = Residue((" ", resseq, " "), resname, "")
++    for i, (atom_name, coord) in enumerate(atoms):
++        atom = Atom(
++            atom_name,
++            coord,
++            0.0,          # bfactor
++            1.0,          # occupancy
++            " ",          # altloc
++            atom_name,    # fullname
++            i,            # serial_number
++            element=atom_name[0],
++        )
++        res.add(atom)
++    chain.add(res)
++    return res
++
++
++@pytest.fixture()
++def two_chain_complex(tmp_path):
++    """A minimal 2-chain complex written to disk, with a known interface.
++
++    Layout (CA-only, coordinates in Angstrom):
++      - chain A (target): residue 1 ALA at the origin.
++      - chain B (binder): residue 1 GLY ~3 A from chain A  -> interface contact
++                          residue 2 LEU ~20 A away          -> NOT a contact
++
++    With a 4.0 A cutoff, ``hotspot_residues(pdb, "B")`` should report exactly
++    binder residue 1 (GLY -> "G"). This pins interface detection, which drives
++    the non-interface ProteinMPNN redesign in the design pipeline.
++    """
++    structure = Structure("mini")
++    model = Model(0)
++    structure.add(model)
++
++    chain_a = Chain("A")
++    chain_b = Chain("B")
++    model.add(chain_a)
++    model.add(chain_b)
++
++    _add_residue(chain_a, 1, "ALA", [("CA", (0.0, 0.0, 0.0))])
++    _add_residue(chain_b, 1, "GLY", [("CA", (3.0, 0.0, 0.0))])
++    _add_residue(chain_b, 2, "LEU", [("CA", (20.0, 0.0, 0.0))])
++
++    out = tmp_path / "mini_complex.pdb"
++    io = PDBIO()
++    io.set_structure(structure)
++    io.save(str(out))
++    return str(out)
+diff --git a/tests/test_biopython_utils.py b/tests/test_biopython_utils.py
+new file mode 100644
+index 0000000..0f11e55
+--- /dev/null
++++ b/tests/test_biopython_utils.py
+@@ -0,0 +1,130 @@
++"""Tests for the GPU-free helpers in biopython_utils.py.
++
++Covers hotspot/mask range parsing (``set_range``, inclusive of both endpoints),
++secondary-structure fraction arithmetic, sequence-composition notes, clash
++counting, interface detection, and CA-RMSD superposition.
++"""
++import pytest
++
++import biopython_utils as bu
++
++
++# ---------------------------------------------------------------------------
++# set_range  -- parses hotspot/mask range strings like "39-45,80,90-102"
++# This drives every hotspot/mask selection, so its semantics are
++# accuracy-critical: it decides which residues the cmap loss conditions on.
++# ---------------------------------------------------------------------------
++class TestSetRange:
++    def test_single_residue(self):
++        assert bu.set_range("80") == [80]
++
++    def test_comma_separated_singletons(self):
++        assert bu.set_range("80,90,102") == [80, 90, 102]
++
++    def test_range_is_upper_bound_INCLUSIVE(self):
++        # Fixed: "39-45" now includes the endpoint 45 (was exclusive, which
++        # silently dropped the last residue of every hotspot/mask window).
++        assert bu.set_range("39-45") == [39, 40, 41, 42, 43, 44, 45]
++        assert 45 in bu.set_range("39-45")
++
++    def test_mixed_ranges_and_singletons(self):
++        # Singletons keep their value; ranges include both endpoints.
++        assert bu.set_range("14-30,80-81,90-102") == (
++            list(range(14, 31)) + [80, 81] + list(range(90, 103))
++        )
++
++    def test_single_width_range(self):
++        # "80-81" -> both endpoints; "80-80" -> the single residue 80.
++        assert bu.set_range("80-81") == [80, 81]
++        assert bu.set_range("80-80") == [80]
++
++    def test_order_preserved(self):
++        assert bu.set_range("90-92,10") == [90, 91, 92, 10]
++
++
++# ---------------------------------------------------------------------------
++# calculate_percentages -- pure arithmetic for secondary-structure fractions
++# ---------------------------------------------------------------------------
++class TestCalculatePercentages:
++    def test_basic_split(self):
++        # total=10, helix=5, sheet=3 -> loop=2
++        assert bu.calculate_percentages(10, 5, 3) == (50.0, 30.0, 20.0)
++
++    def test_zero_total_is_safe(self):
++        assert bu.calculate_percentages(0, 0, 0) == (0, 0, 0)
++
++    def test_all_helix(self):
++        assert bu.calculate_percentages(4, 4, 0) == (100.0, 0.0, 0.0)
++
++    def test_rounding_to_two_decimals(self):
++        # 1/3 -> 33.33
++        h, s, l = bu.calculate_percentages(3, 1, 1)
++        assert h == 33.33 and s == 33.33 and l == 33.33
++
++
++# ---------------------------------------------------------------------------
++# validate_design_sequence -- composition notes for a designed sequence
++# ---------------------------------------------------------------------------
++class TestValidateDesignSequence:
++    def test_clean_high_absorption_sequence_no_notes(self):
++        # Tryptophan-rich sequence => high extinction => no absorption warning.
++        settings = {"omit_AAs": ""}
++        notes = bu.validate_design_sequence("WWWWYYYY", 0, settings)
++        assert notes == ""
++
++    def test_clash_note(self):
++        settings = {"omit_AAs": ""}
++        notes = bu.validate_design_sequence("WWWWYYYY", 3, settings)
++        assert "clashes" in notes
++
++    def test_omitted_aa_flagged(self):
++        settings = {"omit_AAs": "C"}
++        notes = bu.validate_design_sequence("WWCWYY", 0, settings)
++        assert "Contains: C" in notes
++
++    def test_low_absorption_suggests_tryptophan(self):
++        settings = {"omit_AAs": ""}
++        notes = bu.validate_design_sequence("AAAAGGGG", 0, settings)
++        assert "tryptophane" in notes.lower()
++
++
++# ---------------------------------------------------------------------------
++# calculate_clash_score -- C-alpha / heavy-atom clash counting on a real PDB
++# ---------------------------------------------------------------------------
++class TestCalculateClashScore:
++    def test_real_structure_has_no_ca_clashes(self, pdb_1qys):
++        # A well-formed deposited structure should have no CA-CA clashes
++        # between non-adjacent residues at the 2.4 A default threshold.
++        assert bu.calculate_clash_score(pdb_1qys, only_ca=True) == 0
++
++    def test_returns_int(self, pdb_pdl1):
++        score = bu.calculate_clash_score(pdb_pdl1, only_ca=True)
++        assert isinstance(score, int)
++
++
++# ---------------------------------------------------------------------------
++# hotspot_residues -- interface residue detection (drives MPNN redesign mask)
++# ---------------------------------------------------------------------------
++class TestHotspotResidues:
++    def test_detects_only_close_binder_residue(self, two_chain_complex):
++        result = bu.hotspot_residues(two_chain_complex, binder_chain="B")
++        # Only binder residue 1 (GLY) is within 4.0 A of chain A.
++        assert result == {1: "G"}
++
++    def test_wider_cutoff_includes_far_residue(self, two_chain_complex):
++        # At a 25 A cutoff both binder residues contact chain A.
++        result = bu.hotspot_residues(
++            two_chain_complex, binder_chain="B", atom_distance_cutoff=25.0
++        )
++        assert set(result.keys()) == {1, 2}
++        assert result[2] == "L"
++
++
++# ---------------------------------------------------------------------------
++# target_pdb_rmsd -- CA RMSD after superposition
++# ---------------------------------------------------------------------------
++class TestTargetPdbRmsd:
++    def test_self_alignment_is_zero(self, pdb_1qys):
++        # Aligning a structure's chain A against itself must give ~0 RMSD.
++        rmsd = bu.target_pdb_rmsd(pdb_1qys, pdb_1qys, "A")
++        assert rmsd == 0.0
+diff --git a/tests/test_cmap_utils.py b/tests/test_cmap_utils.py
+new file mode 100644
+index 0000000..d4e8962
+--- /dev/null
++++ b/tests/test_cmap_utils.py
+@@ -0,0 +1,158 @@
++"""Tests for the fold-conditioned cmap assembly (cmap_utils.py).
++
++The centerpiece is a *differential* test: ``_reference_cmap`` is an independent
++re-implementation of the assembly, and we assert that
++``assemble_fold_conditioned_cmap`` produces bit-identical output across a range
++of inputs (standard, default-hotspot, masked, and VHH-like cases).
++
++There are also explicit small-case value tests covering the index conventions
++(inclusive set_range, residue R -> array index R-1) and adversarial binder_mask
++inputs (terminal and out-of-range residues).
++"""
++import numpy as np
++import pytest
++
++import cmap_utils as cu
++from biopython_utils import set_range
++
++
++# ---------------------------------------------------------------------------
++# Independent re-implementation of the cmap assembly, used as a differential
++# cross-check against assemble_fold_conditioned_cmap (standard/non-VHH path,
++# which subsumes the VHH path as a special case).
++# ---------------------------------------------------------------------------
++def _reference_cmap(load_np, target_len, binder_len, target_hotspots,
++                    binder_hotspots, binder_mask):
++    load_np = np.array(load_np, copy=True)  # avoid cross-test mutation
++    if binder_mask != '':
++        for r in set_range(binder_mask):  # 1-based residue -> index R-1
++            load_np[r - 1, :] = 0.
++            load_np[:, r - 1] = 0.
++
++    target_hotspots_np = np.array(set_range(target_hotspots))
++
++    fc_cmap = np.zeros((target_len + binder_len, target_len + binder_len))
++
++    if binder_hotspots == '':
++        cdr_range = np.array([range(0, binder_len)]) + target_len
++    else:
++        cdr_range = np.array(set_range(binder_hotspots)) + target_len
++
++    fc_cmap[-binder_len:, -binder_len:] = load_np
++
++    for i in target_hotspots_np:
++        for x in cdr_range:
++            fc_cmap[x - 1, i - 1] = 1.
++            fc_cmap[i - 1, x - 1] = 1.
++
++    return fc_cmap
++
++
++# Deterministic pseudo-random binder cmap (no Math.random/global-seed needed).
++def _fake_binder_cmap(binder_len, seed=0):
++    rng = np.random.default_rng(seed)
++    m = rng.random((binder_len, binder_len))
++    return (m + m.T) / 2.0  # symmetric, like a real contact map
++
++
++# (target_len, binder_len, target_hotspots, binder_hotspots, binder_mask)
++DIFFERENTIAL_CASES = [
++    (5, 4, "2-4", "1-3", ""),            # explicit binder hotspots
++    (5, 4, "2-4", "", ""),               # default: all binder residues
++    (6, 5, "1-3,5", "2-4", "2-3"),       # with a binder mask
++    (8, 6, "3-6", "1-2,4-6", ""),        # multiple hotspot ranges
++    (10, 127, "5-9,20", "26-35,55-59,102-116", ""),  # VHH-like geometry
++    (4, 3, "1", "1", ""),                # singletons
++]
++
++
++@pytest.mark.parametrize(
++    "target_len,binder_len,t_hot,b_hot,b_mask", DIFFERENTIAL_CASES
++)
++def test_matches_reference_implementation(target_len, binder_len, t_hot,
++                                          b_hot, b_mask):
++    binder_cmap = _fake_binder_cmap(binder_len)
++    expected = _reference_cmap(binder_cmap, target_len, binder_len,
++                               t_hot, b_hot, b_mask)
++    got = cu.assemble_fold_conditioned_cmap(
++        binder_cmap, target_len, binder_len, t_hot, b_hot, b_mask
++    )
++    np.testing.assert_array_equal(got, expected)
++
++
++# ---------------------------------------------------------------------------
++# Explicit value/structure checks
++# ---------------------------------------------------------------------------
++class TestStructure:
++    def test_shape_is_total_length(self):
++        bc = np.zeros((4, 4))
++        out = cu.assemble_fold_conditioned_cmap(bc, 5, 4, "2-3", "1-2", "")
++        assert out.shape == (9, 9)
++
++    def test_binder_block_placed_bottom_right(self):
++        bc = np.full((3, 3), 0.7)
++        out = cu.assemble_fold_conditioned_cmap(bc, 4, 3, "1", "", "")
++        # bottom-right 3x3 block holds the binder cmap values.
++        np.testing.assert_array_equal(out[-3:, -3:], bc)
++
++    def test_hotspot_contacts_are_symmetric(self):
++        bc = np.zeros((4, 4))
++        out = cu.assemble_fold_conditioned_cmap(bc, 5, 4, "2-4", "1-3", "")
++        np.testing.assert_array_equal(out, out.T)
++
++    def test_known_contact_entries(self):
++        # set_range is inclusive: target_hotspots="2-3" -> [2, 3];
++        # binder_hotspots="1-3" -> [1, 2, 3]; cdr_range = [1,2,3] + 5 = [6,7,8].
++        # contacts set at (x-1, i-1) and (i-1, x-1) for i in {2,3}, x-1 in {5,6,7}.
++        bc = np.zeros((4, 4))
++        out = cu.assemble_fold_conditioned_cmap(bc, 5, 4, "2-3", "1-3", "")
++        for r, c in [(5, 1), (1, 5), (6, 1), (1, 6), (7, 1)]:
++            assert out[r, c] == 1.0
++        # target residue 3 is now included (inclusive bound) -> (.,2) contacts present
++        assert out[6, 2] == 1.0 and out[2, 6] == 1.0
++        np.testing.assert_array_equal(out, out.T)  # symmetry preserved
++
++
++class TestApplyBinderMask:
++    def test_masks_correct_residues_one_based(self):
++        # binder_mask is 1-based residue numbers -> 0-based positions (R -> R-1).
++        bc = np.ones((5, 5))
++        masked = cu.apply_binder_mask(bc, "1-2")  # residues 1,2 -> indices 0,1
++        for idx in (0, 1):
++            assert np.all(masked[idx, :] == 0) and np.all(masked[:, idx] == 0)
++        # unmasked indices (2, 3, 4) untouched at their intersections
++        assert masked[2, 2] == 1 and masked[3, 4] == 1 and masked[4, 4] == 1
++        # input not mutated
++        assert np.all(bc == 1)
++
++    def test_terminal_range_does_not_crash(self):
++        # Regression: inclusive set_range makes "1-3" -> [1,2,3]; the old code
++        # used those as 0-based indices and raised IndexError on a 3-residue cmap.
++        bc = np.ones((3, 3))
++        masked = cu.apply_binder_mask(bc, "1-3")  # residues 1,2,3 -> indices 0,1,2
++        assert np.all(masked == 0)
++
++    def test_out_of_range_residue_raises(self):
++        bc = np.ones((3, 3))
++        with pytest.raises(ValueError):
++            cu.apply_binder_mask(bc, "1-4")  # residue 4 > 3-residue binder
++        with pytest.raises(ValueError):
++            cu.apply_binder_mask(bc, "0-2")  # residue 0 invalid (1-based)
++
++    def test_empty_mask_is_identity_copy(self):
++        bc = np.arange(9).reshape(3, 3).astype(float)
++        out = cu.apply_binder_mask(bc, "")
++        np.testing.assert_array_equal(out, bc)
++        assert out is not bc  # still a copy
++
++
++class TestBinarize:
++    def test_positive_entries_become_one(self):
++        a = np.array([[0.0, 0.3], [2.5, 0.0]])
++        out = cu.binarize_cmap(a)
++        np.testing.assert_array_equal(out, np.array([[0.0, 1.0], [1.0, 0.0]]))
++
++    def test_does_not_mutate_input(self):
++        a = np.array([[0.0, 0.3]])
++        cu.binarize_cmap(a)
++        assert a[0, 1] == 0.3

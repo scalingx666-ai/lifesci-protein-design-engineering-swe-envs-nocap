@@ -1,0 +1,38 @@
+diff --git a/bindsweeper/pyproject.toml b/bindsweeper/pyproject.toml
+index 51f1d61..6b4bc22 100644
+--- a/bindsweeper/pyproject.toml
++++ b/bindsweeper/pyproject.toml
+@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
+ 
+ [project]
+ name = "bindsweeper"
+-version = "2.2.0" 
++version = "2.2.1" 
+ authors = [
+     { name = "Dylan Silke", email = "silke.dy@wehi.edu.au"},
+     { name = "Josh Hardy", email = "hardy.j@wehi.edu.au"}
+diff --git a/nextflow.config b/nextflow.config
+index a51f5b9..b6e0ee2 100644
+--- a/nextflow.config
++++ b/nextflow.config
+@@ -688,6 +688,6 @@ manifest {
+     description     = 'Nextflow pipeline for protein design using RFdiffusion, BindCraft, ProteinMPNN, FullAtom MPNN, AlphaFold2 Initial-Guess, and Boltz-2.'
+     mainScript      = 'main.nf'
+     nextflowVersion = '!>=24.04.0'
+-    version         = '2.2.0'
++    version         = '2.2.1'
+     doi             = '10.1101/2025.09.24.678028'
+ }
+diff --git a/scripts/download_models.sh b/scripts/download_models.sh
+index 49967d4..7f64f76 100755
+--- a/scripts/download_models.sh
++++ b/scripts/download_models.sh
+@@ -176,7 +176,7 @@ if [ -d "mols" ]; then
+     print_success "Boltz-2 mols directory already extracted, skipping..."
+ else
+     print_status "Extracting Boltz-2 molecular data... (only amino acids are needed for protein design)"
+-    tar -tf mols.tar | grep -E 'mols/(ALA|ARG|ASN|ASP|CYS|GLU|GLN|GLY|HIS|ILE|LEU|LYS|MET|PHE|PRO|SER|THR|TRP|TYR|VAL|UNK)\.pkl$' | xargs -d '\n' -I {} tar -xvf mols.tar "{}" || exit 1
++    tar -tf mols.tar | grep -E 'mols/(ALA|ARG|ASN|ASP|CYS|GLU|GLN|GLY|HIS|ILE|LEU|LYS|MET|PHE|PRO|SER|THR|TRP|TYR|VAL|UNK)\.pkl$' | tr '\n' '\0' | xargs -0 -I {} tar -xvf mols.tar "{}" || exit 1
+     rm -f mols.tar
+     print_success "Boltz-2 molecular data extracted!"
+ fi

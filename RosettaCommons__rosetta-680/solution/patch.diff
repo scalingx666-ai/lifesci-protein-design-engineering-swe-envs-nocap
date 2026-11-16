@@ -1,0 +1,124 @@
+diff --git a/source/src/utility/keys/ClassKeyMap.hh b/source/src/utility/keys/ClassKeyMap.hh
+index ebf11838deb..b7ebd7b7932 100644
+--- a/source/src/utility/keys/ClassKeyMap.hh
++++ b/source/src/utility/keys/ClassKeyMap.hh
+@@ -130,7 +130,7 @@ public: // Creation
+ 	) :
+ 		v_( beg, end )
+ 	{
+-		for ( Index i = 1, e = v_.size(); i != e; ++i ) {
++		for ( Index i = 1, e = v_.size(); i <= e; ++i ) {
+ 			add_key( v_[ i ].first );
+ 		}
+ 	}
+@@ -206,7 +206,7 @@ public: // Assignment
+ 	{
+ 		clear();
+ 		v_.assign( beg, end );
+-		for ( Index i = 1, e = v_.size(); i != e; ++i ) {
++		for ( Index i = 1, e = v_.size(); i <= e; ++i ) {
+ 			add_key( v_[ i ].first );
+ 		}
+ 	}
+diff --git a/source/src/utility/keys/SmallKeyMap.hh b/source/src/utility/keys/SmallKeyMap.hh
+index b0cc1e67453..77d689fef7a 100644
+--- a/source/src/utility/keys/SmallKeyMap.hh
++++ b/source/src/utility/keys/SmallKeyMap.hh
+@@ -130,7 +130,7 @@ public: // Creation
+ 		v_( beg, end ),
+ 		u_( 0 )
+ 	{
+-		for ( Index i = 1, e = v_.size(); i != e; ++i ) {
++		for ( Index i = 1, e = v_.size(); i <= e; ++i ) {
+ 			add_key( v_[ i ].first );
+ 		}
+ 	}
+@@ -208,7 +208,7 @@ public: // Assignment
+ 	{
+ 		clear();
+ 		v_.assign( beg, end );
+-		for ( Index i = 1, e = v_.size(); i != e; ++i ) {
++		for ( Index i = 1, e = v_.size(); i <= e; ++i ) {
+ 			add_key( v_[ i ].first );
+ 		}
+ 	}
+diff --git a/source/test/utility/keys/ClassKeyMap.cxxtest.hh b/source/test/utility/keys/ClassKeyMap.cxxtest.hh
+index 0d523152be9..4fd566774e0 100644
+--- a/source/test/utility/keys/ClassKeyMap.cxxtest.hh
++++ b/source/test/utility/keys/ClassKeyMap.cxxtest.hh
+@@ -17,6 +17,9 @@
+ #include <cxxtest/TestSuite.h>
+ #include <utility/keys/ClassKeyMap.hh>
+ 
++// C++ headers
++#include <vector>
++
+ 
+ // --- set up the individual test cases
+ class KeyMapTests : public CxxTest::TestSuite {
+@@ -89,6 +92,24 @@ class KeyMapTests : public CxxTest::TestSuite {
+ 		TS_ASSERT( m[ 9 ] == 33 );
+ 	}
+ 
+-};
++	void test_ClassKeyMap_range_operations_activate_last_key() {
++
++		typedef  utility::keys::ClassKeyMap< int, int, char >  Map;
++		typedef  std::vector< Map::Value >  Values;
++
++		Values values;
++		values.push_back( Map::Value( 4, 44 ) );
++		values.push_back( Map::Value( 8, 88 ) );
+ 
++		Map constructed( values.begin(), values.end() );
++		TS_ASSERT( constructed.has( 8 ) );
++		TS_ASSERT_EQUALS( constructed[ 8 ], 88 );
++
++		Map assigned;
++		assigned.assign( values.begin(), values.end() );
++		TS_ASSERT( assigned.has( 8 ) );
++		TS_ASSERT_EQUALS( assigned[ 8 ], 88 );
++	}
++
++};
+ 
+diff --git a/source/test/utility/keys/SmallKeyMap.cxxtest.hh b/source/test/utility/keys/SmallKeyMap.cxxtest.hh
+index b36ed560f82..474c0a7f6f1 100644
+--- a/source/test/utility/keys/SmallKeyMap.cxxtest.hh
++++ b/source/test/utility/keys/SmallKeyMap.cxxtest.hh
+@@ -18,6 +18,9 @@
+ #include <cxxtest/TestSuite.h>
+ #include <utility/keys/SmallKeyMap.hh>
+ 
++// C++ headers
++#include <vector>
++
+ 
+ class SmallKeyMapTests : public CxxTest::TestSuite {
+ 
+@@ -88,6 +91,24 @@ class SmallKeyMapTests : public CxxTest::TestSuite {
+ 		TS_ASSERT( m[ 9 ] == 33 );
+ 	}
+ 
+-};
++	void test_SmallKeyMap_range_operations_activate_last_key() {
++
++		typedef  utility::keys::SmallKeyMap< int, int >  Map;
++		typedef  std::vector< Map::Value >  Values;
++
++		Values values;
++		values.push_back( Map::Value( 4, 44 ) );
++		values.push_back( Map::Value( 8, 88 ) );
+ 
++		Map constructed( values.begin(), values.end() );
++		TS_ASSERT( constructed.has( 8 ) );
++		TS_ASSERT_EQUALS( constructed[ 8 ], 88 );
++
++		Map assigned;
++		assigned.assign( values.begin(), values.end() );
++		TS_ASSERT( assigned.has( 8 ) );
++		TS_ASSERT_EQUALS( assigned[ 8 ], 88 );
++	}
++
++};
+ 

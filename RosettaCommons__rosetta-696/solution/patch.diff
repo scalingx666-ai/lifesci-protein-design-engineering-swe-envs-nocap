@@ -1,0 +1,99 @@
+diff --git a/source/src/core/chemical/gasteiger/GasteigerAtomTypeData.cc b/source/src/core/chemical/gasteiger/GasteigerAtomTypeData.cc
+index a46709328be..f557844df07 100644
+--- a/source/src/core/chemical/gasteiger/GasteigerAtomTypeData.cc
++++ b/source/src/core/chemical/gasteiger/GasteigerAtomTypeData.cc
+@@ -751,7 +751,11 @@ GasteigerAtomTypeData::TypeDifference GasteigerAtomTypeData::difference_from( co
+ 		return None;
+ 	}
+ 
+-	if ( charge_ == OTHER.charge_ || element_type_ != OTHER.element_type_ || hybridization_ != OTHER.hybridization_ ) {
++	// Two atom types are "fundamentally different" (TypeDifference::Other) if any
++	// of charge / element / hybridization differ. The lone-pair / s-orbital /
++	// p-orbital classification below assumes these three are equal and uses
++	// `charge_` as a shared reference value, so this early-out is required.
++	if ( charge_ != OTHER.charge_ || element_type_ != OTHER.element_type_ || hybridization_ != OTHER.hybridization_ ) {
+ 		return Other;
+ 	}
+ 
+diff --git a/source/src/core/chemical/sdf/mol_util.cc b/source/src/core/chemical/sdf/mol_util.cc
+index c60c5d6ce91..2b42b52f43c 100644
+--- a/source/src/core/chemical/sdf/mol_util.cc
++++ b/source/src/core/chemical/sdf/mol_util.cc
+@@ -15,6 +15,7 @@
+ #include <utility/string_util.hh>
+ #include <map>
+ #include <set>
++#include <tuple>
+ #include <core/types.hh>
+ 
+ namespace core {
+@@ -35,7 +36,10 @@ BondData::BondData(core::Size index1, core::Size index2, core::Size type)
+ 
+ bool BondData::operator <(const core::chemical::sdf::BondData & other) const
+ {
+-	return (this->lower < other.lower) || (this->upper < other.upper);
++	// Lexicographic compare. Do NOT replace with `(lower<o.lower) || (upper<o.upper)`:
++	// that form violates strict weak ordering (e.g. (5,1) and (3,7) each compare less
++	// than the other), which breaks std::set<BondData> in parse_bond_type_data().
++	return std::tie( lower, upper ) < std::tie( other.lower, other.upper );
+ }
+ 
+ bool BondData::operator ==(const core::chemical::sdf::BondData& other) const
+diff --git a/source/src/core/io/StructFileReaderOptions.cc b/source/src/core/io/StructFileReaderOptions.cc
+index 363b6775eca..86fe6311087 100644
+--- a/source/src/core/io/StructFileReaderOptions.cc
++++ b/source/src/core/io/StructFileReaderOptions.cc
+@@ -136,20 +136,24 @@ StructFileReaderOptions::operator == ( StructFileReaderOptions const & other ) c
+ bool
+ StructFileReaderOptions::operator < ( StructFileReaderOptions const & other ) const
+ {
+-	if ( StructFileRepOptions::operator< ( other ) ) return true;
+-	if ( StructFileRepOptions::operator== ( other ) ) return false;
+-
+-	if ( new_chain_order_ <  other.new_chain_order_ ) return true;
+-	if ( new_chain_order_ == other.new_chain_order_ ) return false;
+-	if ( obey_ENDMDL_ <  other.obey_ENDMDL_  ) return true;
+-	if ( obey_ENDMDL_ == other.obey_ENDMDL_  ) return false;
+-	if ( read_pdb_header_ <  other.read_pdb_header_  ) return true;
+-	if ( read_pdb_header_ == other.read_pdb_header_  ) return false;
+-	if ( glycam_pdb_format_ <  other.glycam_pdb_format_  ) return true;
+-	if ( mmtf_extra_data_io_ < other.mmtf_extra_data_io_ ) return true;
+-	if ( mmtf_extra_data_io_ == other.mmtf_extra_data_io_ ) return false;
+-
+-	//if ( glycam_pdb_format_ == other.glycam_pdb_format_  ) return false;
++	// Lexicographic compare. The pattern is: for each tier, return true on `<`,
++	// return false on `!=` (i.e. on `>`), otherwise fall through to the next tier.
++	// Using `==` for the second check (the original form) returns false on equality
++	// and short-circuits before later tiers are ever consulted -- breaks ordering.
++	if (   StructFileRepOptions::operator<  ( other ) ) return true;
++	if ( ! StructFileRepOptions::operator== ( other ) ) return false;
++
++	if ( new_chain_order_      <  other.new_chain_order_      ) return true;
++	if ( new_chain_order_      != other.new_chain_order_      ) return false;
++	if ( obey_ENDMDL_          <  other.obey_ENDMDL_          ) return true;
++	if ( obey_ENDMDL_          != other.obey_ENDMDL_          ) return false;
++	if ( read_pdb_header_      <  other.read_pdb_header_      ) return true;
++	if ( read_pdb_header_      != other.read_pdb_header_      ) return false;
++	if ( glycam_pdb_format_    <  other.glycam_pdb_format_    ) return true;
++	if ( glycam_pdb_format_    != other.glycam_pdb_format_    ) return false;
++	if ( mmtf_extra_data_io_   <  other.mmtf_extra_data_io_   ) return true;
++	if ( mmtf_extra_data_io_   != other.mmtf_extra_data_io_   ) return false;
++
+ 	return false;
+ 
+ }
+diff --git a/source/src/core/scoring/motif/motif_hash_stuff.cc b/source/src/core/scoring/motif/motif_hash_stuff.cc
+index 6e788d29103..b6234f4abfd 100644
+--- a/source/src/core/scoring/motif/motif_hash_stuff.cc
++++ b/source/src/core/scoring/motif/motif_hash_stuff.cc
+@@ -259,7 +259,9 @@ char ResPairMotif::ss2  () const { if ( ss2_=='H'||ss2_=='I'||ss2_=='G' ) return
+ char ResPairMotif::dssp1() const { return ss1_; }
+ char ResPairMotif::dssp2() const { return ss2_; }
+ bool ResPairMotif::operator < (ResPairMotif const & other) const {
+-	return 0 <  memcmp(this,&other,sizeof(ResPairMotif));
++	// memcmp returns negative when *this is byte-wise less than other; the
++	// original form `0 < memcmp(...)` was the inverted predicate (greater-than).
++	return memcmp(this,&other,sizeof(ResPairMotif)) < 0;
+ }
+ bool ResPairMotif::operator ==(ResPairMotif const & other) const {
+ 	return 0 == memcmp(this,&other,sizeof(ResPairMotif));

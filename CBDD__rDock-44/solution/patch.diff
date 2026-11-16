@@ -1,0 +1,50 @@
+diff --git a/.github/workflows/build_generic.yml b/.github/workflows/build_generic.yml
+index f44be2fd..67c6adb8 100644
+--- a/.github/workflows/build_generic.yml
++++ b/.github/workflows/build_generic.yml
+@@ -8,6 +8,10 @@ on:
+         required: false
+         default: g++
+         type: string
++      arch:
++        required: false
++        default: x86_64
++        type: string
+ 
+ jobs:
+   build:
+@@ -31,4 +35,19 @@ jobs:
+       run: docker run --rm -v $PWD:/rdock -w /rdock rdock-${{ inputs.distribution }}:base make CXX=${{ inputs.compiler }} -j 2
+     
+     - name: Test rDock
+-      run: docker run --rm -v $PWD:/rdock -w /rdock rdock-${{ inputs.distribution }}:base make CXX=${{ inputs.compiler }} test
+\ No newline at end of file
++      run: docker run --rm -v $PWD:/rdock -w /rdock rdock-${{ inputs.distribution }}:base make CXX=${{ inputs.compiler }} test
++
++    - name: Set candidate name
++      id: set_candidate_name
++      run: echo "CANDIDATE_NAME=$(date +%y.%m).${{ github.event.number }}_${{ inputs.distribution }}_${{ inputs.compiler }}_${{ inputs.arch }}" >> "$GITHUB_OUTPUT"
++
++    - name: Create bundle
++      run: |
++        tar -czvf rdock.tar.gz \
++          bin/ lib/ include/ data/ scripts/ Makefile license.txt README.md old_README.md
++
++    - name: Upload bundle
++      uses: actions/upload-artifact@v3
++      with:
++        name: rdock-${{ steps.set_candidate_name.outputs.CANDIDATE_NAME }}.tar.gz
++        path: rdock.tar.gz
+diff --git a/tests/scripts/check_results.sh b/tests/scripts/check_results.sh
+index bcd05619..e633789a 100755
+--- a/tests/scripts/check_results.sh
++++ b/tests/scripts/check_results.sh
+@@ -32,7 +32,7 @@ function compare_scores {
+                 printf "[FAIL] scores differ: %f vs %f\n", $1, $2
+                 exit 1
+             } else {
+-                printf "[OK] - scores match\n"
++                printf "[OK] scores match\n"
+             }
+         }
+     '

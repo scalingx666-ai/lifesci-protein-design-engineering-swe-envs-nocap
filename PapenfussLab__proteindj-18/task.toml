@@ -1,0 +1,66 @@
+version = "1.0"
+
+[task]
+name = "default/PapenfussLab__proteindj-18"
+description = "Fix: Upgrades RFdiffusion and AF2 containers to CUDA 12.4 and 12.9 for improved hardware compatibility"
+
+[metadata]
+difficulty = "large"
+category = "bugfix"
+keywords = [
+    "proteindj",
+    "pr_diff",
+]
+
+[metadata.repo2env]
+pipeline = "pr_diff"
+pipeline_version = "0.3.0"
+repo = "PapenfussLab/proteindj"
+ref = "c26b1f5f8243aa0e07c1760ca2427aacf2afa09c"
+reference = "https://github.com/PapenfussLab/proteindj/pull/18"
+source_access = "auto"
+built_at = "2026-11-16T03:26:56.089574+00:00"
+reward_kinds = [
+    "diff_similarity",
+]
+spec_version = "0.2.0"
+content_hash = "sha256:0d181aa51f4d8599982a464e56a982c4e54af856c586a2c1c088fa93d4868b6a"
+
+[metadata.repo2env.pr_diff]
+pr_merged_at = "2025-11-12T09:13:41Z"
+diff_format = "unified"
+context_files = [
+    "README.md",
+    "apptainer/af2.def",
+    "apptainer/rfdiffusion.def",
+    "main.nf",
+    "modules/rfdiffusion.nf",
+]
+
+[metadata.repo2env.reward_calibration]
+baseline_reward = 0.0
+loc_changed = 167
+difficulty = "large"
+
+[metadata.repo2env.evaluation]
+schema_version = "1"
+status = "unverified"
+stage = "generation"
+reason_codes = [
+    "validation_not_run",
+]
+detail = "Generated task; validation has not been established."
+provenance = "unknown"
+evidence = []
+
+[metadata.repo2env.reproducibility]
+mode = "local_only"
+image_ref = "python:3.12-slim"
+image_tag = "python:3.12-slim"
+image_visibility = "private"
+
+[agent]
+timeout_sec = 1800.0
+
+[verifier]
+timeout_sec = 300.0

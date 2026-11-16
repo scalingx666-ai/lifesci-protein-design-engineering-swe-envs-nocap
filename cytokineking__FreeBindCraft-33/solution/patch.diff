@@ -1,0 +1,4188 @@
+diff --git a/extras/benchmark_metaljax_attention.py b/extras/benchmark_metaljax_attention.py
+new file mode 100644
+index 0000000..858a44e
+--- /dev/null
++++ b/extras/benchmark_metaljax_attention.py
+@@ -0,0 +1,192 @@
++"""Fixed-input forward/VJP probe for the disabled attention experiment.
++
++No optimizer, schedule, precision, recycling, or checkpointing changes. Use the
++baseline's --previous file for a same-state VJP comparison. Timers include host
++materialization; first calls are reported separately from warmed calls.
++"""
++import argparse
++import ast
++import ctypes
++import hashlib
++import importlib.metadata
++import importlib.util
++import json
++import os
++from pathlib import Path
++import resource
++import time
++
++import jax
++import jax.numpy as jnp
++import numpy as np
++from colabdesign import mk_afdesign_model
++from colabdesign.af.alphafold.common import residue_constants
++from colabdesign.af.loss import get_ptm, mask_loss, get_dgram_bins, _get_con_loss
++from monitor_macos_job import read_footprint
++
++
++class DispatchStats(ctypes.Structure):
++    # POD ABI of the unchanged private MLX runtime, metal/metal.h.
++    _fields_ = [(key, ctypes.c_uint64) for key in (
++        'dispatches command_buffers empty_command_buffers completed_command_buffers '
++        'gpu_busy_ns gpu_span_ns gpu_gap_ns queue_ns now_ns '
++        'slice_update_donated slice_update_copied').split()]
++
++
++def dispatch_reader():
++    path = importlib.metadata.distribution('metaljax').locate_file(
++        'metaljax/lib/mlx/lib/libmlx_metaljax.dylib')
++    library = ctypes.CDLL(str(path))
++    read = getattr(library, '_ZN3mlx4core5metal14dispatch_statsEv')
++    read.argtypes, read.restype = [], DispatchStats
++    def snapshot():
++        end = time.perf_counter()+0.05
++        value = read()
++        while value.completed_command_buffers < value.command_buffers and time.perf_counter() < end:
++            time.sleep(0.0001)
++            value = read()
++        return {key: getattr(value, key) for key, _ in DispatchStats._fields_}
++    return snapshot
++
++
++def digest(array):
++    a = np.asarray(array)
++    return hashlib.sha256(a.dtype.str.encode() + str(a.shape).encode() + a.tobytes()).hexdigest()
++
++
++def main():
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument('--assets', type=Path, required=True, help='Checkout containing params/ and example/')
++    parser.add_argument('--out', type=Path, required=True)
++    parser.add_argument('--previous', type=Path, help='Frozen baseline first-recycle state (.npz)')
++    parser.add_argument('--repeats', type=int, default=6)
++    parser.add_argument('--name', required=True)
++    parser.add_argument('--dump-hlo', action='store_true')
++    parser.add_argument('--profile', action='store_true', help='Enable runtime profiling fences only in warmed calls')
++    parser.add_argument('--pdb', type=Path, help='Target PDB; defaults to the bundled ubiquitin fixture')
++    parser.add_argument('--chain', default='A')
++    parser.add_argument('--binder-length', type=int, default=70)
++    parser.add_argument('--hotspot', default='44')
++    args = parser.parse_args()
++    if args.repeats < 1:
++        parser.error('--repeats must be positive')
++    if args.binder_length < 1:
++        parser.error('--binder-length must be positive')
++    if jax.default_backend() != 'metal':
++        parser.error('This probe requires JAX_PLATFORMS=metal')
++    jax.config.update('jax_enable_compilation_cache', False)
++    root = Path(__file__).resolve().parents[1]
++    args.out.mkdir(parents=True, exist_ok=True)
++    spec = importlib.util.spec_from_file_location('fbc_probe_metal', root/'functions/metal_utils.py')
++    metal = importlib.util.module_from_spec(spec)
++    spec.loader.exec_module(metal)
++    metal.enable_metal_alignment()
++
++    # The unchanged production loss callbacks, without native scoring imports.
++    source = ast.parse((root/'functions/colabdesign_utils.py').read_text())
++    selected = [n for n in source.body if isinstance(n, ast.FunctionDef) and n.name in
++                {'add_rg_loss', 'add_i_ptm_loss', 'add_helix_loss'}]
++    callbacks = dict(globals())
++    exec(compile(ast.Module(body=selected, type_ignores=[]), 'production_loss_callbacks', 'exec'), callbacks)
++
++    start = time.perf_counter()
++    model = mk_afdesign_model(protocol='binder', use_multimer=True,
++                             data_dir=str(args.assets), num_recycles=1, use_remat=True,
++                             model_names=['model_1_multimer_v3'])
++    target = args.pdb or args.assets/'example/ubiquitin_1ubq.pdb'
++    model.prep_inputs(pdb_filename=str(target), chain=args.chain,
++                      binder_len=args.binder_length, hotspot=args.hotspot, seed=42, rm_aa='C')
++    model.opt.update(dropout=True, soft=0.9, hard=0.0, temp=1.0)
++    model.opt['weights'].update(plddt=0.1, pae=0.4, i_pae=0.1, con=1., i_con=1.)
++    model.opt['con'].update(num=2, cutoff=14., binary=False, seqsep=9)
++    model.opt['i_con'].update(num=2, cutoff=20., binary=False)
++    for name, weight in [('add_rg_loss', 0.3), ('add_i_ptm_loss', 0.05), ('add_helix_loss', -0.3)]:
++        callbacks[name](model, weight)
++    length = int(model._inputs['residue_index'].shape[0])
++    model._inputs['opt'] = model.opt
++    model._inputs['prev'] = dict(prev_pos=np.zeros((length,37,3),np.float32),
++                                prev_msa_first_row=np.zeros((length,256),np.float32),
++                                prev_pair=np.zeros((length,length,128),np.float32))
++    key = jax.random.PRNGKey(42)
++
++    def call(fn):
++        return fn(model._params, model._model_params[0], model._inputs, key)
++
++    def settle(tree):
++        return jax.tree_util.tree_map(np.asarray, tree)
++
++    setup_seconds = time.perf_counter()-start
++    t = time.perf_counter()
++    forward_loss, forward = settle(call(model._model['fn']))
++    first_forward_seconds = time.perf_counter()-t
++    np.savez(args.out/f'{args.name}-previous.npz', **forward['prev'])
++    if args.previous:
++        with np.load(args.previous) as previous:
++            model._inputs['prev'] = {k: previous[k] for k in previous.files}
++    else:
++        model._inputs['prev'] = forward['prev']
++    previous_hashes = {k: digest(v) for k, v in model._inputs['prev'].items()}
++    if args.dump_hlo:
++        (args.out/f'{args.name}-forward.mlir').write_text(model._model['fn'].lower(model._params, model._model_params[0], model._inputs, key).as_text())
++        lowered = model._model['grad_fn'].lower(model._params, model._model_params[0], model._inputs, key)
++        (args.out/f'{args.name}-gradient.mlir').write_text(lowered.as_text())
++
++    t = time.perf_counter()
++    first = settle(call(model._model['grad_fn']))
++    first_grad_seconds = time.perf_counter()-t
++    times = []
++    read_dispatch = dispatch_reader()
++    gradient_dispatch, forward_dispatch = [], []
++    for i in range(args.repeats):
++        if args.profile: os.environ['FBC_PROFILE_ACTIVE']=f'gradient-{i}'
++        before = read_dispatch()
++        t = time.perf_counter()
++        (loss,aux),grad = settle(call(model._model['grad_fn']))
++        times.append(time.perf_counter()-t)
++        after = read_dispatch()
++        gradient_dispatch.append({k: after[k]-before[k] for k in before})
++    forward_times=[]
++    for i in range(args.repeats):
++        if args.profile: os.environ['FBC_PROFILE_ACTIVE']=f'forward-{i}'
++        before = read_dispatch()
++        t=time.perf_counter()
++        warm_loss,warm=settle(call(model._model['fn']))
++        forward_times.append(time.perf_counter()-t)
++        after = read_dispatch()
++        forward_dispatch.append({k: after[k]-before[k] for k in before})
++    os.environ['FBC_PROFILE_ACTIVE']='0'
++    np.savez(args.out/f'{args.name}-warm-forward.npz',loss=warm_loss,xyz=warm['atom_positions'],plddt=warm['plddt'])
++    assert np.isfinite(loss) and np.isfinite(grad['seq']).all()
++    assert np.isfinite(aux['atom_positions']).all()
++    assert previous_hashes == {k: digest(v) for k, v in model._inputs['prev'].items()}
++    np.savez(args.out/f'{args.name}.npz', loss=loss, grad=grad['seq'], xyz=aux['atom_positions'],
++             plddt=aux['plddt'], initial_seq=np.asarray(model._params['seq']),
++             forward_loss=forward_loss, forward_xyz=forward['atom_positions'], forward_plddt=forward['plddt'],
++             **{f'loss_{k}': v for k, v in aux['losses'].items()})
++    report = dict(name=args.name, backend=jax.default_backend(), jax=jax.__version__,
++        metaljax=importlib.metadata.version('metaljax'),
++        precision=os.environ.get('METALJAX_MATMUL_PRECISION','high'),
++        plugin=os.environ.get('METALJAX_PLUGIN_PATH', 'installed'),
++        use_bfloat16=model._args['use_bfloat16'], use_remat=model._args['use_remat'],
++        subbatch=model._cfg.model.global_config.subbatch_size, length=length,
++        target_pdb_sha256=hashlib.sha256(target.read_bytes()).hexdigest(),
++        chain=args.chain, binder_length=args.binder_length, hotspot=args.hotspot,
++        model='model_1_multimer_v3', fixed_rng=True, dropout=True,
++        sequence_sha256=digest(model._params['seq']), key_sha256=digest(key), previous_sha256=previous_hashes,
++        setup_seconds=setup_seconds, first_forward_seconds=first_forward_seconds,
++        first_grad_seconds=first_grad_seconds, grad_seconds=times, median_grad_seconds=float(np.median(times)),
++        loss=float(loss), grad_norm=float(np.linalg.norm(grad['seq'])),
++        process_peak_rss_bytes=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
++        **read_footprint(os.getpid()),
++        forward_seconds=forward_times, median_forward_seconds=float(np.median(forward_times)),
++        gradient_dispatch=gradient_dispatch, forward_dispatch=forward_dispatch,
++        attention=os.environ.get('METALJAX_EVO_ATTN','0'), profiling=args.profile,
++        persistent_jax_cache=False,
++        plugin_sha256=hashlib.sha256(Path(importlib.metadata.distribution('metaljax').locate_file('metaljax/lib/libmetal_pjrt_native.dylib')).read_bytes()).hexdigest(),
++        scope='Fixed-input AF2 forward and last-recycle VJP, not a trajectory or quality benchmark')
++    (args.out/f'{args.name}.json').write_text(json.dumps(report, indent=2)+'\n')
++    print(json.dumps(report, indent=2), flush=True)
++
++
++if __name__ == '__main__':
++    main()
+diff --git a/extras/run_metaljax_attention_comparison.py b/extras/run_metaljax_attention_comparison.py
+new file mode 100644
+index 0000000..af2dcdb
+--- /dev/null
++++ b/extras/run_metaljax_attention_comparison.py
+@@ -0,0 +1,198 @@
++"""Sequential fresh-process attention comparison with continuous contention logs.
++
++Samples are correlated within each process. ABBA+BAAB gives four fresh processes
++per arm; this does not independently control desktop/thermal/GPU activity.
++"""
++import argparse
++import hashlib
++import json
++import os
++from pathlib import Path
++import plistlib
++import signal
++import subprocess
++import sys
++import time
++
++import numpy as np
++import psutil
++
++
++def snapshot():
++    processes = []
++    for process in psutil.process_iter(['pid', 'name', 'cpu_times', 'memory_info']):
++        try:
++            p = process.info
++            if p['cpu_times'] is None or p['memory_info'] is None:
++                continue
++            processes.append(dict(pid=p['pid'], name=p['name'],
++                                  cpu_seconds=p['cpu_times'].user+p['cpu_times'].system,
++                                  rss_bytes=p['memory_info'].rss))
++        except (psutil.AccessDenied, psutil.NoSuchProcess):
++            pass
++    result = subprocess.run(['ioreg', '-a', '-r', '-c', 'AGXAccelerator', '-d', '1'],
++                            capture_output=True)
++    try:
++        gpu = [d.get('PerformanceStatistics', {}) for d in plistlib.loads(result.stdout)]
++    except (ValueError, plistlib.InvalidFileException):
++        gpu = []
++    return dict(time=time.time(), processes=processes, gpu=gpu)
++
++
++def activity_since(previous, current, own):
++    old = {p['pid']: p for p in previous['processes']}
++    dt = current['time']-previous['time']
++    active, busy = [], []
++    for process in current['processes']:
++        if process['pid'] not in old or process['pid'] in own:
++            continue
++        cpu = (process['cpu_seconds']-old[process['pid']]['cpu_seconds'])/dt*100
++        process = dict(process, cpu_percent=cpu)
++        if cpu > 1:
++            active.append(process)
++        compute = process['name'].lower().startswith(('python', 'clang', 'java', 'ollama', 'blender'))
++        if (compute and cpu > 25) or cpu > 150:
++            busy.append(process)
++    return active, busy, dt
++
++
++def main():
++    root = Path(__file__).resolve().parents[1]
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument('--baseline-python', type=Path, required=True)
++    parser.add_argument('--candidate-python', type=Path, required=True)
++    parser.add_argument('--assets', type=Path, required=True)
++    parser.add_argument('--previous', type=Path, required=True)
++    parser.add_argument('--out', type=Path, required=True)
++    parser.add_argument('--order', default='ABBABAAB')
++    parser.add_argument('--repeats', type=int, default=6)
++    parser.add_argument('--pdb', type=Path)
++    parser.add_argument('--hotspot', default='44')
++    parser.add_argument('--binder-length', type=int, default=70)
++    args = parser.parse_args()
++    if set(args.order) - {'A', 'B'} or args.repeats < 1:
++        parser.error('Use an A/B order and positive repeat count')
++    args.out = args.out.absolute()
++    if args.out.exists():
++        parser.error('Choose a fresh output directory')
++    args.out.mkdir(parents=True)
++    env = dict(os.environ, JAX_PLATFORMS='metal', METALJAX_MATMUL_PRECISION='high',
++               METALJAX_MEM_BUDGET_MB='16384', MPLBACKEND='Agg')
++    for key in ['METALJAX_PLUGIN_PATH', 'METALJAX_DEBUG', 'METALJAX_TIMING',
++                'FBC_ATTN_PROFILE', 'FBC_PROFILE_ACTIVE', 'METALJAX_EVO_ATTN_KERNEL',
++                'METALJAX_EVO_ATTN_LOGITS']:
++        env.pop(key, None)
++    # Record all visible processes over time, without an age-based exemption.
++    # A sustained compute process stops only our job; other workloads are kept.
++    previous = snapshot()
++    counts, results, baseline_fields = {'A': 0, 'B': 0}, [], None
++    with (args.out/'contention.jsonl').open('w') as activity:
++        activity.write(json.dumps(dict(stage='preflight', **previous))+'\n')
++        for arm in args.order:
++            counts[arm] += 1
++            name = f'{arm.lower()}{counts[arm]}'
++            # A bounded quiet-window check before every process. CPU sampling
++            # cannot establish GPU exclusivity or controlled thermal state.
++            deadline, quiet_since = time.monotonic()+180, time.monotonic()
++            while time.monotonic()-quiet_since < 6:
++                time.sleep(1)
++                current = snapshot()
++                active, busy, _ = activity_since(previous, current, {os.getpid()})
++                activity.write(json.dumps(dict(stage=name+'-preflight', active=active, **current))+'\n')
++                activity.flush()
++                previous = current
++                if busy:
++                    quiet_since = time.monotonic()
++                if time.monotonic() > deadline:
++                    raise RuntimeError('No six-second CPU quiet window within 180 seconds; other workloads retained')
++            python = (args.baseline_python if arm == 'A' else args.candidate_python).absolute()
++            run_env = dict(env, METALJAX_EVO_ATTN='1' if arm == 'B' else '0')
++            command = [str(python), str(root/'extras/monitor_macos_job.py'),
++                       '--output-dir', str(args.out/(name+'-monitor')), '--interval', '1',
++                       '--max-tree-rss-gib', '24', '--max-hours', '0.12', '--',
++                       str(python), str(root/'extras/benchmark_metaljax_attention.py'),
++                       '--assets', str(args.assets.absolute()), '--previous', str(args.previous.absolute()),
++                       '--out', str(args.out), '--name', name, '--repeats', str(args.repeats),
++                       '--hotspot', args.hotspot, '--binder-length', str(args.binder_length)]
++            if args.pdb:
++                command.extend(['--pdb', str(args.pdb.absolute())])
++            sustained = {}
++            reason = None
++            with (args.out/(name+'-launch.log')).open('w') as log:
++                child = subprocess.Popen(command, env=run_env, stdout=log,
++                                         stderr=subprocess.STDOUT, start_new_session=True)
++                while child.poll() is None:
++                    time.sleep(1)
++                    current = snapshot()
++                    try:
++                        own = {os.getpid(), *[p.pid for p in psutil.Process().children(recursive=True)]}
++                    except psutil.NoSuchProcess:
++                        own = {os.getpid(), child.pid}
++                    active, busy, dt = activity_since(previous, current, own)
++                    busy_ids = {p['pid'] for p in busy}
++                    sustained = {pid: duration for pid, duration in sustained.items() if pid in busy_ids}
++                    for p in busy:
++                        sustained[p['pid']] = sustained.get(p['pid'], 0)+dt
++                        if sustained[p['pid']] >= 4:
++                            reason = f"Concurrent compute: {p['name']} pid {p['pid']}"
++                    activity.write(json.dumps(dict(stage=name, active=active, **current))+'\n')
++                    activity.flush()
++                    previous = current
++                    if reason:
++                        # The memory monitor gives its native child a separate
++                        # process group. Stop both of our groups, never a peer.
++                        groups = [child.pid]
++                        pid_file = args.out/(name+'-monitor')/'pid'
++                        if pid_file.exists():
++                            native_pid = int(pid_file.read_text())
++                            if native_pid in own:
++                                groups.insert(0, native_pid)
++                        for group in groups:
++                            try:
++                                os.killpg(group, signal.SIGTERM)
++                            except ProcessLookupError:
++                                pass
++                        try:
++                            child.wait(timeout=15)
++                        except subprocess.TimeoutExpired:
++                            for group in groups:
++                                try:
++                                    os.killpg(group, signal.SIGKILL)
++                                except ProcessLookupError:
++                                    pass
++                            child.wait()
++                        break
++                child.wait()
++            if reason or child.returncode:
++                (args.out/'failure.json').write_text(json.dumps(dict(reason=reason, returncode=child.returncode,
++                                                                    command=command), indent=2)+'\n')
++                raise RuntimeError(reason or f'Probe failed: {name}')
++            report = json.loads((args.out/(name+'.json')).read_text())
++            with np.load(args.out/(name+'.npz')) as data:
++                fields = {key: data[key] for key in data.files}
++            if baseline_fields is None:
++                baseline_fields = fields
++            equal = (fields.keys() == baseline_fields.keys() and
++                     all(fields[key].shape == baseline_fields[key].shape and
++                         fields[key].dtype == baseline_fields[key].dtype and
++                         fields[key].tobytes() == baseline_fields[key].tobytes() for key in fields))
++            if not equal:
++                raise RuntimeError(f'Full-model byte comparison failed: {name}')
++            with np.load(args.out/(name+'-warm-forward.npz')) as data:
++                warm_fields = {key: data[key] for key in data.files}
++            results.append(dict(arm=arm, name=name, command=command, report=report,
++                                all_18_fields_bit_identical=equal,
++                                warm_forward_hashes={k: hashlib.sha256(v.tobytes()).hexdigest()
++                                                     for k, v in warm_fields.items()}))
++            summary = dict(order=args.order, repeats_per_process=args.repeats, processes=results,
++                           scope='Fresh processes are sampling units; repeated calls within one are correlated.',
++                           contention_note='Continuous process and aggregate GPU samples are retained; desktop and thermal state are not controlled, and GPU activity is not attributed per process.')
++            for key in ('grad_seconds', 'forward_seconds'):
++                summary[key] = {a: [r['report'][key] for r in results if r['arm'] == a] for a in ('A', 'B')}
++            (args.out/'summary.json').write_text(json.dumps(summary, indent=2)+'\n')
++            print(name, 'gradient', report['median_grad_seconds'],
++                  'forward', report['median_forward_seconds'], 'exact', equal, flush=True)
++
++
++if __name__ == '__main__':
++    main()
+diff --git a/installation/build_metaljax_attention.py b/installation/build_metaljax_attention.py
+new file mode 100644
+index 0000000..2b20bf3
+--- /dev/null
++++ b/installation/build_metaljax_attention.py
+@@ -0,0 +1,135 @@
++#!/usr/bin/env python3
++"""Build the disabled attention experiment against the frozen fbc1 fork.
++
++Uses release.json and its archived SDK/XLA/Bazel inputs. Does not change default
++dependency pins or publish a release. --install targets only the selected venv.
++"""
++import argparse
++import importlib.util
++import json
++import os
++from pathlib import Path
++import platform
++import re
++import shutil
++import subprocess
++
++
++def main():
++    root = Path(__file__).resolve().parents[1]
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument('--python', type=Path, default=root/'.venv-metaljax-attention/bin/python')
++    parser.add_argument('--source-dir', type=Path, default=root/'.local/src/metaljax-attention')
++    parser.add_argument('--cache-dir', type=Path, default=root/'.local/attention-build')
++    parser.add_argument('--jobs', type=int, default=12)
++    parser.add_argument('--profile', action='store_true', help='Include diagnostic-only GPU fences')
++    parser.add_argument('--install', action='store_true')
++    args = parser.parse_args()
++    if (platform.system(), platform.machine()) != ('Darwin', 'arm64') or args.jobs < 1:
++        parser.error('Requires native arm64 macOS and positive --jobs')
++    python = args.python.absolute()  # retain the venv interpreter symlink
++    source, cache = args.source_dir.resolve(), args.cache_dir.resolve()
++    for path in (source, cache, python.parent.parent.resolve()):
++        if not path.is_relative_to(root) or path == root:
++            parser.error('Source, cache and selected venv must belong to this checkout')
++    spec = importlib.util.spec_from_file_location('frozen_builder', root/'installation/build_metaljax_apple.py')
++    base = importlib.util.module_from_spec(spec)
++    spec.loader.exec_module(base)
++    release = json.loads((root/'installation/metaljax/release.json').read_text())
++    query = ("import importlib.metadata as m,json,sys; print(json.dumps(dict("
++             "venv=sys.prefix!=sys.base_prefix,jax=m.version('jax'),jaxlib=m.version('jaxlib'))))")
++    target = json.loads(subprocess.check_output([str(python), '-c', query], text=True))
++    if not target['venv'] or any(target[k] != release[k] for k in ('jax', 'jaxlib')):
++        parser.error('Select an isolated venv with JAX/jaxlib 0.11.2')
++    if not source.exists():
++        base.checkout(release['repository']+'.git', source, release['source_commit'])
++    current = subprocess.check_output(['git', '-C', str(source), 'rev-parse', 'HEAD'], text=True).strip()
++    if current != release['source_commit']:
++        raise RuntimeError(f'Preserving unexpected source HEAD: {current}')
++    patches = [root/'installation/metaljax/attention/0001-bf16-attention-epilogues.patch']
++    if args.profile:
++        patches.append(root/'installation/metaljax/attention/diagnostic-fences.patch')
++    patch_hashes = {p.name: base.sha(p) for p in patches}
++    targets = sorted({name for p in patches for name in
++                      re.findall(r'^\+\+\+ b/(.+)$', p.read_text(), re.M)})
++    stamp = source/'.freebindcraft-attention-source.json'
++
++    def fingerprint():
++        return {name: base.sha(source/name) for name in targets}
++
++    def changed_files():
++        return set(subprocess.check_output(
++            ['git', '-C', str(source), 'diff', '--name-only', 'HEAD'], text=True).splitlines())
++
++    build_files = {'plugin-native/.bazelrc', 'plugin-native/WORKSPACE'}
++    if stamp.exists():
++        saved = json.loads(stamp.read_text())
++        if saved != dict(patches=patch_hashes, files=fingerprint()):
++            raise RuntimeError('Preserving changed patch/source; choose a fresh --source-dir')
++        if changed_files() - set(targets) - build_files:
++            raise RuntimeError('Preserving unrelated source changes')
++    else:
++        if changed_files() - build_files:
++            raise RuntimeError('Preserving modified source; choose a fresh --source-dir')
++        for patch in patches:
++            base.run(['git', '-C', source, 'apply', '--check', patch])
++            base.run(['git', '-C', source, 'apply', patch])
++        if args.profile:
++            for name in ('pyproject.toml', 'src/metaljax/__init__.py'):
++                file = source/name
++                file.write_text(file.read_text().replace('0.11.9+fbc3attndev2', '0.11.9+fbc3attnprofile2'))
++        stamp.write_text(json.dumps(dict(patches=patch_hashes, files=fingerprint()), indent=2)+'\n')
++    if (source/'plugin-native/.bazelrc.user').exists():
++        raise RuntimeError('Preserving custom .bazelrc.user; choose a fresh --source-dir')
++
++    inputs = cache/'attention-inputs'
++    sdk_archive, xla_archive, bazel = inputs/'mlx-sdk.tar.gz', inputs/'xla.tar.gz', inputs/'bazel-8.7.0'
++    base.download(release['mlx_sdk'], sdk_archive)
++    base.download(release['xla'], xla_archive)
++    base.download(release['bazel'], bazel)
++    sdk = source/'src/metaljax/lib/mlx'
++    base.prepare_archive(sdk_archive, sdk, 'mlx')
++    base.prepare_archive(xla_archive, source/'xla-91888df6', 'xla-'+release['xla']['revision'])
++    bazel.chmod(0o755)
++    for name in build_files:
++        file = source/name
++        original = subprocess.check_output(['git', '-C', str(source), 'show', 'HEAD:'+name], text=True)
++        prepared = original.replace('/Users/oleg/metaljax', str(source)).replace(
++            'build --disk_cache=~/.cache/metaljax-bazel', f'build --disk_cache={cache}/bazel-disk-cache')
++        if file.read_text() not in (original, prepared):
++            raise RuntimeError(f'Preserving changed build configuration: {file}')
++        file.write_text(prepared)
++    env = dict(os.environ, METALJAX_MLX_DIR=str(sdk), UV_CACHE_DIR=str(cache/'uv-cache'),
++               SDKROOT=subprocess.check_output(['xcrun', '--show-sdk-path'], text=True).strip())
++    flags = ['--repositories_without_autoloads=cc_compatibility_proxy', '--macos_minimum_os=14.0',
++             '--host_copt=--target=arm64-apple-macosx14.0', '--host_linkopt=--target=arm64-apple-macosx14.0',
++             f'--jobs={args.jobs}', f'--disk_cache={cache}/bazel-disk-cache']
++    base.run([bazel, f'--output_user_root={cache}/bazel', 'build', *flags,
++              '//metal:libmetal_pjrt_native.dylib'], cwd=source/'plugin-native', env=env)
++    plugin = source/'plugin-native/bazel-bin/metal/libmetal_pjrt_native.dylib'
++    output = source/'build-tools/attention-wheels'
++    output.mkdir(parents=True, exist_ok=True)
++    constraints = output/'build-constraints.txt'
++    constraints.write_text(f"hatchling=={release['hatchling']}\n")
++    uv = shutil.which('uv') or str(root/'.local/bin/uv')
++    env.update(METALJAX_NATIVE_DYLIB=str(plugin), METALJAX_VENDORED_MLX=str(sdk))
++    base.run([uv, 'build', '--wheel', '--build-constraint', constraints, '--out-dir', output], cwd=source, env=env)
++    version = '0.11.9+fbc3attnprofile2' if args.profile else '0.11.9+fbc3attndev2'
++    wheel, = output.glob(f'metaljax-{version}-*.whl')
++    manifest = dict(builder_sha256=base.sha(Path(__file__)), version=version, frozen_source_commit=current, frozen_release=release,
++                    patches=patch_hashes, modified_source=fingerprint(), diagnostic_profile=args.profile,
++                    attention_enabled_by_default=False, build_flags=flags,
++                    compiler=subprocess.check_output(['xcrun', 'clang++', '--version'], text=True).strip(),
++                    python=subprocess.check_output([str(python), '--version'], text=True).strip(),
++                    uv=subprocess.check_output([uv, '--version'], text=True).strip(),
++                    macos=platform.mac_ver()[0], sdkroot=env['SDKROOT'], jax=target['jax'], jaxlib=target['jaxlib'],
++                    plugin_sha256=base.sha(plugin), wheel_sha256=base.sha(wheel),
++                    mlx_runtime={p.name: base.sha(p) for p in sorted((sdk/'lib').iterdir()) if p.is_file()})
++    (output/'build-manifest.json').write_text(json.dumps(manifest, indent=2)+'\n')
++    if args.install:
++        base.run([uv, 'pip', 'install', '--python', python, '--no-deps', '--reinstall', wheel], env=env)
++    print(f'Built disabled experiment: {wheel}\nManifest: {output}/build-manifest.json', flush=True)
++
++
++if __name__ == '__main__':
++    main()
+diff --git a/installation/metaljax/README.md b/installation/metaljax/README.md
+index 6faebd8..a54ccfb 100644
+--- a/installation/metaljax/README.md
++++ b/installation/metaljax/README.md
+@@ -9,6 +9,10 @@ wheel by default; no user build is needed.
+ On the measured 146-residue M5 Max fixture, warmed gradients improved 1.71×
+ and the full design stage improved 1.73×, with higher memory use.
+ 
++The separate [attention epilogue experiment](attention/README.md) requires an
++explicit development build and opt-in flag. The release described here remains
++the default Apple dependency.
++
+ ## Default installation and troubleshooting
+ 
+ ```bash
+diff --git a/installation/metaljax/attention/0001-bf16-attention-epilogues.patch b/installation/metaljax/attention/0001-bf16-attention-epilogues.patch
+new file mode 100644
+index 0000000..41b21d2
+--- /dev/null
++++ b/installation/metaljax/attention/0001-bf16-attention-epilogues.patch
+@@ -0,0 +1,1075 @@
++diff --git a/plugin-native/metal/BUILD b/plugin-native/metal/BUILD
++index 81e68ae7ee4b551208ad80c1cf907bf6441f1675..83dbdc5b2eabf4b0c7cca6e0d567e82e7b21cf75 100644
++--- a/plugin-native/metal/BUILD
+++++ b/plugin-native/metal/BUILD
++@@ -82,6 +82,7 @@ cc_library(
++ cc_library(
++     name = "metal_recognize",
++     srcs = [
+++        "metal_evo_attention.cc",
++         "metal_gdn.cc",
++         "metal_mla.cc",
++         "metal_moe.cc",
++diff --git a/plugin-native/metal/metal_evo_attention.cc b/plugin-native/metal/metal_evo_attention.cc
++new file mode 100644
++index 0000000000000000000000000000000000000000..92dadc3ada4487b478c08e924917aeffbff85f22
++--- /dev/null
+++++ b/plugin-native/metal/metal_evo_attention.cc
++@@ -0,0 +1,451 @@
+++// FreeBindCraft experimental BF16 Evoformer softmax forward/backward fusion.
+++// Bias/mask/clip epilogues may fuse. Attention GEMMs and projections stay literal.
+++#include <cmath>
+++#include <cstdio>
+++#include <cstdlib>
+++#include <map>
+++#include <set>
+++#include <string>
+++#include <vector>
+++
+++#include "evo_attention.h"
+++#include "llvm/ADT/DenseSet.h"
+++#include "llvm/Support/raw_ostream.h"
+++#include "metal/metal_recognize.h"
+++#include "mlir/IR/BuiltinAttributes.h"
+++#include "mlir/IR/BuiltinTypes.h"
+++namespace metaljax {
+++namespace {
+++using MlirOp = mlir::Operation;
+++std::string Name(MlirOp* o) {
+++  return o ? o->getName().getStringRef().str() : "";
+++}
+++MlirOp* Owner(mlir::Value v) { return v ? v.getDefiningOp() : nullptr; }
+++std::vector<int64_t> Shape(mlir::Value v) {
+++  auto t = mlir::dyn_cast<mlir::RankedTensorType>(v.getType());
+++  return t ? std::vector<int64_t>(t.getShape().begin(), t.getShape().end())
+++           : std::vector<int64_t>();
+++}
+++bool BF(mlir::Value v) {
+++  auto t = mlir::dyn_cast<mlir::RankedTensorType>(v.getType());
+++  return t && t.getElementType().isBF16();
+++}
+++bool F32(mlir::Value v) {
+++  auto t = mlir::dyn_cast<mlir::RankedTensorType>(v.getType());
+++  return t && t.getElementType().isF32();
+++}
+++std::vector<int64_t> Attr(MlirOp* o, const char* k) {
+++  auto a = o->getAttrOfType<mlir::DenseI64ArrayAttr>(k);
+++  return a ? std::vector<int64_t>(a.asArrayRef().begin(), a.asArrayRef().end())
+++           : std::vector<int64_t>();
+++}
+++bool Const(mlir::Value v, double expected) {
+++  MlirOp* o = Owner(v);
+++  if (!o) return false;
+++  if (Name(o) == "stablehlo.broadcast_in_dim" || Name(o) == "stablehlo.reshape")
+++    return Const(o->getOperand(0), expected);
+++  if (Name(o) != "stablehlo.constant") return false;
+++  auto a = o->getAttrOfType<mlir::DenseFPElementsAttr>("value");
+++  return a && a.isSplat() &&
+++         a.getSplatValue<llvm::APFloat>().convertToDouble() == expected;
+++}
+++bool View(MlirOp* o) {
+++  auto n = Name(o);
+++  if (n == "stablehlo.reshape") return true;
+++  if (n != "stablehlo.broadcast_in_dim") return false;
+++  auto ds = Attr(o, "broadcast_dimensions");
+++  for (size_t i = 0; i < ds.size(); ++i)
+++    if (ds[i] != (int64_t)i) return false;
+++  return true;
+++}
+++mlir::Value Peel(mlir::Value v, std::vector<MlirOp*>& ops) {
+++  while (MlirOp* o = Owner(v)) {
+++    if (!View(o)) break;
+++    ops.push_back(o);
+++    v = o->getOperand(0);
+++  }
+++  return v;
+++}
+++bool Reduce(MlirOp* o, mlir::Value x, bool maximum) {
+++  if (Name(o) != "stablehlo.reduce" || o->getNumOperands() != 2 ||
+++      o->getNumResults() != 1 ||
+++      Attr(o, "dimensions") != std::vector<int64_t>{3} || o->getOperand(0) != x)
+++    return false;
+++  if (!Const(o->getOperand(1), maximum ? -INFINITY : 0.0)) return false;
+++  if (o->getNumRegions() != 1 || !o->getRegion(0).hasOneBlock()) return false;
+++  auto& b = o->getRegion(0).front();
+++  if (b.getOperations().size() != 2) return false;
+++  MlirOp& r = b.front();
+++  return Name(&r) == (maximum ? "stablehlo.maximum" : "stablehlo.add") &&
+++         r.getOperand(0) == b.getArgument(0) &&
+++         r.getOperand(1) == b.getArgument(1);
+++}
+++// Short rows use a different frozen MLX BF16 reduction order and decline.
+++bool Geometry(mlir::Value v) {
+++  auto s = Shape(v);
+++  if (!BF(v) || s.size() != 4 || s[0] < 1 || (s[1] != 4 && s[1] != 8) ||
+++      s[2] < 16 || s[3] < 65 || s[3] > 512)
+++    return false;
+++  int64_t n = 1;
+++  for (auto d : s) {
+++    if (d < 1) return false;
+++    if (d > (1LL << 28) / n) return false;
+++    n *= d;
+++  }
+++  return n <= (1LL << 28) && n / s.back() >= 32;
+++}
+++bool Escapes(EvoAttentionMatch& m) {
+++  std::set<MlirOp*> own(m.ops.begin(), m.ops.end());
+++  llvm::DenseSet<mlir::Value> ports(m.outputs.begin(), m.outputs.end());
+++  for (MlirOp* o : own)
+++    for (auto v : o->getResults())
+++      for (MlirOp* u : v.getUsers())
+++        if (!own.count(u)) {
+++          if (!ports.count(v)) return true;
+++          while (u && u->getBlock() != m.root->getBlock()) u = u->getParentOp();
+++          if (!u || !m.root->isBeforeInBlock(u)) return true;
+++        }
+++  return false;
+++}
+++std::unique_ptr<EvoAttentionMatch> Forward(MlirOp* root) {
+++  if (Name(root) != "stablehlo.divide" || !Geometry(root->getResult(0)))
+++    return nullptr;
+++  auto m = std::make_unique<EvoAttentionMatch>();
+++  m->root = root;
+++  m->kind = 0;
+++  m->ops.push_back(root);
+++  MlirOp* ex = Owner(root->getOperand(0));
+++  if (Name(ex) != "stablehlo.exponential" || !BF(ex->getResult(0)))
+++    return nullptr;
+++  auto e = ex->getResult(0);
+++  auto den = Peel(root->getOperand(1), m->ops);
+++  MlirOp* dc = Owner(den);
+++  if (Name(dc) != "stablehlo.convert" || !BF(den) || !F32(dc->getOperand(0)))
+++    return nullptr;
+++  auto rs = Shape(e);
+++  rs.back() = 1;
+++  if (Shape(den) != rs) return nullptr;
+++  m->ops.push_back(dc);
+++  auto sv = Peel(dc->getOperand(0), m->ops);
+++  MlirOp* sum = Owner(sv);
+++  if (Name(sum) != "stablehlo.reduce") return nullptr;
+++  MlirOp* up = Owner(sum->getOperand(0));
+++  if (Name(up) != "stablehlo.convert" || !F32(up->getResult(0)) ||
+++      up->getOperand(0) != e || !Reduce(sum, up->getResult(0), false))
+++    return nullptr;
+++  MlirOp* sub = Owner(ex->getOperand(0));
+++  if (Name(sub) != "stablehlo.subtract" || !BF(sub->getResult(0)))
+++    return nullptr;
+++  auto x = sub->getOperand(0);
+++  if (Shape(x) != Shape(e) || !BF(x)) return nullptr;
+++  auto mv = Peel(sub->getOperand(1), m->ops);
+++  MlirOp* mx = Owner(mv);
+++  if (Name(mx) == "stablehlo.maximum") {
+++    if (Const(mx->getOperand(0), -INFINITY))
+++      mv = mx->getOperand(1);
+++    else if (Const(mx->getOperand(1), -INFINITY))
+++      mv = mx->getOperand(0);
+++    else
+++      return nullptr;
+++    m->ops.push_back(mx);
+++    mx = Owner(mv);
+++  }
+++  if (!Reduce(mx, x, true)) return nullptr;
+++  m->ops.insert(m->ops.end(), {ex, sum, up, sub, mx});
+++  m->inputs = {x};
+++  m->outputs = {root->getResult(0), e, den};
+++  if (Escapes(*m)) return nullptr;
+++  return m;
+++}
+++std::unique_ptr<EvoAttentionMatch> Backward(
+++    MlirOp* root, const llvm::DenseMap<mlir::Value, mlir::Value>& fwd) {
+++  if (Name(root) != "stablehlo.multiply" || !Geometry(root->getResult(0)))
+++    return nullptr;
+++  mlir::Value e, a;
+++  for (int i = 0; i < 2; ++i)
+++    if (fwd.count(root->getOperand(i))) {
+++      e = root->getOperand(i);
+++      a = root->getOperand(1 - i);
+++      break;
+++    }
+++  if (!e) return nullptr;
+++  MlirOp* add = Owner(a);
+++  if (Name(add) != "stablehlo.add" || !BF(a)) return nullptr;
+++  for (int side = 0; side < 2; ++side) {
+++    auto m = std::make_unique<EvoAttentionMatch>();
+++    m->root = root;
+++    m->kind = 1;
+++    m->ops = {root, add};
+++    MlirOp* div = Owner(add->getOperand(side));
+++    if (Name(div) != "stablehlo.divide") continue;
+++    auto g = div->getOperand(0);
+++    auto d = Peel(div->getOperand(1), m->ops);
+++    if (d != fwd.lookup(e) || !BF(g) || Shape(g) != Shape(e)) continue;
+++    m->ops.push_back(div);
+++    auto nv = add->getOperand(1 - side);
+++    MlirOp* neg = nullptr;
+++    bool bad = false;
+++    for (int depth = 0; depth < 12; ++depth) {
+++      nv = Peel(nv, m->ops);
+++      MlirOp* o = Owner(nv);
+++      if (Name(o) == "stablehlo.negate") {
+++        neg = o;
+++        break;
+++      }
+++      if (Name(o) == "stablehlo.convert" &&
+++          ((BF(nv) && F32(o->getOperand(0))) ||
+++           (F32(nv) && BF(o->getOperand(0))))) {
+++        m->ops.push_back(o);
+++        nv = o->getOperand(0);
+++        continue;
+++      }
+++      if (Name(o) == "stablehlo.reduce" && F32(nv) &&
+++          Shape(o->getOperand(0)).size() == 4 &&
+++          Shape(o->getOperand(0)).back() == 1 &&
+++          Reduce(o, o->getOperand(0), false)) {
+++        m->ops.push_back(o);
+++        nv = o->getOperand(0);
+++        continue;
+++      }
+++      bad = true;
+++      break;
+++    }
+++    if (bad || !neg || !BF(neg->getResult(0))) continue;
+++    m->ops.push_back(neg);
+++    auto red = Peel(neg->getOperand(0), m->ops);
+++    MlirOp* sum = Owner(red);
+++    if (Name(sum) != "stablehlo.reduce" || !BF(red)) continue;
+++    MlirOp* mul = Owner(sum->getOperand(0));
+++    if (Name(mul) != "stablehlo.multiply") continue;
+++    mlir::Value t;
+++    if (mul->getOperand(0) == e)
+++      t = mul->getOperand(1);
+++    else if (mul->getOperand(1) == e)
+++      t = mul->getOperand(0);
+++    else
+++      continue;
+++    if (!Reduce(sum, mul->getResult(0), false)) continue;
+++    MlirOp* gm = Owner(t);
+++    if (Name(gm) != "stablehlo.multiply" || !BF(t)) continue;
+++    mlir::Value rv;
+++    if (gm->getOperand(0) == g)
+++      rv = gm->getOperand(1);
+++    else if (gm->getOperand(1) == g)
+++      rv = gm->getOperand(0);
+++    else
+++      continue;
+++    auto r = Peel(rv, m->ops);
+++    if (!BF(r) || Shape(r) != Shape(d)) continue;
+++    m->ops.insert(m->ops.end(), {sum, mul, gm});
+++    m->inputs = {g, e, d, r};
+++    m->outputs = {root->getResult(0)};
+++    if (!Escapes(*m)) return m;
+++  }
+++  return nullptr;
+++}
+++int Param(mlir::Value v, mlir::Block& block) {
+++  for (int depth = 0; depth < 8; ++depth) {
+++    if (auto a = mlir::dyn_cast<mlir::BlockArgument>(v))
+++      return a.getOwner() == &block ? a.getArgNumber() : -1;
+++    MlirOp* o = Owner(v);
+++    if (!o) return -1;
+++    if (View(o) || Name(o) == "stablehlo.convert") {
+++      v = o->getOperand(0);
+++      continue;
+++    }
+++    return -1;
+++  }
+++  return -1;
+++}
+++mlir::func::FuncOp Callee(MlirOp* call) {
+++  auto ref = call->getAttrOfType<mlir::FlatSymbolRefAttr>("callee");
+++  auto module = call->getParentOfType<mlir::ModuleOp>();
+++  return ref && module ? module.lookupSymbol<mlir::func::FuncOp>(ref.getValue())
+++                       : mlir::func::FuncOp();
+++}
+++bool Clip(MlirOp* call, bool derivatives) {
+++  if (Name(call) != "func.call" || call->getNumOperands() != 3 ||
+++      call->getNumResults() != (derivatives ? 3 : 1))
+++    return false;
+++  auto fn = Callee(call);
+++  if (!fn || !fn.getBody().hasOneBlock()) return false;
+++  auto& b = fn.getBody().front();
+++  auto* ret = b.getTerminator();
+++  MlirOp* min = Owner(ret->getOperand(0));
+++  if (Name(min) != "stablehlo.minimum") return false;
+++  MlirOp* max = Owner(min->getOperand(1));
+++  if (Name(max) != "stablehlo.maximum") return false;
+++  auto lo = max->getOperand(0), x = max->getOperand(1), hi = min->getOperand(0);
+++  int lp = Param(lo, b), hp = Param(hi, b);
+++  if (Param(x, b) != 0 || lp < 1 || hp < 1 || lp == hp) return false;
+++  bool lower = Const(call->getOperand(lp), -1.e8) ||
+++               Const(call->getOperand(lp), -100139008.);
+++  bool upper = Const(call->getOperand(hp), 1.e8) ||
+++               Const(call->getOperand(hp), 100139008.);
+++  if (!lower || !upper) return false;
+++  if (!derivatives) return true;
+++  // Distinct broadcast nodes must resolve to the same scalar parameter.
+++  auto gate = [&](mlir::Value value, bool low) {
+++    auto* s = Owner(value);
+++    if (Name(s) != "stablehlo.select" || !Const(s->getOperand(1), 1.))
+++      return false;
+++    auto* gt = Owner(s->getOperand(0));
+++    auto* eqsel = Owner(s->getOperand(2));
+++    if (Name(gt) != "stablehlo.compare" || Name(eqsel) != "stablehlo.select" ||
+++        !Const(eqsel->getOperand(1), .5) || !Const(eqsel->getOperand(2), 0.))
+++      return false;
+++    auto* eq = Owner(eqsel->getOperand(0));
+++    if (Name(eq) != "stablehlo.compare") return false;
+++    for (auto* cmp : {gt, eq}) {
+++      auto a = cmp->getOperand(0), c = cmp->getOperand(1);
+++      if (!BF(a) || !BF(c)) return false;
+++      if (low) {
+++        if (Param(a, b) != 0 || Param(c, b) != lp) return false;
+++      } else if (Param(a, b) != hp || c != max->getResult(0))
+++        return false;
+++    }
+++    std::string t;
+++    llvm::raw_string_ostream os(t);
+++    gt->getAttr("comparison_direction").print(os);
+++    if (t.find("GT") == std::string::npos) return false;
+++    t.clear();
+++    eq->getAttr("comparison_direction").print(os);
+++    return t.find("EQ") != std::string::npos;
+++  };
+++  return gate(ret->getOperand(1), true) && gate(ret->getOperand(2), false);
+++}
+++mlir::Value BiasBase(mlir::Value v, std::vector<MlirOp*>& ops,
+++                     const std::vector<int64_t>& shape) {
+++  MlirOp* o = Owner(v);
+++  if (Name(o) != "stablehlo.broadcast_in_dim" ||
+++      Attr(o, "broadcast_dimensions") != std::vector<int64_t>{0, 1, 2, 3})
+++    return {};
+++  auto in = o->getOperand(0);
+++  auto s = Shape(in);
+++  if (s.size() != 4 || !BF(in)) return {};
+++  for (size_t i = 0; i < 4; ++i)
+++    if (s[i] != 1 && s[i] != shape[i]) return {};
+++  return in;
+++}
+++bool ClipVjp(MlirOp* call, mlir::Value low, mlir::Value high, mlir::Value dx) {
+++  if (Name(call) != "func.call" || call->getNumOperands() != 3 ||
+++      call->getNumResults() != 1 || call->getOperand(0) != low ||
+++      call->getOperand(1) != high || call->getOperand(2) != dx)
+++    return false;
+++  auto fn = Callee(call);
+++  if (!fn || !fn.getBody().hasOneBlock()) return false;
+++  auto& b = fn.getBody().front();
+++  if (b.getOperations().size() != 3) return false;
+++  MlirOp* outer = Owner(b.getTerminator()->getOperand(0));
+++  if (Name(outer) != "stablehlo.multiply" ||
+++      outer->getOperand(1) != b.getArgument(0))
+++    return false;
+++  MlirOp* inner = Owner(outer->getOperand(0));
+++  return Name(inner) == "stablehlo.multiply" &&
+++         inner->getOperand(0) == b.getArgument(2) &&
+++         inner->getOperand(1) == b.getArgument(1);
+++}
+++void ExtendLogits(RewritePlan* plan) {
+++  const char* toggle = std::getenv("METALJAX_EVO_ATTN_LOGITS");
+++  if (toggle && std::string(toggle) == "0") return;
+++  for (auto& f : plan->evo_attention) {
+++    if (f->kind != 0) continue;
+++    auto* clip = Owner(f->inputs[0]);
+++    const bool derivatives = clip && clip->getNumResults() == 3;
+++    if (!Clip(clip, derivatives)) continue;
+++    EvoAttentionMatch* back = nullptr;
+++    if (derivatives)
+++      for (auto& b : plan->evo_attention)
+++        if (b->kind == 1 && b->inputs[1] == f->outputs[1]) {
+++          back = b.get();
+++          break;
+++        }
+++    if (derivatives && !back) continue;
+++    std::vector<MlirOp*> extra{clip};
+++    auto raw = clip->getOperand(0);
+++    auto* add2 = Owner(raw);
+++    if (Name(add2) != "stablehlo.add") continue;
+++    auto* add1 = Owner(add2->getOperand(0));
+++    if (Name(add1) != "stablehlo.add") continue;
+++    auto qk = add1->getOperand(0);
+++    if (Name(Owner(qk)) != "stablehlo.dot_general" || !Geometry(qk)) continue;
+++    auto mask = BiasBase(add1->getOperand(1), extra, Shape(qk)),
+++         bias = BiasBase(add2->getOperand(1), extra, Shape(qk));
+++    if (!mask || !bias) continue;
+++    extra.push_back(add1);
+++    extra.push_back(add2);
+++    MlirOp* vjp = nullptr;
+++    if (back) {
+++      for (MlirOp* u : back->outputs[0].getUsers())
+++        if (ClipVjp(u, clip->getResult(1), clip->getResult(2),
+++                    back->outputs[0])) {
+++          vjp = u;
+++          break;
+++        }
+++      if (!vjp || !back->outputs[0].hasOneUse()) continue;
+++      if (!clip->getResult(1).hasOneUse() || !clip->getResult(2).hasOneUse())
+++        continue;
+++    }
+++    EvoAttentionMatch joint = *f;
+++    joint.ops.insert(joint.ops.end(), extra.begin(), extra.end());
+++    if (back) {
+++      joint.ops.insert(joint.ops.end(), back->ops.begin(), back->ops.end());
+++      joint.ops.push_back(vjp);
+++      joint.outputs.push_back(vjp->getResult(0));
+++    }
+++    // Escape validation is per original definition time; ports from the later
+++    // backward root naturally appear after the forward root.
+++    if (Escapes(joint)) continue;
+++    f->inputs = {qk, mask, bias};
+++    f->logits = true;
+++    f->ops.insert(f->ops.end(), extra.begin(), extra.end());
+++    if (back) {
+++      back->inputs.insert(back->inputs.end(), {qk, mask, bias});
+++      back->logits = true;
+++      back->ops.push_back(vjp);
+++      back->root = vjp;
+++      back->outputs = {vjp->getResult(0)};
+++    }
+++  }
+++}
+++
+++}  // namespace
+++void AnalyzeEvoAttention(mlir::func::FuncOp fn, RewritePlan* plan) {
+++  const char* enable = std::getenv("METALJAX_EVO_ATTN");
+++  if (!enable || std::string(enable) != "1") return;
+++  plan->rebuild();
+++  llvm::DenseMap<mlir::Value, mlir::Value> fwd;
+++  size_t nf = 0, nb = 0;
+++  auto accept = [&](std::unique_ptr<EvoAttentionMatch> m) {
+++    if (!m) return false;
+++    for (MlirOp* o : m->ops)
+++      if (plan->skip.contains(o)) return false;
+++    if (!EvoAttentionPrepare(Shape(m->inputs[0]).back())) return false;
+++    for (MlirOp* o : m->ops) plan->skip.insert(o);
+++    plan->evo_attention.push_back(std::move(m));
+++    return true;
+++  };
+++  auto module = fn->getParentOfType<mlir::ModuleOp>();
+++  module.walk([&](MlirOp* o) {
+++    auto m = Forward(o);
+++    if (m) {
+++      auto e = m->outputs[1], d = m->outputs[2];
+++      if (accept(std::move(m))) {
+++        fwd[e] = d;
+++        ++nf;
+++      }
+++    }
+++  });
+++  module.walk([&](MlirOp* o) {
+++    if (accept(Backward(o, fwd))) ++nb;
+++  });
+++  ExtendLogits(plan);
+++  size_t logits = 0;
+++  for (auto& m : plan->evo_attention) logits += m->logits;
+++  if (std::getenv("METALJAX_DEBUG"))
+++    std::fprintf(
+++        stderr,
+++        "[metaljax-native] evo-attn: forward=%zu backward=%zu logits=%zu\n", nf,
+++        nb, logits);
+++}
+++}  // namespace metaljax
++diff --git a/plugin-native/metal/metal_lowering.cc b/plugin-native/metal/metal_lowering.cc
++index a5253eae8d4a036be16445685f0dda0f036e92ac..7ed5d37bc1cd38500c0736fc42fa4be1813ab158 100644
++--- a/plugin-native/metal/metal_lowering.cc
+++++ b/plugin-native/metal/metal_lowering.cc
++@@ -1582,6 +1582,7 @@ int64_t RootCostUnit(const RewritePlan& plan, mlir::Operation* op) {
++   // The gated delta step: one generated kernel in place of ~80 ops, but it
++   // is a kernel and not a view -- priced like a fused attention.
++   if (plan.gdn_roots.count(op)) return 4;
+++  if (plan.evo_roots.count(op)) return 1;
++   if (plan.norm_roots.count(op)) return 1;
++   return 0;
++ }
++@@ -3110,6 +3111,7 @@ class Lowering {
++                                 const StackedPackMatch& m);
++   absl::Status LowerMla(mlir::Operation* op, const MlaMatch& m);
++   absl::Status LowerGdn(mlir::Operation* op, const GdnMatch& m);
+++  absl::Status LowerEvoAttention(mlir::Operation*,const EvoAttentionMatch&);
++   absl::Status LowerRmsNorm(mlir::Operation* op, const RmsNormMatch& m);
++   absl::Status LowerRopeView(mlir::Operation* op, const RopeMatch& m);
++   absl::Status LowerProjPack(mlir::Operation* op, const ProjPackMatch& m);
++@@ -8157,6 +8159,8 @@ absl::Status Lowering::LowerOpImpl(mlir::Operation* op) {
++       RETURN_IF_ERROR(CheckValue(gdn->second->state_root->getResult(0)));
++       return LowerGdn(op, *gdn->second);
++     }
+++    auto evo=ctx_->plan->evo_roots.find(op);
+++    if(evo!=ctx_->plan->evo_roots.end())return LowerEvoAttention(op,*evo->second);
++     auto norm = ctx_->plan->norm_roots.find(op);
++     if (norm != ctx_->plan->norm_roots.end()) {
++       if (op->getNumResults() != 1)
++@@ -8946,6 +8950,14 @@ absl::Status Lowering::LowerGdn(mlir::Operation* op, const GdnMatch& m) {
++ // has_weight, has_bias, offset_in_f32]; fattrs [eps, weight_offset].  MLX's
++ // weight argument is optional, and a norm with `with_scale=False` has none
++ // to bind.
+++absl::Status Lowering::LowerEvoAttention(mlir::Operation*op,const EvoAttentionMatch&m){
+++  std::vector<int> ins,outs;
+++  for(auto v:m.inputs){RETURN_IF_ERROR(CheckValue(v));ASSIGN_OR_RETURN(int slot,Slot(v));ins.push_back(slot);}
+++  for(auto v:m.outputs){RETURN_IF_ERROR(CheckValue(v));outs.push_back(Bind(v));}
+++  ASSIGN_OR_RETURN(int opcode,Opcode(m.kind?"metaljax.evo_attn_bwd":"metaljax.evo_attn_fwd"));
+++  Emit(opcode,std::move(ins),std::move(outs),{m.logits?1:0},std::nullopt,ResultBytes(op));return absl::OkStatus();
+++}
+++
++ absl::Status Lowering::LowerRmsNorm(mlir::Operation* op,
++                                     const RmsNormMatch& m) {
++   RETURN_IF_ERROR(CheckValue(m.x));
++@@ -10208,6 +10220,7 @@ absl::StatusOr<LoweredProgram> LowerModuleFused(
++     // (metal_rope.cc): a view rewrite, not a kernel, so it goes after every
++     // recognizer that could have claimed an operand of one.
++     AnalyzeRope(main, &plan);
+++    AnalyzeEvoAttention(main,&plan);
++     plan.rebuild();
++   } catch (const std::exception& e) {
++     // Analysis must never break a program (qmm.py `analyze`).
++diff --git a/plugin-native/metal/metal_qmm.cc b/plugin-native/metal/metal_qmm.cc
++index 959b88ee0adc19d464cc8111da058d836c425d34..e310532f6eb256eb2a40f9004d15ecfa84303e75 100644
++--- a/plugin-native/metal/metal_qmm.cc
+++++ b/plugin-native/metal/metal_qmm.cc
++@@ -2459,6 +2459,7 @@ void RewritePlan::rebuild() {
++   mla_roots.clear();
++   gdn_roots.clear();
++   norm_roots.clear();
+++  evo_roots.clear();
++   rope_roots.clear();
++   proj_roots.clear();
++   for (const auto& m : qmm) {
++@@ -2504,6 +2505,10 @@ void RewritePlan::rebuild() {
++     gdn_roots[m->root] = m.get();
++     for (mlir::Operation* o : m->ops) skip.insert(o);
++   }
+++  for (const auto& m : evo_attention) {
+++    evo_roots[m->root]=m.get();
+++    for(auto*o:m->ops)if(o!=m->root)skip.insert(o);
+++  }
++   for (const auto& m : norm) {
++     norm_roots[m->root] = m.get();
++     for (mlir::Operation* o : m->ops) skip.insert(o);
++diff --git a/plugin-native/metal/metal_recognize.h b/plugin-native/metal/metal_recognize.h
++index c37a4b6b2ec41b298d7daae0fb1c37c28dba01c0..a63386ce67c64524695d76c8a8c93a6804bfea5c 100644
++--- a/plugin-native/metal/metal_recognize.h
+++++ b/plugin-native/metal/metal_recognize.h
++@@ -521,6 +521,14 @@ struct MlaMatch {
++ // The fused-vs-literal difference is 1 bf16 ULP for the keras families and 2
++ // for gemma's (whose chain rounds the mean to bf16, making the kernel the
++ // more accurate side); both measured, see metal_norm.cc.
+++struct EvoAttentionMatch {
+++  bool logits=false;
+++  mlir::Operation* root=nullptr;
+++  int kind=0;
+++  std::vector<mlir::Value> inputs,outputs;
+++  std::vector<mlir::Operation*> ops;
+++};
+++
++ struct RmsNormMatch {
++   // The transpose (maxtext's dot form), multiply (broadcast weight apply, or
++   // the bare normalize when there is no weight), or convert (keras' downcast)
++@@ -710,6 +718,7 @@ struct RewritePlan {
++   std::vector<std::unique_ptr<StackedPackMatch>> stacked_pack;
++   std::vector<std::unique_ptr<MlaMatch>> mla;
++   std::vector<std::unique_ptr<GdnMatch>> gdn;
+++  std::vector<std::unique_ptr<EvoAttentionMatch>> evo_attention;
++   std::vector<std::unique_ptr<RmsNormMatch>> norm;
++   std::vector<std::unique_ptr<RopeMatch>> rope;
++   std::vector<std::unique_ptr<ProjPackMatch>> proj;
++@@ -727,6 +736,7 @@ struct RewritePlan {
++   llvm::DenseMap<mlir::Operation*, StackedPackMatch*> stacked_pack_roots;
++   llvm::DenseMap<mlir::Operation*, MlaMatch*> mla_roots;
++   llvm::DenseMap<mlir::Operation*, GdnMatch*> gdn_roots;
+++  llvm::DenseMap<mlir::Operation*, EvoAttentionMatch*> evo_roots;
++   llvm::DenseMap<mlir::Operation*, RmsNormMatch*> norm_roots;
++   llvm::DenseMap<mlir::Operation*, RopeMatch*> rope_roots;
++   llvm::DenseMap<mlir::Operation*, ProjPackMatch*> proj_roots;  // roots[0]
++@@ -747,7 +757,7 @@ struct RewritePlan {
++     return qmm_roots.empty() && sdpa_roots.empty() && moe_roots.empty() &&
++            ragged_roots.empty() && stacked_roots.empty() &&
++            stacked_pack_roots.empty() &&
++-           mla_roots.empty() && gdn_roots.empty() && norm_roots.empty() &&
+++           mla_roots.empty() && gdn_roots.empty() && evo_roots.empty() && norm_roots.empty() &&
++            rope_roots.empty() && proj_roots.empty();
++   }
++   // Recompute `skip` and the root maps from the matches that are still live.
++@@ -853,6 +863,7 @@ void AnalyzeGdn(mlir::func::FuncOp fn, RewritePlan* plan);
++ 
++ // The RMS norms (metal_norm.cc).  Runs LAST; roots at the weight-apply
++ // transpose.  Purely structural.  METALJAX_NORM=0 disables it.
+++void AnalyzeEvoAttention(mlir::func::FuncOp fn, RewritePlan* plan);
++ void AnalyzeNorm(mlir::func::FuncOp fn, RewritePlan* plan);
++ 
++ // The rotate-half rope applies (metal_rope.cc).  Runs AFTER the norms, and
++diff --git a/plugin-native/runtime/BUILD b/plugin-native/runtime/BUILD
++index e8423eea6837de60fb1e207c197a019da7d9b8ae..b4f82cf353927b4e88f5dbae1c1880cb65e618a6 100644
++--- a/plugin-native/runtime/BUILD
+++++ b/plugin-native/runtime/BUILD
++@@ -28,6 +28,7 @@ cc_library(
++         "control.cc",
++         "dtypes.cc",
++         "emits.cc",
+++        "evo_attention.cc",
++         "gdn.cc",
++         "host.cc",
++         "host_callback.cc",
++@@ -47,6 +48,7 @@ cc_library(
++     ],
++     hdrs = [
++         "gdn.h",
+++        "evo_attention.h",
++         "host_callback.h",
++         "host_lapack.h",
++         "mla.h",
++diff --git a/plugin-native/runtime/config.cc b/plugin-native/runtime/config.cc
++index b9505c06d71daa1741656d0f766116fb25bedb03..65722ccf2ce727c078ae4217dd53e0b2aecb6036 100644
++--- a/plugin-native/runtime/config.cc
+++++ b/plugin-native/runtime/config.cc
++@@ -146,6 +146,8 @@ const NamedOp kOpNames[] = {
++     // emit simply does not offer it, and tape.py declined the program —
++     // which is why there is no version negotiation anywhere else.
++     {"metaljax.qmm", kQmm},
+++    {"metaljax.evo_attn_fwd",kEvoAttentionForward},
+++    {"metaljax.evo_attn_bwd",kEvoAttentionBackward},
++     {"metaljax.sdpa", kSdpa},
++     {"metaljax.sdpa.mask", kSdpaMask},
++     {"metaljax.moe.eidx", kMoeEIdx},
++diff --git a/plugin-native/runtime/emits.cc b/plugin-native/runtime/emits.cc
++index 800fcd11c8c23cec6a55ddd6d11c6c47c7821dc3..c7e04b6418d6b131e3d3bee1d986fcf981912877 100644
++--- a/plugin-native/runtime/emits.cc
+++++ b/plugin-native/runtime/emits.cc
++@@ -13,6 +13,7 @@
++ 
++ #include "gdn.h"
++ #include "mla.h"
+++#include "evo_attention.h"
++ 
++ #include <algorithm>
++ #include <optional>
++@@ -164,6 +165,12 @@ bool Program::step_emit(const Entry& e,
++       break;
++     }
++ 
+++    case kEvoAttentionForward: {
+++      auto out=EvoAttentionForward(at[0]?std::vector<mx::array>{in(0),in(1),in(2)}:std::vector<mx::array>{in(0)},at[0]);for(size_t i=0;i<out.size();++i)env[e.outs[i]]=out[i];break;
+++    }
+++    case kEvoAttentionBackward: {
+++      env[e.outs[0]]=EvoAttentionBackward(at[0]?std::vector<mx::array>{in(0),in(1),in(2),in(3),in(4),in(5),in(6)}:std::vector<mx::array>{in(0),in(1),in(2),in(3)},at[0]);break;
+++    }
++     case kSdpa: {
++       // metaljax.sdpa.emit. attrs [q_rec, k_rec, v_rec, dtype, out_dtype,
++       //   masks (0/1/2), mask_rec, (mask2_rec), sinks?, sink_rec,
++diff --git a/plugin-native/runtime/evo_attention.cc b/plugin-native/runtime/evo_attention.cc
++new file mode 100644
++index 0000000000000000000000000000000000000000..6f03cdb99e0f7698d35925e1fd99c5644663696b
++--- /dev/null
+++++ b/plugin-native/runtime/evo_attention.cc
++@@ -0,0 +1,201 @@
+++// FreeBindCraft opt-in attention softmax epilogues. Explicit BF16 arithmetic
+++// and the frozen MLX row-reduction order, including the BF16 AD reduction.
+++#include "evo_attention.h"
+++
+++#include <cstdio>
+++#include <cstdlib>
+++#include <map>
+++#include <mutex>
+++#include <sstream>
+++namespace metaljax {
+++namespace {
+++struct Built {
+++  bool ok = false;
+++  mx::fast::CustomKernelFunction f, b, lf, lb;
+++};
+++std::mutex mu;
+++std::map<int64_t, Built> cache;
+++bool Kernel() {
+++  const char* s = std::getenv("METALJAX_EVO_ATTN_KERNEL");
+++  return !s || std::string(s) != "0";
+++}
+++std::string Source(int64_t n, bool back, bool logits = false) {
+++  std::ostringstream s;
+++  s << "const uint lane=thread_index_in_simdgroup;\nconst uint "
+++       "row=threadgroup_position_in_grid.x;\nconst uint N="
+++    << n << ";\nconst uint base=row*N;\n";
+++  if (logits)
+++    s << "const uint qdim=x_shape[2],hdim=x_shape[1];const uint "
+++         "qb=row%qdim,hb=(row/qdim)%hdim,bb=row/(qdim*hdim);\n"
+++      << "const uint "
+++         "mo=(mask_shape[0]==1?0:bb)*mask_strides[0]+(mask_shape[1]==1?0:hb)*"
+++         "mask_strides[1]+(mask_shape[2]==1?0:qb)*mask_strides[2];\n"
+++      << "const uint "
+++         "bo=(bias_shape[0]==1?0:bb)*bias_strides[0]+(bias_shape[1]==1?0:hb)*"
+++         "bias_strides[1]+(bias_shape[2]==1?0:qb)*bias_strides[2];\n"
+++      << "const bfloat16_t lo=bfloat16_t(-1.0e8f),hi=bfloat16_t(1.0e8f);\n";
+++  const std::string raw =
+++      "bfloat16_t "
+++      "raw=(x[base+i]+mask[mo+(mask_shape[3]==1?0:i)*mask_strides[3]])+bias[bo+"
+++      "(bias_shape[3]==1?0:i)*bias_strides[3]];";
+++  if (!back) {
+++    s << "float mx=-INFINITY;bool nan=false;\n";
+++    s << "bfloat16_t values[" << ((n + 127) / 128) * 4 << "],exps["
+++      << ((n + 127) / 128) * 4 << "];\n";
+++    s << "for(uint block=0;block<" << (n + 127) / 128
+++      << ";++block)for(uint j=0;j<4;++j){uint t=block*4+j;uint "
+++         "i=block*128+lane*4+j;if(i<N){"
+++      << (logits ? raw +
+++                       "bfloat16_t "
+++                       "mid=isnan(float(raw))?raw:max(lo,raw);values[t]=isnan("
+++                       "float(mid))?mid:min(hi,mid);"
+++                 : "values[t]=x[base+i];")
+++      << "float v=float(values[t]);nan=nan||isnan(v);mx=max(mx,v);}}\n";
+++    s << "mx=simd_max(mx);if(simd_any(nan))mx=NAN;float sum=0.0f;\n";
+++    s << "for(uint block=0;block<" << (n + 127) / 128
+++      << ";++block)for(uint j=0;j<4;++j){uint t=block*4+j;uint "
+++         "i=block*128+lane*4+j;if(i<N){bfloat16_t "
+++         "z=values[t]-bfloat16_t(mx);exps[t]=metal::precise::exp(z);sum=float("
+++         "exps[t])+sum;}}\n";
+++    s << "bfloat16_t den=bfloat16_t(simd_sum(sum));if(lane==0)d[row]=den;\n";
+++    s << "for(uint block=0;block<" << (n + 127) / 128
+++      << ";++block)for(uint j=0;j<4;++j){uint t=block*4+j;uint "
+++         "i=block*128+lane*4+j;if(i<N){e[base+i]=exps[t];p[base+i]=exps[t]/"
+++         "den;}}\n";
+++  } else {
+++    s << "bfloat16_t den=d[row],inv=r[row],total=bfloat16_t(0);\n";
+++    s << "bfloat16_t gs[" << ((n + 127) / 128) * 4 << "],es["
+++      << ((n + 127) / 128) * 4 << "];\n";
+++    s << "for(uint block=0;block<" << (n + 127) / 128
+++      << ";++block)for(uint j=0;j<4;++j){uint t=block*4+j;uint "
+++         "i=block*128+lane*4+j;if(i<N){gs[t]=g[base+i];es[t]=e[base+i];"
+++         "bfloat16_t a=gs[t]*inv;bfloat16_t v=a*es[t];total=v+total;}}\n";
+++    s << "bfloat16_t red=simd_sum(total);red=red+bfloat16_t(0);bfloat16_t "
+++         "neg=bfloat16_t(float(-red)+0.0f);\n";
+++    s << "for(uint block=0;block<" << (n + 127) / 128
+++      << ";++block)for(uint j=0;j<4;++j){uint t=block*4+j;uint "
+++         "i=block*128+lane*4+j;if(i<N){bfloat16_t div=gs[t]/den;bfloat16_t "
+++         "a=div+neg;"
+++      << (logits ? raw +
+++                       "bfloat16_t "
+++                       "mid=isnan(float(raw))?raw:max(lo,raw);bfloat16_t "
+++                       "lg=raw>lo?bfloat16_t(1):(raw==lo?bfloat16_t(.5f):"
+++                       "bfloat16_t(0));bfloat16_t "
+++                       "hg=hi>mid?bfloat16_t(1):(hi==mid?bfloat16_t(.5f):"
+++                       "bfloat16_t(0));bfloat16_t dx=a*es[t];bfloat16_t "
+++                       "clipped=dx*hg;out[base+i]=clipped*lg;"
+++                 : "out[base+i]=a*es[t];")
+++      << "}}\n";
+++  }
+++  return s.str();
+++}
+++std::vector<mx::array> Launch(const Built& b, const std::vector<mx::array>& xs,
+++                              bool back, bool logits = false) {
+++  auto sh = xs[0].shape(), row = sh;
+++  row.back() = 1;
+++  int count = xs[0].size() / sh.back();
+++  std::vector<mx::Shape> shapes =
+++      back ? std::vector<mx::Shape>{sh} : std::vector<mx::Shape>{sh, sh, row};
+++  return (back ? (logits ? b.lb : b.b) : (logits ? b.lf : b.f))(
+++      xs, shapes, std::vector<mx::Dtype>(shapes.size(), mx::bfloat16),
+++      {count * 32, 1, 1}, {32, 1, 1}, {}, std::nullopt, false, {});
+++}
+++Built GetBuilt(int64_t n) {
+++  std::lock_guard<std::mutex> lock(mu);
+++  return cache.at(n);
+++}
+++std::vector<mx::array> LiteralForward(const mx::array& x) {
+++  auto max = mx::maximum(mx::array(-INFINITY, x.dtype()),
+++                         mx::max(x, std::vector<int>{3}, true));
+++  auto e = mx::exp(mx::subtract(x, max));
+++  auto d =
+++      mx::astype(mx::sum(mx::astype(e, mx::float32), std::vector<int>{3}, true),
+++                 x.dtype());
+++  return {mx::divide(e, d), e, d};
+++}
+++mx::array LiteralBackward(const std::vector<mx::array>& xs) {
+++  const auto& g = xs[0];
+++  const auto& e = xs[1];
+++  const auto& d = xs[2];
+++  const auto& r = xs[3];
+++  auto t = mx::multiply(mx::multiply(g, r), e);
+++  auto red = mx::add(mx::sum(t, std::vector<int>{3}, true),
+++                     mx::array(0.0f, mx::bfloat16));
+++  auto neg = mx::astype(mx::add(mx::astype(mx::negative(red), mx::float32),
+++                                mx::array(0.0f, mx::float32)),
+++                        mx::bfloat16);
+++  return mx::multiply(mx::add(mx::divide(g, d), neg), e);
+++}
+++}  // namespace
+++bool EvoAttentionPrepare(int64_t n) {
+++  if (n < 65 || n > 512) return false;
+++  if (!Kernel()) return true;
+++  std::lock_guard<std::mutex> lock(mu);
+++  if (cache.count(n)) return cache.at(n).ok;
+++  Built b;
+++  try {
+++    b.f = mx::fast::metal_kernel("fbc_evo_fwd_n" + std::to_string(n), {"x"},
+++                                 {"p", "e", "d"}, Source(n, false));
+++    b.b =
+++        mx::fast::metal_kernel("fbc_evo_bwd_n" + std::to_string(n),
+++                               {"g", "e", "d", "r"}, {"out"}, Source(n, true));
+++    b.lf = mx::fast::metal_kernel("fbc_evo_logits_fwd_n" + std::to_string(n),
+++                                  {"x", "mask", "bias"}, {"p", "e", "d"},
+++                                  Source(n, false, true));
+++    b.lb = mx::fast::metal_kernel("fbc_evo_logits_bwd_n" + std::to_string(n),
+++                                  {"g", "e", "d", "r", "x", "mask", "bias"},
+++                                  {"out"}, Source(n, true, true));
+++    auto x = mx::zeros({1, 4, 8, (int)n}, mx::bfloat16),
+++         one = mx::ones({1, 4, 8, 1}, mx::bfloat16);
+++    auto f = Launch(b, {x}, false);
+++    mx::eval(f);
+++    mx::eval(Launch(b, {x, f[1], one, one}, true));
+++    auto mask = mx::zeros({1, 1, 1, (int)n}, mx::bfloat16);
+++    mx::eval(Launch(b, {x, mask, x}, false, true));
+++    mx::eval(Launch(b, {x, f[1], one, one, x, mask, x}, true, true));
+++    b.ok = true;
+++    if (std::getenv("METALJAX_DEBUG"))
+++      std::fprintf(stderr, "[metaljax-native] evo-attn: kernels ready N=%lld\n",
+++                   (long long)n);
+++  } catch (const std::exception& ex) {
+++    if (is_oom(ex)) throw;
+++    if (std::getenv("METALJAX_DEBUG"))
+++      std::fprintf(stderr,
+++                   "[metaljax-native] evo-attn: kernel declined N=%lld (%s)\n",
+++                   (long long)n, ex.what());
+++  }
+++  cache.emplace(n, b);
+++  return b.ok;
+++}
+++std::vector<mx::array> EvoAttentionForward(const std::vector<mx::array>& xs,
+++                                           bool logits) {
+++  if (!Kernel()) {
+++    auto x = xs[0];
+++    if (logits)
+++      x = mx::minimum(mx::array(1.e8f, mx::bfloat16),
+++                      mx::maximum(mx::array(-1.e8f, mx::bfloat16),
+++                                  mx::add(mx::add(x, xs[1]), xs[2])));
+++    return LiteralForward(x);
+++  }
+++  return Launch(GetBuilt(xs[0].shape(-1)), xs, false, logits);
+++}
+++mx::array EvoAttentionBackward(const std::vector<mx::array>& xs, bool logits) {
+++  if (!Kernel()) {
+++    auto dx = LiteralBackward({xs[0], xs[1], xs[2], xs[3]});
+++    if (!logits) return dx;
+++    auto raw = mx::add(mx::add(xs[4], xs[5]), xs[6]);
+++    auto lo = mx::array(-1.e8f, mx::bfloat16),
+++         hi = mx::array(1.e8f, mx::bfloat16),
+++         one = mx::array(1.f, mx::bfloat16),
+++         half = mx::array(.5f, mx::bfloat16),
+++         zero = mx::array(0.f, mx::bfloat16);
+++    auto mid = mx::maximum(lo, raw);
+++    auto lg = mx::where(mx::greater(raw, lo), one,
+++                        mx::where(mx::equal(raw, lo), half, zero));
+++    auto hg = mx::where(mx::greater(hi, mid), one,
+++                        mx::where(mx::equal(hi, mid), half, zero));
+++    return mx::multiply(mx::multiply(dx, hg), lg);
+++  }
+++  return Launch(GetBuilt(xs[0].shape(-1)), xs, true, logits)[0];
+++}
+++}  // namespace metaljax
++diff --git a/plugin-native/runtime/evo_attention.h b/plugin-native/runtime/evo_attention.h
++new file mode 100644
++index 0000000000000000000000000000000000000000..c3f44e38a6d5166c416d63c5139c09c9dbb150f3
++--- /dev/null
+++++ b/plugin-native/runtime/evo_attention.h
++@@ -0,0 +1,9 @@
+++// Experimental bounded BF16 attention normalization; no GEMM replacement.
+++#pragma once
+++#include "program.h"
+++namespace metaljax {
+++bool EvoAttentionPrepare(int64_t width);
+++std::vector<mx::array> EvoAttentionForward(const std::vector<mx::array>& xs,
+++                                           bool logits);
+++mx::array EvoAttentionBackward(const std::vector<mx::array>& xs, bool logits);
+++}  // namespace metaljax
++diff --git a/plugin-native/runtime/program.h b/plugin-native/runtime/program.h
++index f426bcc16cc7b11119c65cc790123e68c29673c6..d2ace8bedba31672a0c1972db53dff7df959c5b7 100644
++--- a/plugin-native/runtime/program.h
+++++ b/plugin-native/runtime/program.h
++@@ -166,6 +166,7 @@ enum Op : int {
++   // kernel, `kv_update` is one `mx::slice_update` on the chain, and
++   // `depends` orders the chain after the readers of its previous state.
++   kKvStarts, kKvUpdate, kDepends,
+++  kEvoAttentionForward,kEvoAttentionBackward,
++   // M5b: a counted loop msl_scan planned into one generated Metal kernel,
++   // and a site where the handler computes on the HOST. Both were lowered by
++   // src/metaljax/tape.py; the pseudo-names below are how it asked for them.
++diff --git a/pyproject.toml b/pyproject.toml
++index 67585f1252a477785a64628023e9ee25685ae653..467c2bee7671bfc7be70fee38fea47d0e4486f53 100644
++--- a/pyproject.toml
+++++ b/pyproject.toml
++@@ -1,6 +1,6 @@
++ [project]
++ name = "metaljax"
++-version = "0.11.9+fbc1"
+++version = "0.11.9+fbc3attndev2"
++ description = "Experimental Metal backend for JAX on Apple silicon: a native PJRT plugin executing StableHLO on the GPU through a vendored MLX runtime"
++ readme = "README.md"
++ requires-python = ">=3.12"
++diff --git a/src/metaljax/__init__.py b/src/metaljax/__init__.py
++index b27323f440021b1a97133b33739b204e8b772034..e78cdb9d849a2fbc4f2bc2c57baefbcc53fa0d4f 100644
++--- a/src/metaljax/__init__.py
+++++ b/src/metaljax/__init__.py
++@@ -14,5 +14,5 @@ plugin-native/metal/metal_client.cc, which carries the measurements behind
++ the numbers.
++ """
++ 
++-__version__ = "0.11.9+fbc1"
+++__version__ = "0.11.9+fbc3attndev2"
++ __all__ = ["__version__"]
++diff --git a/tests/test_evo_attention.py b/tests/test_evo_attention.py
++new file mode 100644
++index 0000000000000000000000000000000000000000..a1043ba5e6fb13c95a5905d48cc7cf2675f7e9a0
++--- /dev/null
+++++ b/tests/test_evo_attention.py
++@@ -0,0 +1,158 @@
+++"""Differential tests of the opt-in bounded Evoformer forward/backward path.
+++
+++Run against the development wheel. Each arm is a fresh process; enabled tests
+++must demonstrate recognition and successful execution, not a silent fallback.
+++"""
+++import json
+++import os
+++from pathlib import Path
+++import re
+++import subprocess
+++import sys
+++
+++import numpy as np
+++import pytest
+++
+++
+++def _worker(destination):
+++    import jax
+++    import jax.numpy as jnp
+++    cases = [dict(name=f'n{n}', n=n) for n in [65, 127, 128, 129, 146, 185, 255, 257, 512]]
+++    cases += [dict(name='msa8', n=146, h=8, d=32),
+++              dict(name='broadcast', n=129, mask='head', bias='query'),
+++              dict(name='layout', n=146, layout=True),
+++              dict(name='remat_scan', n=129, remat=True),
+++              dict(name='large_logits', n=146, scale=1e4),
+++              dict(name='zeros', n=146, scale=0.),
+++              dict(name='clip_ties', n=129, scale=0., ties=True),
+++              dict(name='nonfinite', n=146, nonfinite=True),
+++              dict(name='fallback37', n=37, fused=False),
+++              dict(name='fallback64', n=64, fused=False),
+++              dict(name='fallback513', n=513, fused=False),
+++              dict(name='fallback_heads', n=146, h=3, fused=False),
+++              dict(name='fallback_fp32', n=146, fp32=True, fused=False),
+++              dict(name='escaped_max', n=146, escape=True, fused=False),
+++              dict(name='nonzero_init', n=146, init=.125, fused=False)]
+++    saved,metadata={},[]
+++    for ci,c in enumerate(cases):
+++        print('FBC_CASE '+c['name'],file=sys.stderr,flush=True)
+++        rng=np.random.default_rng(900+ci)
+++        b,q,h,d,n=2,19,c.get('h',4),c.get('d',16),c['n']
+++        scale=c.get('scale',1.)
+++        qa=rng.normal(size=(b,q,h,d)).astype(np.float32)*scale
+++        ka=rng.normal(size=(b,n,h,d)).astype(np.float32)*scale
+++        va=rng.normal(size=(b,n,h,d)).astype(np.float32)
+++        bs=(1,h,q,1) if c.get('bias')=='query' else (1,h,q,n)
+++        bias=rng.normal(size=bs).astype(np.float32)
+++        ms=(1,h,1,n) if c.get('mask')=='head' else (b,1,1,n)
+++        mask=np.zeros(ms,np.float32);mask[..., -3:]=-1e9
+++        if c.get('ties'):
+++            bias[:]=0.;bias[:,:,0,:]=-100139008.;bias[:,:,1,:]=100139008.;mask[:]=0.
+++        if ms[0]==b:mask[1]=-1e9  # exact baseline semantics of fully masked rows
+++        if c.get('nonfinite'):qa[0,0,0,0]=np.nan;qa[0,1,1,0]=np.inf
+++        weight=rng.normal(size=(b,q,h,d)).astype(np.float32)
+++        dtype=jnp.float32 if c.get('fp32') else jnp.bfloat16
+++        def body(qa,ka,va,bias,mask):
+++            qa,ka,va,bias,mask=[x.astype(dtype) for x in (qa,ka,va,bias,mask)]
+++            if c.get('layout'):
+++                qa=jnp.swapaxes(qa,1,2);qa=jnp.swapaxes(qa,1,2)
+++                ka=jnp.flip(ka,axis=1);va=jnp.flip(va,axis=1)
+++            qa=qa*jnp.asarray(d**-.5,dtype)
+++            logits=jnp.einsum('bqhd,bkhd->bhqk',qa,ka)
+++            logits=jnp.clip((logits+mask)+bias,-1e8,1e8)
+++            maximum=jax.lax.stop_gradient(jnp.max(logits,-1,keepdims=True))
+++            e=jnp.exp(logits-maximum)
+++            if c.get('init'):
+++                den=jax.lax.reduce(e.astype(jnp.float32),jnp.float32(c['init']),jax.lax.add,(3,))[...,None].astype(dtype)
+++            else:den=jnp.sum(e.astype(jnp.float32),-1,keepdims=True).astype(dtype)
+++            out=jnp.einsum('bkhd,bhqk->bqhd',va,e/den)
+++            return out,maximum
+++        def loss(qa,ka,va,bias,mask):
+++            if c.get('remat'):
+++                step=jax.checkpoint(body)
+++                def loop(i,acc):
+++                    out,_=step(qa+jnp.float32(i)*.001,ka,va,bias,mask)
+++                    return acc+out.astype(jnp.float32)
+++                out=jax.lax.fori_loop(0,3,loop,jnp.zeros((b,q,h,d),jnp.float32))
+++                maximum=jnp.zeros((1,),jnp.float32)
+++            else:out,maximum=body(qa,ka,va,bias,mask)
+++            aux=(out,maximum) if c.get('escape') else (out,)
+++            return jnp.sum(out.astype(jnp.float32)*weight),aux
+++        fn=jax.jit(jax.value_and_grad(loss,argnums=(0,1,2,3,4),has_aux=True))
+++        for changed in [0,1]:
+++            args=[qa,ka,va,bias,mask]
+++            if changed:args=[qa*.875+.03,ka*1.125,va*.9,bias+.25,mask]
+++            result=jax.tree_util.tree_map(lambda x:np.asarray(x).astype(np.float32),fn(*args))
+++            leaves=jax.tree_util.tree_leaves(result)
+++            for i,a in enumerate(leaves):saved[f'{c["name"]}_{changed}_{i}']=a
+++        metadata.append(dict(name=c['name'],fused=c.get('fused',True),nonfinite=c.get('nonfinite',False)))
+++    np.savez(destination,**saved)
+++    Path(str(destination)+'.json').write_text(json.dumps(metadata))
+++
+++
+++@pytest.fixture(scope='module')
+++def comparisons(tmp_path_factory):
+++    if sys.platform!='darwin':pytest.skip('Metal development backend required')
+++    directory=tmp_path_factory.mktemp('evo-attention')
+++    reports=[]
+++    for mode in ['0','1']:
+++        env=dict(os.environ,JAX_PLATFORMS='metal',METALJAX_DEBUG='1',METALJAX_EVO_ATTN=mode,
+++                 METALJAX_MATMUL_PRECISION='high')
+++        for key in ['FBC_ATTN_PROFILE','FBC_PROFILE_ACTIVE','METALJAX_EVO_ATTN_KERNEL','METALJAX_EVO_ATTN_LOGITS']:env.pop(key,None)
+++        path=directory/(mode+'.npz')
+++        result=subprocess.run([sys.executable,__file__,'--worker',str(path)],env=env,
+++                              capture_output=True,text=True,timeout=180)
+++        (directory/(mode+'.log')).write_text(result.stdout+result.stderr)
+++        assert result.returncode==0,result.stderr[-5000:]
+++        reports.append((path,result.stderr))
+++    return directory,reports
+++
+++
+++def test_attention_forward_and_all_derivatives(comparisons):
+++    _,reports=comparisons
+++    metadata=json.loads(Path(str(reports[0][0])+'.json').read_text())
+++    with np.load(reports[0][0]) as baseline,np.load(reports[1][0]) as candidate:
+++        for c in metadata:
+++            if not c['fused'] or c['nonfinite']:continue
+++            for key in baseline.files:
+++                if key.startswith(c['name']+'_'):
+++                    assert candidate[key].tobytes()==baseline[key].tobytes(),key
+++                    np.testing.assert_array_equal(candidate[key],baseline[key],err_msg=key)
+++
+++
+++def test_nonfinite_and_fully_masked_semantics(comparisons):
+++    _,reports=comparisons
+++    with np.load(reports[0][0]) as baseline,np.load(reports[1][0]) as candidate:
+++        for key in baseline.files:
+++            if key.startswith('nonfinite_'):
+++                np.testing.assert_array_equal(candidate[key],baseline[key],err_msg=key)
+++
+++
+++def test_unsupported_cases_remain_literal(comparisons):
+++    _,reports=comparisons
+++    metadata=json.loads(Path(str(reports[0][0])+'.json').read_text())
+++    segments=dict(re.findall(r'FBC_CASE (\S+)\n(.*?)(?=FBC_CASE |\Z)',reports[1][1],re.S))
+++    with np.load(reports[0][0]) as baseline,np.load(reports[1][0]) as candidate:
+++        for c in metadata:
+++            if c['fused']:continue
+++            assert not re.search(r'evo-attn: forward=[1-9]',segments[c['name']]),c['name']
+++            for key in baseline.files:
+++                if key.startswith(c['name']+'_'):
+++                    assert candidate[key].tobytes()==baseline[key].tobytes(),key
+++                    np.testing.assert_array_equal(candidate[key],baseline[key],err_msg=key)
+++
+++
+++def test_kernels_execute_without_retirement(comparisons):
+++    _,reports=comparisons
+++    metadata=json.loads(Path(str(reports[0][0])+'.json').read_text())
+++    segments=dict(re.findall(r'FBC_CASE (\S+)\n(.*?)(?=FBC_CASE |\Z)',reports[1][1],re.S))
+++    for c in metadata:
+++        if c['fused']:
+++            text=segments[c['name']]
+++            assert re.search(r'evo-attn: forward=[1-9]\d* backward=[1-9]',text),c['name']
+++            assert 'no fused tape' not in text,c['name']
+++            assert 'compiled native tape failed' not in text,c['name']
+++            assert 'compiled body failed' not in text,c['name']
+++
+++
+++if __name__=='__main__' and sys.argv[1:2]==['--worker']:_worker(Path(sys.argv[2]))
+diff --git a/installation/metaljax/attention/README.md b/installation/metaljax/attention/README.md
+new file mode 100644
+index 0000000..a8db3ff
+--- /dev/null
++++ b/installation/metaljax/attention/README.md
+@@ -0,0 +1,235 @@
++# Experimental BF16 attention epilogues
++
++This is an opt-in native MetalJAX experiment on the frozen FreeBindCraft
++`0.11.9+fbc1` backend. It combines the elementwise operations and row reductions
++around Evoformer attention softmax, including the matching backward chain.
++It retains the original QK, attention-value and derivative matrix products.
++It is not a complete fused or FlashAttention implementation.
++
++FreeBindCraft carries a source patch and reproducible maintainer build recipe,
++not a vendored copy of MetalJAX. The recipe checks out fork commit
++`678c58eaaafc33c5b31bcc6b6d0176dd078f6063` and uses the archived build inputs
++in the existing `../release.json`. Local source, binaries, wheels and raw runs
++are ignored build artifacts. No new public release is created here, and the
++production installer still selects the existing checksummed `0.11.9+fbc1`
++wheel. Distributing this experiment later would require a separate versioned
++MetalJAX wheel and a reviewed dependency update, or an upstream release
++containing the changes.
++
++## Implementation and admission
++
++`0001-bf16-attention-epilogues.patch` adds:
++
++- A StableHLO recognizer for the precise forward softmax and its generated
++  backward expression, with structural checks for reductions, constants,
++  broadcasts, clipping and uses outside the matched region.
++- Lowering and runtime operations for the matched forward/backward regions.
++- Native Metal kernels with explicit BF16 intermediate rounding and the
++  frozen MLX reduction order, plus a literal-MLX differential control.
++- Differential tests requiring actual recognition and execution, including
++  derivative, layout, rematerialization and unsupported-pattern checks.
++
++`METALJAX_EVO_ATTN=1` enables recognition. It is off by default. The admitted
++attention-logit tensor is BF16 `[B,H,Q,K]`, with `B >= 1`, `H` 4 or 8,
++`Q >= 16`, `65 <= K <= 512`, at least 32 rows and at most `2^28` elements.
++An overflow-safe element-count check precedes the kernel launch. Unsupported
++shapes, dtypes or expression graphs retain the existing lowering.
++
++The extended match combines the sequential mask and pair-bias additions,
++the proven `[-1e8, 1e8]` clipping expression, maximum subtraction,
++exponentiation, reduction and division. The additions still round separately
++to BF16. Forward exponentials and the denominator remain available for AD.
++The forward sum accumulates in FP32 and casts the denominator to BF16; the
++backward reduction deliberately rounds in BF16, matching the frozen runtime.
++Clipping derivatives retain the original comparisons, half derivatives at
++ties, and multiplication order. A mathematically equivalent FP32 rewrite is
++not numerically interchangeable with this graph.
++
++Kernels are compiled and probed outside MLX tracing. A kernel preparation
++failure declines recognition; a memory-governor refusal still propagates.
++The existing compiled-loop recovery remains in place. The kernel cache is
++protected during preparation and lookup.
++
++`METALJAX_EVO_ATTN_LOGITS=0` limits the match to the softmax expression.
++`METALJAX_EVO_ATTN_KERNEL=0` executes the recognized expression using literal
++MLX operations for differential diagnosis. These controls do not alter the
++production installer or select a dependency at runtime.
++
++The patch does not edit FreeBindCraft's model, losses, optimizer, dropout/RNG,
++recycling, checkpointing, BF16 policy, shared scientific functions or CUDA
++code. Its numerical evidence is against the frozen Metal baseline, not CUDA.
++
++## Building and checking
++
++Use an isolated native arm64 macOS venv with JAX/jaxlib `0.11.2` and the same
++FreeBindCraft scientific dependencies as the frozen baseline:
++
++```bash
++.venv-metaljax-attention/bin/python installation/build_metaljax_attention.py \
++  --source-dir .local/src/metaljax-attention \
++  --cache-dir .local/attention-build --jobs 12 --install
++```
++
++The builder verifies the exact source commit, patches and archived inputs,
++refuses unrelated or modified source, and writes a build manifest alongside
++the development wheel. `--install` affects only the selected venv. It builds
++the plugin against the unchanged private MLX runtime; it does not rebuild MLX
++from an unavailable stamped source revision. A local build is an experimental
++artifact, not a validated production release.
++
++```bash
++JAX_PLATFORMS=metal,cpu METALJAX_MATMUL_PRECISION=high \
++  .venv-metaljax-attention/bin/python -m pytest -q \
++  .local/src/metaljax-attention/tests/test_evo_attention.py \
++  .local/src/metaljax-attention/tests/test_nested_counted.py \
++  .local/src/metaljax-attention/tests/test_control.py \
++  .local/src/metaljax-attention/tests/test_msl_scan.py \
++  .local/src/metaljax-attention/tests/test_command_buffer.py tests
++```
++
++For a fresh-process comparison, provide a checkout with model parameters and
++the frozen baseline's first-recycle state. Baseline and candidate venvs must
++have identical scientific packages:
++
++```bash
++.venv-metaljax-release/bin/python extras/run_metaljax_attention_comparison.py \
++  --baseline-python .venv-metaljax-release/bin/python \
++  --candidate-python .venv-metaljax-attention/bin/python \
++  --assets /absolute/path/to/parameter-checkout \
++  --previous /absolute/path/to/frozen-previous.npz \
++  --out runs/metaljax-attention/comparison --order ABBABAAB --repeats 6
++```
++
++The driver starts sequential fresh processes, records process and aggregate
++GPU activity continuously, waits for a bounded CPU quiet window before each
++run, and stops only its own work if it detects sustained competing compute.
++These checks cannot establish GPU exclusivity or control thermal state.
++The memory monitor samples process-tree RSS, physical footprint, pressure,
++compression and swap. Its sampled limit is not a strict allocation cap.
++
++The probe times materialized forward and last-recycle sequence gradients
++separately, including first calls. Private MLX dispatch-counter snapshots
++occur outside each timed interval. Repeated calls in a process are correlated;
++the fresh process is the sampling unit. Persistent JAX compilation caching
++and diagnostic tracing are disabled during performance measurements.
++
++## Measured coverage
++
++On the M5 Max with 128 GiB unified memory, JAX/jaxlib `0.11.2`, BF16/high
++precision, rematerialization and one recycle, the reversed fresh-process
++series (`BAABABBA`, four processes per arm, six warmed calls per process)
++gave these medians of process medians:
++
++| Materialized call, 146 residues | Frozen fbc1 | Candidate | Time reduction |
++| --- | ---: | ---: | ---: |
++| Sequence gradient | 1.2187 s | 1.1069 s | 9.17% |
++| Forward | 0.3895 s | 0.3414 s | 12.34% |
++
++First calls did not improve: forward medians were 1.3487/1.3893 s and gradient
++medians 3.5143/3.5845 s, baseline/candidate respectively. These are first calls
++in fresh processes with persistent JAX compilation caching disabled, not cold
++machine or driver-cache measurements. The earlier entire `ABBABAAB` series
++is also recorded, including its slow candidate process concurrent with
++background services. It is not substituted with selected favorable samples.
++
++Every warmed gradient in the reversed series recorded 141,615/138,441 GPU
++dispatches, baseline/candidate; forward recorded 56,530/55,412. Native
++completed-command-buffer GPU busy time also decreased without profiling
++fences. Candidate physical-footprint high-water marks in that series were
++about 7.20 GB versus 7.38–7.44 GB for the baseline. These are process memory
++measurements, not isolated GPU allocation totals.
++
++The 185-residue PDL1 fixture passed the same 18-field and three-field warmed
++forward byte comparisons. Its two warmed calls per arm took 1.969/1.720 s
++for gradients and 0.587/0.498 s for forward. This is a larger-shape correctness
++and memory check, not a replicated performance estimate. Observed physical
++footprint high-water marks were approximately 11.85/10.91 GB. Both shape
++checks reported normal sampled memory pressure and no observed swap growth.
++
++The final packaged wheel passed 76 tests. The focused differential tests
++cover 24 cases with two input variants and 338 saved arrays per arm: 324
++finite arrays compare byte for byte, including signed zeros; 14 nonfinite-case
++arrays compare values and NaN/Inf positions. They exercise supported widths,
++eight heads, bias/mask broadcasts, reversed K/V layouts, rematerialized scans,
++large/zero logits, clip ties and fully masked batches, plus seven explicit
++unsupported cases. All 18 saved full-model fields and all three warmed
++forward fields match the frozen baseline byte for byte at both real-model
++sizes. This is tested Metal numerical coverage, not a general equivalence
++proof or a CUDA comparison.
++
++The unchanged prior fixed-work harness was then run in clean source
++extractions in `ABBA` order, two fresh processes per arm. Design-stage times
++were 223.93 and 218.49 s for the baseline, versus 198.23 and 196.25 s for the
++candidate: median 221.21/197.24 s, or 10.84% less time. Internal whole-harness
++totals were median 274.33/251.47 s; startup and downstream MPNN/OpenMM work
++vary, so this whole-harness difference is not an exclusive attention cost.
++
++All four processes completed 125 design backprop calls, 16 design forward
++calls, three complex scorings/DSSP analyses, one MPNN sample, two complex and
++two binder predictions, one filter evaluation and one model selection. All
++140 printed iteration records, confidence checkpoints, actual generated
++design PDB bytes and raw validation PDB bytes match. This compares serialized
++outputs, not a dump of every internal optimizer array. The real design still
++receives the same `LowConfidence` rejection. The benchmark uses its common
++saved structure/sequence for downstream work after comparing the actual
++design; it measures fixed work and reports zero accepted designs.
++
++The trajectory runs used the existing 75/45/5/15 schedule, one recycle,
++rematerialization, BF16/high precision and seed 121958. The in-memory
++confidence-branch adaptation and fixture substitution are identical to the
++prior harness (SHA-256
++`e73d95f8c09f4e5dec907ac68fd2240e2220242873250e7c07eb93cf3462075a`).
++Physical-footprint high-water marks were 9.50/9.76 GB for baseline processes
++and 9.01/9.01 GB for candidates, with no observed swap growth or abnormal
++sampled pressure. Process and aggregate GPU activity were recorded throughout;
++desktop and thermal state remain uncontrolled.
++
++## Diagnostic profiling and rejected experiments
++
++`diagnostic-fences.patch` is optional and omitted from the ordinary candidate
++wheel. Build it in a separate source directory and venv with `--profile`.
++Set `FBC_ATTN_PROFILE=1`, select a label prefix with
++`FBC_ATTN_PROFILE_FILTER`, and pass `--profile` to the probe. The barriers use
++exported functions from the frozen private MLX runtime. They split command
++buffers and change scheduling: their GPU times describe instrumented
++dependency regions, not exact production cost shares. Overlapping intervals
++are marked and excluded from timing aggregation. Never mix these timings
++with the unfenced performance series.
++
++For the main `[146,4,146,146]` attention region, the final filtered baseline
++profile recorded the following dynamic frequencies and nonoverlapping region
++GPU time in one warmed call:
++
++| Instrumented region | Forward count / GPU time | Gradient count / GPU time |
++| --- | ---: | ---: |
++| QK-shaped BF16 batched dot | 104 / 18.37 ms | 208 / 32.57 ms |
++| FP32 row sum | 108 / 18.06 ms | 216 / 25.68 ms |
++| BF16 backward row sum | 0 | 216 / 14.58 ms |
++
++The gradient includes rematerialized forward work. These regions can include
++layout work and independent unprofiled operations; do not add them into a
++production cost breakdown. All 208 intervals for the dQ/dK-shaped dot filter
++overlapped, so only its frequency is retained and all its times are rejected.
++The four final profiling runs retained the same 18 full-model fields and
++three warmed forward fields byte for byte. Repeated, measured attention row
++reductions motivated the bounded epilogue fusion while leaving matrix
++products intact.
++
++The retained local evidence includes unsuccessful approaches:
++
++- Widths at or below 64 use a different MLX reduction order. A prototype
++  changed small-row gradients; these widths are excluded.
++- Recognition alone was insufficient: an early rewrite incorrectly skipped
++  its own root, causing whole-tape fallback. Its timings are excluded. The
++  final rewrite keeps the root, and tests and dispatch counts verify use.
++- Early diagnostic intervals overlapped. A later ordering-chain experiment
++  retained otherwise dead work and doubled some counts. Neither provides
++  valid production cost attribution. The optional profiler carries no such
++  ordering chain and explicitly marks overlaps.
++- A completed timing series included a slow candidate process while macOS
++  media-analysis/indexing services were active. The entire series is retained
++  with its activity record; it is not silently reduced to favorable samples.
++
++Validation results and exact artifact identities are recorded separately in
++`validation.json`. Raw NPZ arrays, HLO, logs, wheels and process samples live
++under the ignored `runs/metaljax-attention/` directory on the validation host.
+diff --git a/installation/metaljax/attention/build-manifest.json b/installation/metaljax/attention/build-manifest.json
+new file mode 100644
+index 0000000..5f5f3c8
+--- /dev/null
++++ b/installation/metaljax/attention/build-manifest.json
+@@ -0,0 +1,85 @@
++{
++  "builder_sha256": "77575268c7d83e02bc1f575b4b190536c425d5cd6dbbb92ea4ffeb0b916c7ede",
++  "version": "0.11.9+fbc3attndev2",
++  "frozen_source_commit": "678c58eaaafc33c5b31bcc6b6d0176dd078f6063",
++  "frozen_release": {
++    "version": "0.11.9+fbc1",
++    "repository": "https://github.com/cytokineking/metaljax",
++    "source_commit": "678c58eaaafc33c5b31bcc6b6d0176dd078f6063",
++    "upstream_base": "7546eb93aa60c6570efdca95836276d03fe70a94",
++    "tag": "v0.11.9-fbc1",
++    "jax": "0.11.2",
++    "jaxlib": "0.11.2",
++    "wheel": {
++      "url": "https://github.com/cytokineking/metaljax/releases/download/v0.11.9-fbc1/metaljax-0.11.9+fbc1-py3-none-macosx_14_0_arm64.whl",
++      "sha256": "8b3ec3bd4a71e57d7c77a0f3f8b1ee9fefe28b4ca81c0b325dc6d2975938d079"
++    },
++    "stock_wheel": {
++      "filename": "metaljax-0.11.9-py3-none-macosx_14_0_arm64.whl",
++      "sha256": "05ed087f0e8b307aaea0763e45f03e2123ea358de2c117c93e4dca25c882db7f",
++      "url": "https://files.pythonhosted.org/packages/17/b3/c7deaa5599ba600bcd8d2647fcb34e9ea424a2f628f34f1a62de5ca08260/metaljax-0.11.9-py3-none-macosx_14_0_arm64.whl"
++    },
++    "source_archive": {
++      "url": "https://github.com/cytokineking/metaljax/releases/download/v0.11.9-fbc1/metaljax-0.11.9-fbc1-source.tar.gz",
++      "sha256": "30029c1cb2d5e8838a0ccfb92d23f9cafb49ac6fb201d4b1258f8a2437ca7972"
++    },
++    "mlx_sdk": {
++      "url": "https://github.com/cytokineking/metaljax/releases/download/v0.11.9-fbc1/metaljax-fbc1-mlx-sdk.tar.gz",
++      "sha256": "64a2ed745b8d180b6323b3a8e9811b7ed4119dfcc1404e4b3365b5057dc0497b"
++    },
++    "xla": {
++      "url": "https://github.com/cytokineking/metaljax/releases/download/v0.11.9-fbc1/xla-91888df6ce85102c30220e41d952065925e10886.tar.gz",
++      "sha256": "32cb8087d88318a01f9974ead6254e1ca06d263fa1847f61503379525bd46897",
++      "revision": "91888df6ce85102c30220e41d952065925e10886"
++    },
++    "bazel": {
++      "url": "https://github.com/cytokineking/metaljax/releases/download/v0.11.9-fbc1/bazel-8.7.0-darwin-arm64",
++      "sha256": "575f20fb23955e02f73519befd180df635b4ed0960c60f0e70fcc8d74014a713"
++    },
++    "plugin_sha256": "005ab1302a7f49ec27e1447ab31db89e78b0e22793e6e14cf66bfe7773dce2fd",
++    "hatchling": "1.32.4"
++  },
++  "patches": {
++    "0001-bf16-attention-epilogues.patch": "36fa7ac3f6d169fe0e9176f4d819a38428369fe4ba105144bff26a8a037ced17"
++  },
++  "modified_source": {
++    "plugin-native/metal/BUILD": "2c42e9b3378f27b3f7fbed7f88a9fb87dc9d6de5c655c1a8d1281fdba3e836fc",
++    "plugin-native/metal/metal_evo_attention.cc": "6be0cc6b7127b56e40b2ec4f1b8dcfc765cca317a57bd091e28b409e4475c16a",
++    "plugin-native/metal/metal_lowering.cc": "d4462b2a54d3bb6f0fcb2dd47b627d564569cc215a6911c43d99756c84169912",
++    "plugin-native/metal/metal_qmm.cc": "e390ac75dec840fafcea785a4a4b4b7da5466c24576b9472d80fde9e23749acc",
++    "plugin-native/metal/metal_recognize.h": "5695d110693d18b1360da3af7bcd00065ddb79c5e9edba31abd6a4873e1a2498",
++    "plugin-native/runtime/BUILD": "d59a6f82162a0ae4b8130dafcfc75759c2553ac5e4d1c8cbcbef5970181df712",
++    "plugin-native/runtime/config.cc": "bb0976c6182c077463a751368d8441074ebfc236a376aa95e38bdcf8e659e2ce",
++    "plugin-native/runtime/emits.cc": "def92249388871ac4b96111869eb86277f8cbcf016ff18f0cf39997cdd869e44",
++    "plugin-native/runtime/evo_attention.cc": "4a61a47933ba94c0b5bd25bdd3c04d3a00b087f831e3526791b928521ac75c51",
++    "plugin-native/runtime/evo_attention.h": "f409b1cbac90f554de45d181fa8243d30c42203e56f9b82a91fd5e47daaa982a",
++    "plugin-native/runtime/program.h": "b0a19d7955ef285a0e569ee8a35ef0c764908aa2ada8a3b7dabc6a0a2d460206",
++    "pyproject.toml": "2625b4a1570ce63ad95414ab99315e803f6cba2ed3a4095558f47649b6ebdbd2",
++    "src/metaljax/__init__.py": "c9032ab3cfee8df7887f2f50bf6ce9f4f40412c4a3f74b8db2cbb6af61a7825b",
++    "tests/test_evo_attention.py": "4c06d6f5229dd15d0294caff3f0193065b34aa98558da9faf5dd601c3f91b718"
++  },
++  "diagnostic_profile": false,
++  "attention_enabled_by_default": false,
++  "build_flags": [
++    "--repositories_without_autoloads=cc_compatibility_proxy",
++    "--macos_minimum_os=14.0",
++    "--host_copt=--target=arm64-apple-macosx14.0",
++    "--host_linkopt=--target=arm64-apple-macosx14.0",
++    "--jobs=12",
++    "--disk_cache=/Users/aaronring/.codex/worktrees/c11c/FreeBindCraft/.local/bazel-disk-cache"
++  ],
++  "compiler": "Apple clang version 21.0.0 (clang-2100.3.34.2)\nTarget: arm64-apple-darwin27.0.0\nThread model: posix\nInstalledDir: /Library/Developer/CommandLineTools/usr/bin",
++  "python": "Python 3.12.15",
++  "uv": "uv 0.6.4 (04db70662 2025-03-03)",
++  "macos": "27.0.1",
++  "sdkroot": "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk",
++  "jax": "0.11.2",
++  "jaxlib": "0.11.2",
++  "plugin_sha256": "19b28d865a0344768c75af9d25482dbc217954fa1b202e4b4258a7fb79bf9b2a",
++  "wheel_sha256": "bdd95090b974bec3e2afb5b675faf2f6c7363882381f6b8cfd9accf4b8dd5138",
++  "mlx_runtime": {
++    "libjaccl_metaljax.dylib": "48f5790b66a173170527e6ba7fac3e445787550851439870019581032d5448f9",
++    "libmlx_metaljax.dylib": "72dc8d9a4b1e07df2f6bc91383e0567acf3ce292398ae6ce4ed1d19fce0b1374",
++    "mlx.metallib": "ef1aa1ef9ef5b18bcef166b75b7b8865afe0f02f5e23980f2bdf76447fe60e6b"
++  }
++}
+diff --git a/installation/metaljax/attention/diagnostic-fences.patch b/installation/metaljax/attention/diagnostic-fences.patch
+new file mode 100644
+index 0000000..1c1f6b5
+--- /dev/null
++++ b/installation/metaljax/attention/diagnostic-fences.patch
+@@ -0,0 +1,150 @@
++diff --git a/plugin-native/runtime/program.cc b/plugin-native/runtime/program.cc
++--- a/plugin-native/runtime/program.cc
+++++ b/plugin-native/runtime/program.cc
++@@ -12,6 +12,7 @@
++ // program is entered. That line is the one a phase-2 compile path meets.
++ 
++ #include "program.h"
+++#include "attention_profile.h"
++ 
++ #include <mlx/compile_impl.h>
++ 
++@@ -327,6 +328,13 @@
++ // vocabulary is exactly what they accept between them.
++ void Program::step(const Entry& e, std::vector<std::optional<mx::array>>& env,
++                    bool in_trace) const {
+++  const std::string profile=AttentionProfileLabel(e,env);
+++  std::optional<mx::array> saved;
+++  auto profile_region=profile.empty()?nullptr:std::make_shared<AttentionProfileRegion>();
+++  if(!profile.empty()){
+++    std::vector<mx::array> xs;for(int id:e.ins)if(env[id])xs.push_back(*env[id]);
+++    saved=env[e.ins[0]];env[e.ins[0]]=AttentionProfileMark(xs,profile,true,profile_region);
+++  }
++   if (!(step_elementwise(e, env, in_trace) || step_shape(e, env, in_trace) ||
++         step_linalg(e, env, in_trace) || step_reduce(e, env, in_trace) ||
++         step_index(e, env, in_trace) || step_emit(e, env, in_trace) ||
++@@ -334,6 +342,9 @@
++         step_conv(e, env, in_trace) || step_host(e, env, in_trace)))
++     throw std::invalid_argument("tape: unknown opcode");
++ 
+++  if(!profile.empty()){
+++    env[e.ins[0]]=saved;env[e.outs[0]]=AttentionProfileMark({*env[e.outs[0]]},profile,false,profile_region);
+++  }
++   // The emulated grids, in ONE place (see Entry::regrid). An entry whose
++   // result type is i4/ui4 or one of the OCP FP4/FP6 grids -- and the convert
++   // onto any emulated type -- rounds here, after the handler that computed
++diff --git a/plugin-native/runtime/attention_profile.h b/plugin-native/runtime/attention_profile.h
++new file mode 100644
++--- /dev/null
+++++ b/plugin-native/runtime/attention_profile.h
++@@ -0,0 +1,10 @@
+++// Diagnostic-only GPU fences for FreeBindCraft attention profiling.
+++#pragma once
+++#include "program.h"
+++#include <mlx/backend/metal/metal.h>
+++namespace metaljax {
+++struct AttentionProfileRegion {mx::metal::DispatchStats before;bool overlap=false;};
+++bool AttentionProfileEnabled();
+++mx::array AttentionProfileMark(const std::vector<mx::array>&,const std::string&,bool,const std::shared_ptr<AttentionProfileRegion>&);
+++std::string AttentionProfileLabel(const Entry&,const std::vector<std::optional<mx::array>>&);
+++}
++diff --git a/plugin-native/runtime/attention_profile.cc b/plugin-native/runtime/attention_profile.cc
++new file mode 100644
++--- /dev/null
+++++ b/plugin-native/runtime/attention_profile.cc
++@@ -0,0 +1,76 @@
+++// Diagnostic-only: boundaries split command buffers, not production timing.
+++#include "attention_profile.h"
+++#include <mlx/primitives.h>
+++#include <mlx/backend/metal/metal.h>
+++#include <dlfcn.h>
+++#include <cstdio>
+++#include <cstdlib>
+++#include <sstream>
+++#include <stdexcept>
+++#include <thread>
+++#include <chrono>
+++#include <algorithm>
+++namespace mlx::core::metal {class CommandEncoder;}
+++namespace metaljax {
+++namespace {
+++thread_local std::vector<AttentionProfileRegion*> active;
+++void Sync(mx::Stream s) {
+++  // Opaque exported frozen-runtime ABI; no Metal-cpp/object layout assumptions.
+++  using Get=mx::metal::CommandEncoder&(*)(mx::Stream);
+++  using Wait=void(*)(mx::metal::CommandEncoder*);
+++  static auto get=reinterpret_cast<Get>(dlsym(RTLD_DEFAULT,"_ZN3mlx4core5metal19get_command_encoderENS0_6StreamE"));
+++  static auto wait=reinterpret_cast<Wait>(dlsym(RTLD_DEFAULT,"_ZN3mlx4core5metal14CommandEncoder11synchronizeEv"));
+++  if(!get||!wait)throw std::runtime_error("attention profile: missing frozen MLX sync ABI");
+++  wait(&get(s));
+++}
+++mx::metal::DispatchStats SettledStats(){
+++  auto s=mx::metal::dispatch_stats();auto deadline=std::chrono::steady_clock::now()+std::chrono::milliseconds(100);
+++  while(s.completed_command_buffers<s.command_buffers&&std::chrono::steady_clock::now()<deadline){std::this_thread::yield();s=mx::metal::dispatch_stats();}
+++  return s;
+++}
+++class Barrier:public mx::UnaryPrimitive {
+++ public:
+++  Barrier(mx::Stream s,std::string l,bool b,std::shared_ptr<AttentionProfileRegion> r):UnaryPrimitive(s),label_(std::move(l)),start_(b),region_(std::move(r)){}
+++  const char* name()const override{return "FbcAttentionProfileBarrier";}
+++  void eval_cpu(const std::vector<mx::array>&x,mx::array&o)override{o.copy_shared_buffer(x[0]);}
+++  void eval_gpu(const std::vector<mx::array>&x,mx::array&o)override {
+++    const char* phase=std::getenv("FBC_PROFILE_ACTIVE");
+++    if(phase&&phase[0]!='0') {
+++      Sync(stream());auto now=SettledStats();
+++      auto& before=region_->before;
+++      if(start_){
+++        before=now;region_->overlap=!active.empty();
+++        for(auto*r:active)r->overlap=true;
+++        active.push_back(region_.get());
+++      }
+++      else std::fprintf(stderr,"[fbc-attn-profile] phase=%s op=%s ns=%llu dispatches=%llu cbufs=%llu wall_ns=%llu overlap=%d\n",phase,label_.c_str(),
+++        (unsigned long long)(now.gpu_busy_ns-before.gpu_busy_ns),
+++        (unsigned long long)(now.dispatches-before.dispatches),
+++        (unsigned long long)(now.command_buffers-before.command_buffers),
+++        (unsigned long long)(now.now_ns-before.now_ns),region_->overlap);
+++      if(!start_)active.erase(std::remove(active.begin(),active.end(),region_.get()),active.end());
+++    }
+++    o.copy_shared_buffer(x[0]);
+++  }
+++ private:std::string label_;bool start_;std::shared_ptr<AttentionProfileRegion> region_;
+++};
+++}
+++bool AttentionProfileEnabled(){static const bool on=[](){const char*s=std::getenv("FBC_ATTN_PROFILE");return s&&std::string(s)=="1";}();return on;}
+++mx::array AttentionProfileMark(const std::vector<mx::array>&xs,const std::string&l,bool start,const std::shared_ptr<AttentionProfileRegion>&region){
+++  return mx::array(xs[0].shape(),xs[0].dtype(),std::make_shared<Barrier>(mx::default_stream(mx::Device::gpu),l,start,region),xs);
+++}
+++std::string AttentionProfileLabel(const Entry&e,const std::vector<std::optional<mx::array>>&env){
+++  if(!AttentionProfileEnabled()||e.ins.empty()||e.outs.size()!=1)return {};
+++  const auto&x=env[e.ins[0]];if(!x||!(x->dtype()==mx::bfloat16||x->dtype()==mx::float32))return {};
+++  bool take=false;
+++  if(e.op==kDotGeneral){size_t p=0;auto l=e.attrs[p++];p+=l;auto r=e.attrs[p++];p+=r;take=e.attrs[p]>1;}
+++  else take=((e.op>=kAbs&&e.op<=kClz)||e.op==kReduce||e.op==kConvert)&&x->ndim()==4&&x->size()>=65536&&(x->shape(1)==4||x->shape(1)==8);
+++  if(!take)return {};
+++  std::ostringstream label;label<<e.op;
+++  for(int id:e.ins)if(env[id]){label<<"_";for(auto d:env[id]->shape())label<<d<<"x";label<<"d"<<static_cast<int>(env[id]->dtype().val());}
+++  if(e.op==kReduce)label<<"_reduce"<<e.attrs[0];
+++  auto text=label.str();const char*filter=std::getenv("FBC_ATTN_PROFILE_FILTER");
+++  if(filter&&text.rfind(filter,0)!=0)return {};
+++  return text;
+++}
+++}
++diff --git a/plugin-native/runtime/BUILD b/plugin-native/runtime/BUILD
++--- a/plugin-native/runtime/BUILD
+++++ b/plugin-native/runtime/BUILD
++@@ -23,6 +23,7 @@
++ cc_library(
++     name = "runtime",
++     srcs = [
+++        "attention_profile.cc",
++         "compile.cc",
++         "config.cc",
++         "control.cc",
++@@ -47,6 +48,7 @@
++         "runtime.cc",
++     ],
++     hdrs = [
+++        "attention_profile.h",
++         "gdn.h",
++         "evo_attention.h",
++         "host_callback.h",
+diff --git a/installation/metaljax/attention/validation.json b/installation/metaljax/attention/validation.json
+new file mode 100644
+index 0000000..3a4e6be
+--- /dev/null
++++ b/installation/metaljax/attention/validation.json
+@@ -0,0 +1,2055 @@
++{
++  "status": "Numerically qualified experimental candidate on the measured M5 Max; disabled by default. Draft review recommended, no production release.",
++  "date": "2026-10-23",
++  "hardware": {
++    "model": "Apple M5 Max",
++    "memory_bytes": 137438953472,
++    "macos": "27.0.1",
++    "architecture": "arm64"
++  },
++  "baseline": {
++    "freebindcraft_commit": "15114cbcb2379f2d16c77da48b0173dfbdb4aca4",
++    "metaljax_source": "678c58eaaafc33c5b31bcc6b6d0176dd078f6063",
++    "version": "0.11.9+fbc1",
++    "plugin_sha256": "005ab1302a7f49ec27e1447ab31db89e78b0e22793e6e14cf66bfe7773dce2fd"
++  },
++  "candidate": {
++    "version": "0.11.9+fbc3attndev2",
++    "frozen_source_commit": "678c58eaaafc33c5b31bcc6b6d0176dd078f6063",
++    "patches": {
++      "0001-bf16-attention-epilogues.patch": "36fa7ac3f6d169fe0e9176f4d819a38428369fe4ba105144bff26a8a037ced17"
++    },
++    "plugin_sha256": "19b28d865a0344768c75af9d25482dbc217954fa1b202e4b4258a7fb79bf9b2a",
++    "wheel_sha256": "bdd95090b974bec3e2afb5b675faf2f6c7363882381f6b8cfd9accf4b8dd5138",
++    "diagnostic_profile": false,
++    "attention_enabled_by_default": false,
++    "build_manifest": "build-manifest.json",
++    "build_manifest_sha256": "304dd565deb3d75f60766d2fb8af7aae17eeb413fc4b5fba6e9ce071fa872573"
++  },
++  "regressions": {
++    "passed": 76,
++    "warnings": 2,
++    "seconds": 24.28,
++    "log": "runs/metaljax-attention/final-tests-comment.log",
++    "attention_cases": 24,
++    "input_variants_per_case": 2,
++    "arrays_per_arm": 338,
++    "finite_arrays_byte_equal": 324,
++    "nonfinite_arrays_value_equal_with_matching_nan_inf": 14,
++    "actual_recognition_required": true,
++    "fallback_and_retirement_logs_checked": true,
++    "raw_output_directory": "runs/metaljax-attention/focused-regression-rebuilt",
++    "raw_hashes": {
++      "0.npz.json": "4fc8535ed1c623ba74f4a406e0c36fafba065548d7020c3c6b3a15c54bc8e4e2",
++      "1.npz.json": "4fc8535ed1c623ba74f4a406e0c36fafba065548d7020c3c6b3a15c54bc8e4e2",
++      "1.log": "a5486f6dca5e39e76fa2084b4dde35b97364534b2d1234fe1bb858a844f47525",
++      "0.log": "ba61c5c0e6a7220743337717e407c44dd050f1b5f3f7a58f787c79333a1ee6fa",
++      "1.npz": "46303db283592bff344c34b0cb5b77805a19ee957053631775a56f77e066c7d6",
++      "0.npz": "46303db283592bff344c34b0cb5b77805a19ee957053631775a56f77e066c7d6"
++    }
++  },
++  "series": {
++    "balanced": {
++      "order": "ABBABAAB",
++      "repeats_per_process": 6,
++      "processes": [
++        {
++          "metaljax": "0.11.9+fbc1",
++          "length": 146,
++          "grad_seconds": [
++            1.2171072919736616,
++            1.2182432920089923,
++            1.2433438330190256,
++            1.239879667002242,
++            1.2273488329956308,
++            1.2219808750087395
++          ],
++          "median_grad_seconds": 1.2246648540021852,
++          "forward_seconds": [
++            0.40163816697895527,
++            0.3777099159779027,
++            0.3784758339752443,
++            0.40105604100972414,
++            0.3821756250108592,
++            0.4032774170045741
++          ],
++          "median_forward_seconds": 0.3916158330102917,
++          "first_forward_seconds": 1.3677225419669412,
++          "first_grad_seconds": 3.626118124986533,
++          "setup_seconds": 0.7071284999838099,
++          "process_peak_rss_bytes": 974487552,
++          "lifetime_peak_physical_footprint_bytes": 7438158200,
++          "plugin_sha256": "005ab1302a7f49ec27e1447ab31db89e78b0e22793e6e14cf66bfe7773dce2fd",
++          "attention": "0",
++          "profiling": false,
++          "persistent_jax_cache": false,
++          "previous_sha256": {
++            "prev_msa_first_row": "ead56d02d2011f8c29518251096e264456db36a4307d5c6794fe0e3853e11b9a",
++            "prev_pair": "7b633826d7f07aa76b120b7b36c772eb4987f2fd3146210e75a2f0610b85e949",
++            "prev_pos": "d4e2f5cd521823c9063f255619ae37d02da12cedfb1b966df38ea05db28831d2"
++          },
++          "target_pdb_sha256": "74445faf0663c6c450ee284b9e0db5eed67e2089527b372729b44e2226e63b6a",
++          "sequence_sha256": "eb794ec35dd0cfe38408942e3853343660cceaaecdaec4cc94d5d1bc896636b1",
++          "key_sha256": "a5bd31ffb882b29f946f4e17aa421f115f16df944b071a67df32bc250d290afa",
++          "name": "a1",
++          "arm": "A",
++          "all_18_fields_bit_identical": true,
++          "warm_forward_hashes": {
++            "loss": "db7057fe01f5f3d6b2179186dd80ac4a1f78e5246f8c0c099bc564dc8f1e40ec",
++            "xyz": "a6eff108e81f80b9fcbcbd15dff36ec240dfc591b2ff6a6fdd1cf956e76fa5a1",
++            "plddt": "14aacc194d7c83e984be316acb9cc530a0a18ed52d5325f6a8e8be8fdf6f3923"
++          },
++          "gradient_dispatch": null,
++          "forward_dispatch": null,
++          "memory": {
++            "peak_tree_rss_bytes": 886849536,
++            "peak_sampled_tree_physical_footprint_bytes": 7269976656,
++            "maximum_process_lifetime_physical_footprint_bytes": 7438158200,
++            "minimum_system_available_bytes": 77138542592,
++            "peak_swap_growth_bytes": 0,
++            "pressure_samples": {
++              "1": 17
++            },
++            "stop_reason": null
++          },
++          "first_forward_recycle_state_3_fields_bit_identical": true
++        },
++        {
++          "metaljax": "0.11.9+fbc3attndev2",
++          "length": 146,
++          "grad_seconds": [
++            1.0864504579803906,
++            1.0944913330022246,
++            1.12069941702066,
++            1.1269948749686591,
++            1.116840333037544,
++            1.114294125000015
++          ],
++          "median_grad_seconds": 1.1155672290187795,
++          "forward_seconds": [
++            0.34762750001391396,
++            0.36352250003255904,
++            0.3368307499913499,
++            0.35511637496529147,
++            0.3370303339906968,
++            0.33659466699464247
++          ],
++          "median_forward_seconds": 0.3423289170023054,
++          "first_forward_seconds": 1.4172927920008078,
++          "first_grad_seconds": 3.6398812090046704,
++          "setup_seconds": 0.692760374979116,
++          "process_peak_rss_bytes": 976371712,
++          "lifetime_peak_physical_footprint_bytes": 7243024904,
++          "plugin_sha256": "19b28d865a0344768c75af9d25482dbc217954fa1b202e4b4258a7fb79bf9b2a",
++          "attention": "1",
++          "profiling": false,
++          "persistent_jax_cache": false,
++          "previous_sha256": {
++            "prev_msa_first_row": "ead56d02d2011f8c29518251096e264456db36a4307d5c6794fe0e3853e11b9a",
++            "prev_pair": "7b633826d7f07aa76b120b7b36c772eb4987f2fd3146210e75a2f0610b85e949",
++            "prev_pos": "d4e2f5cd521823c9063f255619ae37d02da12cedfb1b966df38ea05db28831d2"
++          },
++          "target_pdb_sha256": "74445faf0663c6c450ee284b9e0db5eed67e2089527b372729b44e2226e63b6a",
++          "sequence_sha256": "eb794ec35dd0cfe38408942e3853343660cceaaecdaec4cc94d5d1bc896636b1",
++          "key_sha256": "a5bd31ffb882b29f946f4e17aa421f115f16df944b071a67df32bc250d290afa",
++          "name": "b1",
++          "arm": "B",
++          "all_18_fields_bit_identical": true,
++          "warm_forward_hashes": {
++            "loss": "db7057fe01f5f3d6b2179186dd80ac4a1f78e5246f8c0c099bc564dc8f1e40ec",
++            "xyz": "a6eff108e81f80b9fcbcbd15dff36ec240dfc591b2ff6a6fdd1cf956e76fa5a1",
++            "plddt": "14aacc194d7c83e984be316acb9cc530a0a18ed52d5325f6a8e8be8fdf6f3923"
++          },
++          "gradient_dispatch": null,
++          "forward_dispatch": null,
++          "memory": {
++            "peak_tree_rss_bytes": 959692800,
++            "peak_sampled_tree_physical_footprint_bytes": 6772099784,
++            "maximum_process_lifetime_physical_footprint_bytes": 7243024904,
++            "minimum_system_available_bytes": 78380498944,
++            "peak_swap_growth_bytes": 0,
++            "pressure_samples": {
++              "1": 16
++            },
++            "stop_reason": null
++          },
++          "first_forward_recycle_state_3_fields_bit_identical": true
++        },
++        {
++          "metaljax": "0.11.9+fbc3attndev2",
++          "length": 146,
++          "grad_seconds": [
++            1.0861565000377595,
++            1.101531874970533,
++            1.1171367909992114,
++            1.121185083000455,
++            1.1146790839848109,
++            1.1122182079707272
++          ],
++          "median_grad_seconds": 1.113448645977769,
++          "forward_seconds": [
++            0.34784879098879173,
++            0.3658521250472404,
++            0.336890000035055,
++            0.35704270796850324,
++            0.33845579100307077,
++            0.3377399999881163
++          ],
++          "median_forward_seconds": 0.34315229099593125,
++          "first_forward_seconds": 1.4177242090227082,
++          "first_grad_seconds": 3.677156957972329,
++          "setup_seconds": 0.7007717920350842,
++          "process_peak_rss_bytes": 976257024,
++          "lifetime_peak_physical_footprint_bytes": 7242811912,
++          "plugin_sha256": "19b28d865a0344768c75af9d25482dbc217954fa1b202e4b4258a7fb79bf9b2a",
++          "attention": "1",
++          "profiling": false,
++          "persistent_jax_cache": false,
++          "previous_sha256": {
++            "prev_msa_first_row": "ead56d02d2011f8c29518251096e264456db36a4307d5c6794fe0e3853e11b9a",
++            "prev_pair": "7b633826d7f07aa76b120b7b36c772eb4987f2fd3146210e75a2f0610b85e949",
++            "prev_pos": "d4e2f5cd521823c9063f255619ae37d02da12cedfb1b966df38ea05db28831d2"
++          },
++          "target_pdb_sha256": "74445faf0663c6c450ee284b9e0db5eed67e2089527b372729b44e2226e63b6a",
++          "sequence_sha256": "eb794ec35dd0cfe38408942e3853343660cceaaecdaec4cc94d5d1bc896636b1",
++          "key_sha256": "a5bd31ffb882b29f946f4e17aa421f115f16df944b071a67df32bc250d290afa",
++          "name": "b2",
++          "arm": "B",
++          "all_18_fields_bit_identical": true,
++          "warm_forward_hashes": {
++            "loss": "db7057fe01f5f3d6b2179186dd80ac4a1f78e5246f8c0c099bc564dc8f1e40ec",
++            "xyz": "a6eff108e81f80b9fcbcbd15dff36ec240dfc591b2ff6a6fdd1cf956e76fa5a1",
++            "plddt": "14aacc194d7c83e984be316acb9cc530a0a18ed52d5325f6a8e8be8fdf6f3923"
++          },
++          "gradient_dispatch": null,
++          "forward_dispatch": null,
++          "memory": {
++            "peak_tree_rss_bytes": 948027392,
++            "peak_sampled_tree_physical_footprint_bytes": 6773263144,
++            "maximum_process_lifetime_physical_footprint_bytes": 7242811912,
++            "minimum_system_available_bytes": 78218313728,
++            "peak_swap_growth_bytes": 0,
++            "pressure_samples": {
++              "1": 16
++            },
++            "stop_reason": null
++          },
++          "first_forward_recycle_state_3_fields_bit_identical": true
++        },
++        {
++          "metaljax": "0.11.9+fbc1",
++          "length": 146,
++          "grad_seconds": [
++            1.2096305000013672,
++            1.2105888749938458,
++            1.2386764170369133,
++            1.2456949159968644,
++            1.2329677499947138,
++            1.2338983330409974
++          ],
++          "median_grad_seconds": 1.2334330415178556,
++          "forward_seconds": [
++            0.41077441698871553,
++            0.3818511249846779,
++            0.38092412502737716,
++            0.4072497910237871,
++            0.3828200409770943,
++            0.4102421249845065
++          ],
++          "median_forward_seconds": 0.3950349160004407,
++          "first_forward_seconds": 1.379052500007674,
++          "first_grad_seconds": 3.5432005409966223,
++          "setup_seconds": 0.7128848750144243,
++          "process_peak_rss_bytes": 976470016,
++          "lifetime_peak_physical_footprint_bytes": 7383271800,
++          "plugin_sha256": "005ab1302a7f49ec27e1447ab31db89e78b0e22793e6e14cf66bfe7773dce2fd",
++          "attention": "0",
++          "profiling": false,
++          "persistent_jax_cache": false,
++          "previous_sha256": {
++            "prev_msa_first_row": "ead56d02d2011f8c29518251096e264456db36a4307d5c6794fe0e3853e11b9a",
++            "prev_pair": "7b633826d7f07aa76b120b7b36c772eb4987f2fd3146210e75a2f0610b85e949",
++            "prev_pos": "d4e2f5cd521823c9063f255619ae37d02da12cedfb1b966df38ea05db28831d2"
++          },
++          "target_pdb_sha256": "74445faf0663c6c450ee284b9e0db5eed67e2089527b372729b44e2226e63b6a",
++          "sequence_sha256": "eb794ec35dd0cfe38408942e3853343660cceaaecdaec4cc94d5d1bc896636b1",
++          "key_sha256": "a5bd31ffb882b29f946f4e17aa421f115f16df944b071a67df32bc250d290afa",
++          "name": "a2",
++          "arm": "A",
++          "all_18_fields_bit_identical": true,
++          "warm_forward_hashes": {
++            "loss": "db7057fe01f5f3d6b2179186dd80ac4a1f78e5246f8c0c099bc564dc8f1e40ec",
++            "xyz": "a6eff108e81f80b9fcbcbd15dff36ec240dfc591b2ff6a6fdd1cf956e76fa5a1",
++            "plddt": "14aacc194d7c83e984be316acb9cc530a0a18ed52d5325f6a8e8be8fdf6f3923"
++          },
++          "gradient_dispatch": null,
++          "forward_dispatch": null,
++          "memory": {
++            "peak_tree_rss_bytes": 879788032,
++            "peak_sampled_tree_physical_footprint_bytes": 7210584680,
++            "maximum_process_lifetime_physical_footprint_bytes": 7383271800,
++            "minimum_system_available_bytes": 77639090176,
++            "peak_swap_growth_bytes": 0,
++            "pressure_samples": {
++              "1": 16
++            },
++            "stop_reason": null
++          },
++          "first_forward_recycle_state_3_fields_bit_identical": true
++        },
++        {
++          "metaljax": "0.11.9+fbc3attndev2",
++          "length": 146,
++          "grad_seconds": [
++            1.0965242499951273,
++            1.0865932919550687,
++            1.1174690410261974,
++            1.1179314170149155,
++            1.1158889590296894,
++            1.1179167499649338
++          ],
++          "median_grad_seconds": 1.1166790000279434,
++          "forward_seconds": [
++            0.35511674999725074,
++            0.367430999991484,
++            0.3388388750026934,
++            0.36249400000087917,
++            0.34027558303205296,
++            0.3384498340310529
++          ],
++          "median_forward_seconds": 0.34769616651465185,
++          "first_forward_seconds": 1.4645869169617072,
++          "first_grad_seconds": 3.759267082961742,
++          "setup_seconds": 0.7046942080487497,
++          "process_peak_rss_bytes": 977092608,
++          "lifetime_peak_physical_footprint_bytes": 7190186600,
++          "plugin_sha256": "19b28d865a0344768c75af9d25482dbc217954fa1b202e4b4258a7fb79bf9b2a",
++          "attention": "1",
++          "profiling": false,
++          "persistent_jax_cache": false,
++          "previous_sha256": {
++            "prev_msa_first_row": "ead56d02d2011f8c29518251096e264456db36a4307d5c6794fe0e3853e11b9a",
++            "prev_pair": "7b633826d7f07aa76b120b7b36c772eb4987f2fd3146210e75a2f0610b85e949",
++            "prev_pos": "d4e2f5cd521823c9063f255619ae37d02da12cedfb1b966df38ea05db28831d2"
++          },
++          "target_pdb_sha256": "74445faf0663c6c450ee284b9e0db5eed67e2089527b372729b44e2226e63b6a",
++          "sequence_sha256": "eb794ec35dd0cfe38408942e3853343660cceaaecdaec4cc94d5d1bc896636b1",
++          "key_sha256": "a5bd31ffb882b29f946f4e17aa421f115f16df944b071a67df32bc250d290afa",
++          "name": "b3",
++          "arm": "B",
++          "all_18_fields_bit_identical": true,
++          "warm_forward_hashes": {
++            "loss": "db7057fe01f5f3d6b2179186dd80ac4a1f78e5246f8c0c099bc564dc8f1e40ec",
++            "xyz": "a6eff108e81f80b9fcbcbd15dff36ec240dfc591b2ff6a6fdd1cf956e76fa5a1",
++            "plddt": "14aacc194d7c83e984be316acb9cc530a0a18ed52d5325f6a8e8be8fdf6f3923"
++          },
++          "gradient_dispatch": null,
++          "forward_dispatch": null,
++          "memory": {
++            "peak_tree_rss_bytes": 939819008,
++            "peak_sampled_tree_physical_footprint_bytes": 6527372072,
++            "maximum_process_lifetime_physical_footprint_bytes": 7190186600,
++            "minimum_system_available_bytes": 78149730304,
++            "peak_swap_growth_bytes": 0,
++            "pressure_samples": {
++              "1": 16
++            },
++            "stop_reason": null
++          },
++          "first_forward_recycle_state_3_fields_bit_identical": true
++        },
++        {
++          "metaljax": "0.11.9+fbc1",
++          "length": 146,
++          "grad_seconds": [
++            1.2139638329972513,
++            1.2152906659757718,
++            1.247439915954601,
++            1.2536415829672478,
++            1.2946314580040053,
++            1.2362522909534164
++          ],
++          "median_grad_seconds": 1.2418461034540087,
++          "forward_seconds": [
++            0.40663187502650544,
++            0.384869042027276,
++            0.3815717499819584,
++            0.40629887505201623,
++            0.38311812502797693,
++            0.41015662503195927
++          ],
++          "median_forward_seconds": 0.3955839585396461,
++          "first_forward_seconds": 1.478941333014518,
++          "first_grad_seconds": 3.6851903339847922,
++          "setup_seconds": 0.809630665986333,
++          "process_peak_rss_bytes": 976371712,
++          "lifetime_peak_physical_footprint_bytes": 7387515256,
++          "plugin_sha256": "005ab1302a7f49ec27e1447ab31db89e78b0e22793e6e14cf66bfe7773dce2fd",
++          "attention": "0",
++          "profiling": false,
++          "persistent_jax_cache": false,
++          "previous_sha256": {
++            "prev_msa_first_row": "ead56d02d2011f8c29518251096e264456db36a4307d5c6794fe0e3853e11b9a",
++            "prev_pair": "7b633826d7f07aa76b120b7b36c772eb4987f2fd3146210e75a2f0610b85e949",
++            "prev_pos": "d4e2f5cd521823c9063f255619ae37d02da12cedfb1b966df38ea05db28831d2"
++          },
++          "target_pdb_sha256": "74445faf0663c6c450ee284b9e0db5eed67e2089527b372729b44e2226e63b6a",
++          "sequence_sha256": "eb794ec35dd0cfe38408942e3853343660cceaaecdaec4cc94d5d1bc896636b1",
++          "key_sha256": "a5bd31ffb882b29f946f4e17aa421f115f16df944b071a67df32bc250d290afa",
++          "name": "a3",
++          "arm": "A",
++          "all_18_fields_bit_identical": true,
++          "warm_forward_hashes": {
++            "loss": "db7057fe01f5f3d6b2179186dd80ac4a1f78e5246f8c0c099bc564dc8f1e40ec",
++            "xyz": "a6eff108e81f80b9fcbcbd15dff36ec240dfc591b2ff6a6fdd1cf956e76fa5a1",
++            "plddt": "14aacc194d7c83e984be316acb9cc530a0a18ed52d5325f6a8e8be8fdf6f3923"
++          },
++          "gradient_dispatch": null,
++          "forward_dispatch": null,
++          "memory": {
++            "peak_tree_rss_bytes": 930693120,
++            "peak_sampled_tree_physical_footprint_bytes": 7215073896,
++            "maximum_process_lifetime_physical_footprint_bytes": 7387515256,
++            "minimum_system_available_bytes": 77508984832,
++            "peak_swap_growth_bytes": 0,
++            "pressure_samples": {
++              "1": 17
++            },
++            "stop_reason": null
++          },
++          "first_forward_recycle_state_3_fields_bit_identical": true
++        },
++        {
++          "metaljax": "0.11.9+fbc1",
++          "length": 146,
++          "grad_seconds": [
++            1.2092059169663116,
++            1.2121082079829648,
++            1.2437963749980554,
++            1.2520596249960363,
++            1.23195675003808,
++            1.2330147080356255
++          ],
++          "median_grad_seconds": 1.2324857290368527,
++          "forward_seconds": [
++            0.4070800829795189,
++            0.38218099996447563,
++            0.38441962498473004,
++            0.4091954579926096,
++            0.38130233401898295,
++            0.40879145899089053
++          ],
++          "median_forward_seconds": 0.3957498539821245,
++          "first_forward_seconds": 1.4218714170274325,
++          "first_grad_seconds": 3.641283375036437,
++          "setup_seconds": 0.7507272500079125,
++          "process_peak_rss_bytes": 978518016,
++          "lifetime_peak_physical_footprint_bytes": 7389104504,
++          "plugin_sha256": "005ab1302a7f49ec27e1447ab31db89e78b0e22793e6e14cf66bfe7773dce2fd",
++          "attention": "0",
++          "profiling": false,
++          "persistent_jax_cache": false,
++          "previous_sha256": {
++            "prev_msa_first_row": "ead56d02d2011f8c29518251096e264456db36a4307d5c6794fe0e3853e11b9a",
++            "prev_pair": "7b633826d7f07aa76b120b7b36c772eb4987f2fd3146210e75a2f0610b85e949",
++            "prev_pos": "d4e2f5cd521823c9063f255619ae37d02da12cedfb1b966df38ea05db28831d2"
++          },
++          "target_pdb_sha256": "74445faf0663c6c450ee284b9e0db5eed67e2089527b372729b44e2226e63b6a",
++          "sequence_sha256": "eb794ec35dd0cfe38408942e3853343660cceaaecdaec4cc94d5d1bc896636b1",
++          "key_sha256": "a5bd31ffb882b29f946f4e17aa421f115f16df944b071a67df32bc250d290afa",
++          "name": "a4",
++          "arm": "A",
++          "all_18_fields_bit_identical": true,
++          "warm_forward_hashes": {
++            "loss": "db7057fe01f5f3d6b2179186dd80ac4a1f78e5246f8c0c099bc564dc8f1e40ec",
++            "xyz": "a6eff108e81f80b9fcbcbd15dff36ec240dfc591b2ff6a6fdd1cf956e76fa5a1",
++            "plddt": "14aacc194d7c83e984be316acb9cc530a0a18ed52d5325f6a8e8be8fdf6f3923"
++          },
++          "gradient_dispatch": null,
++          "forward_dispatch": null,
++          "memory": {
++            "peak_tree_rss_bytes": 981286912,
++            "peak_sampled_tree_physical_footprint_bytes": 7203326520,
++            "maximum_process_lifetime_physical_footprint_bytes": 7389104504,
++            "minimum_system_available_bytes": 77632667648,
++            "peak_swap_growth_bytes": 0,
++            "pressure_samples": {
++              "1": 17
++            },
++            "stop_reason": null
++          },
++          "first_forward_recycle_state_3_fields_bit_identical": true
++        },
++        {
++          "metaljax": "0.11.9+fbc3attndev2",
++          "length": 146,
++          "grad_seconds": [
++            1.2065590840065852,
++            1.2811447090352885,
++            1.3144249170436524,
++            1.2909288330120035,
++            1.288813500024844,
++            1.2827581249875948
++          ],
++          "median_grad_seconds": 1.2857858125062194,
++          "forward_seconds": [
++            0.4090256670024246,
++            0.4221634580171667,
++            0.38884866604348645,
++            0.4170972919673659,
++            0.38671108399285004,
++            0.383790708030574
++          ],
++          "median_forward_seconds": 0.3989371665229555,
++          "first_forward_seconds": 1.441193040984217,
++          "first_grad_seconds": 3.6673842500313185,
++          "setup_seconds": 0.7262031249701977,
++          "process_peak_rss_bytes": 976715776,
++          "lifetime_peak_physical_footprint_bytes": 7199623664,
++          "plugin_sha256": "19b28d865a0344768c75af9d25482dbc217954fa1b202e4b4258a7fb79bf9b2a",
++          "attention": "1",
++          "profiling": false,
++          "persistent_jax_cache": false,
++          "previous_sha256": {
++            "prev_msa_first_row": "ead56d02d2011f8c29518251096e264456db36a4307d5c6794fe0e3853e11b9a",
++            "prev_pair": "7b633826d7f07aa76b120b7b36c772eb4987f2fd3146210e75a2f0610b85e949",
++            "prev_pos": "d4e2f5cd521823c9063f255619ae37d02da12cedfb1b966df38ea05db28831d2"
++          },
++          "target_pdb_sha256": "74445faf0663c6c450ee284b9e0db5eed67e2089527b372729b44e2226e63b6a",
++          "sequence_sha256": "eb794ec35dd0cfe38408942e3853343660cceaaecdaec4cc94d5d1bc896636b1",
++          "key_sha256": "a5bd31ffb882b29f946f4e17aa421f115f16df944b071a67df32bc250d290afa",
++          "name": "b4",
++          "arm": "B",
++          "all_18_fields_bit_identical": true,
++          "warm_forward_hashes": {
++            "loss": "db7057fe01f5f3d6b2179186dd80ac4a1f78e5246f8c0c099bc564dc8f1e40ec",
++            "xyz": "a6eff108e81f80b9fcbcbd15dff36ec240dfc591b2ff6a6fdd1cf956e76fa5a1",
++            "plddt": "14aacc194d7c83e984be316acb9cc530a0a18ed52d5325f6a8e8be8fdf6f3923"
++          },
++          "gradient_dispatch": null,
++          "forward_dispatch": null,
++          "memory": {
++            "peak_tree_rss_bytes": 964018176,
++            "peak_sampled_tree_physical_footprint_bytes": 6731451032,
++            "maximum_process_lifetime_physical_footprint_bytes": 7199623664,
++            "minimum_system_available_bytes": 77631275008,
++            "peak_swap_growth_bytes": 0,
++            "pressure_samples": {
++              "1": 17
++            },
++            "stop_reason": null
++          },
++          "first_forward_recycle_state_3_fields_bit_identical": true
++        }
++      ],
++      "activity_log": "runs/metaljax-attention/balanced/contention.jsonl",
++      "warm_forward_hashes_all_equal": true,
++      "contention_note": "Retained whole series including B4 slowdown concurrent with macOS mediaanalysisd and indexing. CPU-name filter then omitted system services; no dispatch snapshots in this earlier series.",
++      "process_sampling_unit": "Four fresh processes per arm; six warmed calls per process are correlated.",
++      "medians": {
++        "median_grad_seconds": {
++          "A": 1.2329593852773542,
++          "B": 1.1161231145233614,
++          "speedup": 1.1046804507797399,
++          "reduction_percent": 9.476084301650411
++        },
++        "median_forward_seconds": {
++          "A": 0.3953094372700434,
++          "B": 0.34542422875529155,
++          "speedup": 1.1444172248556774,
++          "reduction_percent": 12.61928095095649
++        },
++        "first_forward_seconds": {
++          "A": 1.4004619585175533,
++          "B": 1.4294586250034627,
++          "speedup": 0.9797149312482974,
++          "reduction_percent": -2.0705072572341443
++        },
++        "first_grad_seconds": {
++          "A": 3.633700750011485,
++          "B": 3.672270604001824,
++          "speedup": 0.9894970011337652,
++          "reduction_percent": -1.0614482766699185
++        }
++      },
++      "raw_summary_sha256": "2702e81b2be46aec0dfe653ef2887405801673f6db1b06e915f70cc030b83aaa"
++    },
++    "balanced-repeat": {
++      "order": "BAABABBA",
++      "repeats_per_process": 6,
++      "processes": [
++        {
++          "metaljax": "0.11.9+fbc3attndev2",
++          "length": 146,
++          "grad_seconds": [
++            1.0826281249755993,
++            1.0807537080254406,
++            1.1106925409985706,
++            1.1128344589960761,
++            1.112735083035659,
++            1.1126658330322243
++          ],
++          "median_grad_seconds": 1.1116791870153975,
++          "forward_seconds": [
++            0.34762762498576194,
++            0.35812787496251985,
++            0.33394000004045665,
++            0.36023466696497053,
++            0.33630466600880027,
++            0.3317228750092909
++          ],
++          "median_forward_seconds": 0.3419661454972811,
++          "first_forward_seconds": 1.3563316249637865,
++          "first_grad_seconds": 3.4730714579927735,
++          "setup_seconds": 0.7791658750502393,
++          "process_peak_rss_bytes": 981008384,
++          "lifetime_peak_physical_footprint_bytes": 7202064976,
++          "plugin_sha256": "19b28d865a0344768c75af9d25482dbc217954fa1b202e4b4258a7fb79bf9b2a",
++          "attention": "1",
++          "profiling": false,
++          "persistent_jax_cache": false,
++          "previous_sha256": {
++            "prev_msa_first_row": "ead56d02d2011f8c29518251096e264456db36a4307d5c6794fe0e3853e11b9a",
++            "prev_pair": "7b633826d7f07aa76b120b7b36c772eb4987f2fd3146210e75a2f0610b85e949",
++            "prev_pos": "d4e2f5cd521823c9063f255619ae37d02da12cedfb1b966df38ea05db28831d2"
++          },
++          "target_pdb_sha256": "74445faf0663c6c450ee284b9e0db5eed67e2089527b372729b44e2226e63b6a",
++          "sequence_sha256": "eb794ec35dd0cfe38408942e3853343660cceaaecdaec4cc94d5d1bc896636b1",
++          "key_sha256": "a5bd31ffb882b29f946f4e17aa421f115f16df944b071a67df32bc250d290afa",
++          "name": "b1",
++          "arm": "B",
++          "all_18_fields_bit_identical": true,
++          "warm_forward_hashes": {
++            "loss": "db7057fe01f5f3d6b2179186dd80ac4a1f78e5246f8c0c099bc564dc8f1e40ec",
++            "xyz": "a6eff108e81f80b9fcbcbd15dff36ec240dfc591b2ff6a6fdd1cf956e76fa5a1",
++            "plddt": "14aacc194d7c83e984be316acb9cc530a0a18ed52d5325f6a8e8be8fdf6f3923"
++          },
++          "gradient_dispatch": {
++            "dispatches": [
++              138441
++            ],
++            "command_buffers": [
++              309
++            ],
++            "empty_command_buffers": [
++              0
++            ],
++            "completed_command_buffers": [
++              309
++            ]
++          },
++          "forward_dispatch": {
++            "dispatches": [
++              55412
++            ],
++            "command_buffers": [
++              125
++            ],
++            "empty_command_buffers": [
++              0
++            ],
++            "completed_command_buffers": [
++              125
++            ]
++          },
++          "memory": {
++            "peak_tree_rss_bytes": 934215680,
++            "peak_sampled_tree_physical_footprint_bytes": 6536776488,
++            "maximum_process_lifetime_physical_footprint_bytes": 7202064976,
++            "minimum_system_available_bytes": 77413597184,
++            "peak_swap_growth_bytes": 0,
++            "pressure_samples": {
++              "1": 16
++            },
++            "stop_reason": null
++          },
++          "first_forward_recycle_state_3_fields_bit_identical": true
++        },
++        {
++          "metaljax": "0.11.9+fbc1",
++          "length": 146,
++          "grad_seconds": [
++            1.1992309160414152,
++            1.2069006660021842,
++            1.2326299580163322,
++            1.239126541011501,
++            1.2176285829627886,
++            1.2202764169778675
++          ],
++          "median_grad_seconds": 1.218952499970328,
++          "forward_seconds": [
++            0.3986519160098396,
++            0.37548404198605567,
++            0.37786395801231265,
++            0.3997750830021687,
++            0.377916915982496,
++            0.40545291698072106
++          ],
++          "median_forward_seconds": 0.3882844159961678,
++          "first_forward_seconds": 1.3291392920073122,
++          "first_grad_seconds": 3.4656906660529785,
++          "setup_seconds": 0.6788985839812085,
++          "process_peak_rss_bytes": 975257600,
++          "lifetime_peak_physical_footprint_bytes": 7384222072,
++          "plugin_sha256": "005ab1302a7f49ec27e1447ab31db89e78b0e22793e6e14cf66bfe7773dce2fd",
++          "attention": "0",
++          "profiling": false,
++          "persistent_jax_cache": false,
++          "previous_sha256": {
++            "prev_msa_first_row": "ead56d02d2011f8c29518251096e264456db36a4307d5c6794fe0e3853e11b9a",
++            "prev_pair": "7b633826d7f07aa76b120b7b36c772eb4987f2fd3146210e75a2f0610b85e949",
++            "prev_pos": "d4e2f5cd521823c9063f255619ae37d02da12cedfb1b966df38ea05db28831d2"
++          },
++          "target_pdb_sha256": "74445faf0663c6c450ee284b9e0db5eed67e2089527b372729b44e2226e63b6a",
++          "sequence_sha256": "eb794ec35dd0cfe38408942e3853343660cceaaecdaec4cc94d5d1bc896636b1",
++          "key_sha256": "a5bd31ffb882b29f946f4e17aa421f115f16df944b071a67df32bc250d290afa",
++          "name": "a1",
++          "arm": "A",
++          "all_18_fields_bit_identical": true,
++          "warm_forward_hashes": {
++            "loss": "db7057fe01f5f3d6b2179186dd80ac4a1f78e5246f8c0c099bc564dc8f1e40ec",
++            "xyz": "a6eff108e81f80b9fcbcbd15dff36ec240dfc591b2ff6a6fdd1cf956e76fa5a1",
++            "plddt": "14aacc194d7c83e984be316acb9cc530a0a18ed52d5325f6a8e8be8fdf6f3923"
++          },
++          "gradient_dispatch": {
++            "dispatches": [
++              141615
++            ],
++            "command_buffers": [
++              310
++            ],
++            "empty_command_buffers": [
++              0
++            ],
++            "completed_command_buffers": [
++              310
++            ]
++          },
++          "forward_dispatch": {
++            "dispatches": [
++              56530
++            ],
++            "command_buffers": [
++              125
++            ],
++            "empty_command_buffers": [
++              0
++            ],
++            "completed_command_buffers": [
++              125
++            ]
++          },
++          "memory": {
++            "peak_tree_rss_bytes": 893534208,
++            "peak_sampled_tree_physical_footprint_bytes": 7209667152,
++            "maximum_process_lifetime_physical_footprint_bytes": 7384222072,
++            "minimum_system_available_bytes": 77276184576,
++            "peak_swap_growth_bytes": 0,
++            "pressure_samples": {
++              "1": 17
++            },
++            "stop_reason": null
++          },
++          "first_forward_recycle_state_3_fields_bit_identical": true
++        },
++        {
++          "metaljax": "0.11.9+fbc1",
++          "length": 146,
++          "grad_seconds": [
++            1.1976042500464246,
++            1.2043962079915218,
++            1.2328828749596141,
++            1.2314937499468215,
++            1.2159352090093307,
++            1.2211349579738453
++          ],
++          "median_grad_seconds": 1.218535083491588,
++          "forward_seconds": [
++            0.40350191603647545,
++            0.3758542080176994,
++            0.3769435419817455,
++            0.40517899999395013,
++            0.3785082079702988,
++            0.40239800000563264
++          ],
++          "median_forward_seconds": 0.39045310398796573,
++          "first_forward_seconds": 1.3478613329934888,
++          "first_grad_seconds": 3.510959582985379,
++          "setup_seconds": 0.6832532499684021,
++          "process_peak_rss_bytes": 974225408,
++          "lifetime_peak_physical_footprint_bytes": 7388514752,
++          "plugin_sha256": "005ab1302a7f49ec27e1447ab31db89e78b0e22793e6e14cf66bfe7773dce2fd",
++          "attention": "0",
++          "profiling": false,
++          "persistent_jax_cache": false,
++          "previous_sha256": {
++            "prev_msa_first_row": "ead56d02d2011f8c29518251096e264456db36a4307d5c6794fe0e3853e11b9a",
++            "prev_pair": "7b633826d7f07aa76b120b7b36c772eb4987f2fd3146210e75a2f0610b85e949",
++            "prev_pos": "d4e2f5cd521823c9063f255619ae37d02da12cedfb1b966df38ea05db28831d2"
++          },
++          "target_pdb_sha256": "74445faf0663c6c450ee284b9e0db5eed67e2089527b372729b44e2226e63b6a",
++          "sequence_sha256": "eb794ec35dd0cfe38408942e3853343660cceaaecdaec4cc94d5d1bc896636b1",
++          "key_sha256": "a5bd31ffb882b29f946f4e17aa421f115f16df944b071a67df32bc250d290afa",
++          "name": "a2",
++          "arm": "A",
++          "all_18_fields_bit_identical": true,
++          "warm_forward_hashes": {
++            "loss": "db7057fe01f5f3d6b2179186dd80ac4a1f78e5246f8c0c099bc564dc8f1e40ec",
++            "xyz": "a6eff108e81f80b9fcbcbd15dff36ec240dfc591b2ff6a6fdd1cf956e76fa5a1",
++            "plddt": "14aacc194d7c83e984be316acb9cc530a0a18ed52d5325f6a8e8be8fdf6f3923"
++          },
++          "gradient_dispatch": {
++            "dispatches": [
++              141615,
++              141616
++            ],
++            "command_buffers": [
++              310
++            ],
++            "empty_command_buffers": [
++              0
++            ],
++            "completed_command_buffers": [
++              310
++            ]
++          },
++          "forward_dispatch": {
++            "dispatches": [
++              56530
++            ],
++            "command_buffers": [
++              125
++            ],
++            "empty_command_buffers": [
++              0
++            ],
++            "completed_command_buffers": [
++              125
++            ]
++          },
++          "memory": {
++            "peak_tree_rss_bytes": 902496256,
++            "peak_sampled_tree_physical_footprint_bytes": 7213664920,
++            "maximum_process_lifetime_physical_footprint_bytes": 7388514752,
++            "minimum_system_available_bytes": 76927483904,
++            "peak_swap_growth_bytes": 0,
++            "pressure_samples": {
++              "1": 16
++            },
++            "stop_reason": null
++          },
++          "first_forward_recycle_state_3_fields_bit_identical": true
++        },
++        {
++          "metaljax": "0.11.9+fbc3attndev2",
++          "length": 146,
++          "grad_seconds": [
++            1.0781976250000298,
++            1.0799702920485288,
++            1.1083779580076225,
++            1.1063732909969985,
++            1.1093412920017727,
++            1.1075914159882814
++          ],
++          "median_grad_seconds": 1.10698235349264,
++          "forward_seconds": [
++            0.34781687502982095,
++            0.36147945799166337,
++            0.3345881660352461,
++            0.35425874998327345,
++            0.33392016700236127,
++            0.33447308297036216
++          ],
++          "median_forward_seconds": 0.3412025205325335,
++          "first_forward_seconds": 1.3878460840205662,
++          "first_grad_seconds": 3.5814173329854384,
++          "setup_seconds": 0.691352707974147,
++          "process_peak_rss_bytes": 976748544,
++          "lifetime_peak_physical_footprint_bytes": 7199443632,
++          "plugin_sha256": "19b28d865a0344768c75af9d25482dbc217954fa1b202e4b4258a7fb79bf9b2a",
++          "attention": "1",
++          "profiling": false,
++          "persistent_jax_cache": false,
++          "previous_sha256": {
++            "prev_msa_first_row": "ead56d02d2011f8c29518251096e264456db36a4307d5c6794fe0e3853e11b9a",
++            "prev_pair": "7b633826d7f07aa76b120b7b36c772eb4987f2fd3146210e75a2f0610b85e949",
++            "prev_pos": "d4e2f5cd521823c9063f255619ae37d02da12cedfb1b966df38ea05db28831d2"
++          },
++          "target_pdb_sha256": "74445faf0663c6c450ee284b9e0db5eed67e2089527b372729b44e2226e63b6a",
++          "sequence_sha256": "eb794ec35dd0cfe38408942e3853343660cceaaecdaec4cc94d5d1bc896636b1",
++          "key_sha256": "a5bd31ffb882b29f946f4e17aa421f115f16df944b071a67df32bc250d290afa",
++          "name": "b2",
++          "arm": "B",
++          "all_18_fields_bit_identical": true,
++          "warm_forward_hashes": {
++            "loss": "db7057fe01f5f3d6b2179186dd80ac4a1f78e5246f8c0c099bc564dc8f1e40ec",
++            "xyz": "a6eff108e81f80b9fcbcbd15dff36ec240dfc591b2ff6a6fdd1cf956e76fa5a1",
++            "plddt": "14aacc194d7c83e984be316acb9cc530a0a18ed52d5325f6a8e8be8fdf6f3923"
++          },
++          "gradient_dispatch": {
++            "dispatches": [
++              138441
++            ],
++            "command_buffers": [
++              309
++            ],
++            "empty_command_buffers": [
++              0
++            ],
++            "completed_command_buffers": [
++              309
++            ]
++          },
++          "forward_dispatch": {
++            "dispatches": [
++              55412
++            ],
++            "command_buffers": [
++              125
++            ],
++            "empty_command_buffers": [
++              0
++            ],
++            "completed_command_buffers": [
++              125
++            ]
++          },
++          "memory": {
++            "peak_tree_rss_bytes": 970850304,
++            "peak_sampled_tree_physical_footprint_bytes": 6902041504,
++            "maximum_process_lifetime_physical_footprint_bytes": 7199443632,
++            "minimum_system_available_bytes": 77799948288,
++            "peak_swap_growth_bytes": 0,
++            "pressure_samples": {
++              "1": 16
++            },
++            "stop_reason": null
++          },
++          "first_forward_recycle_state_3_fields_bit_identical": true
++        },
++        {
++          "metaljax": "0.11.9+fbc1",
++          "length": 146,
++          "grad_seconds": [
++            1.2027094999793917,
++            1.2090041670016944,
++            1.2313217089977115,
++            1.235882374981884,
++            1.214076834032312,
++            1.2214753330335952
++          ],
++          "median_grad_seconds": 1.2177760835329536,
++          "forward_seconds": [
++            0.40310812497045845,
++            0.3753520419704728,
++            0.3764297500019893,
++            0.4102127499645576,
++            0.3771022920263931,
++            0.4011439169989899
++          ],
++          "median_forward_seconds": 0.3891231045126915,
++          "first_forward_seconds": 1.3512005830416456,
++          "first_grad_seconds": 3.558952707971912,
++          "setup_seconds": 0.685259916994255,
++          "process_peak_rss_bytes": 976322560,
++          "lifetime_peak_physical_footprint_bytes": 7435913592,
++          "plugin_sha256": "005ab1302a7f49ec27e1447ab31db89e78b0e22793e6e14cf66bfe7773dce2fd",
++          "attention": "0",
++          "profiling": false,
++          "persistent_jax_cache": false,
++          "previous_sha256": {
++            "prev_msa_first_row": "ead56d02d2011f8c29518251096e264456db36a4307d5c6794fe0e3853e11b9a",
++            "prev_pair": "7b633826d7f07aa76b120b7b36c772eb4987f2fd3146210e75a2f0610b85e949",
++            "prev_pos": "d4e2f5cd521823c9063f255619ae37d02da12cedfb1b966df38ea05db28831d2"
++          },
++          "target_pdb_sha256": "74445faf0663c6c450ee284b9e0db5eed67e2089527b372729b44e2226e63b6a",
++          "sequence_sha256": "eb794ec35dd0cfe38408942e3853343660cceaaecdaec4cc94d5d1bc896636b1",
++          "key_sha256": "a5bd31ffb882b29f946f4e17aa421f115f16df944b071a67df32bc250d290afa",
++          "name": "a3",
++          "arm": "A",
++          "all_18_fields_bit_identical": true,
++          "warm_forward_hashes": {
++            "loss": "db7057fe01f5f3d6b2179186dd80ac4a1f78e5246f8c0c099bc564dc8f1e40ec",
++            "xyz": "a6eff108e81f80b9fcbcbd15dff36ec240dfc591b2ff6a6fdd1cf956e76fa5a1",
++            "plddt": "14aacc194d7c83e984be316acb9cc530a0a18ed52d5325f6a8e8be8fdf6f3923"
++          },
++          "gradient_dispatch": {
++            "dispatches": [
++              141615
++            ],
++            "command_buffers": [
++              310
++            ],
++            "empty_command_buffers": [
++              0
++            ],
++            "completed_command_buffers": [
++              310
++            ]
++          },
++          "forward_dispatch": {
++            "dispatches": [
++              56530
++            ],
++            "command_buffers": [
++              125
++            ],
++            "empty_command_buffers": [
++              0
++            ],
++            "completed_command_buffers": [
++              125
++            ]
++          },
++          "memory": {
++            "peak_tree_rss_bytes": 874332160,
++            "peak_sampled_tree_physical_footprint_bytes": 7262505624,
++            "maximum_process_lifetime_physical_footprint_bytes": 7435913592,
++            "minimum_system_available_bytes": 77219381248,
++            "peak_swap_growth_bytes": 0,
++            "pressure_samples": {
++              "1": 16
++            },
++            "stop_reason": null
++          },
++          "first_forward_recycle_state_3_fields_bit_identical": true
++        },
++        {
++          "metaljax": "0.11.9+fbc3attndev2",
++          "length": 146,
++          "grad_seconds": [
++            1.0761209590127692,
++            1.081485166971106,
++            1.108016166021116,
++            1.106629207963124,
++            1.1067372499965131,
++            1.1077992499922402
++          ],
++          "median_grad_seconds": 1.1066832289798185,
++          "forward_seconds": [
++            0.34380883298581466,
++            0.3611728330142796,
++            0.33930799999507144,
++            0.35938187496503815,
++            0.3340806670021266,
++            0.3344718749867752
++          ],
++          "median_forward_seconds": 0.34155841649044305,
++          "first_forward_seconds": 1.3917209170176648,
++          "first_grad_seconds": 3.5908947919961065,
++          "setup_seconds": 0.69319970801007,
++          "process_peak_rss_bytes": 977666048,
++          "lifetime_peak_physical_footprint_bytes": 7197133440,
++          "plugin_sha256": "19b28d865a0344768c75af9d25482dbc217954fa1b202e4b4258a7fb79bf9b2a",
++          "attention": "1",
++          "profiling": false,
++          "persistent_jax_cache": false,
++          "previous_sha256": {
++            "prev_msa_first_row": "ead56d02d2011f8c29518251096e264456db36a4307d5c6794fe0e3853e11b9a",
++            "prev_pair": "7b633826d7f07aa76b120b7b36c772eb4987f2fd3146210e75a2f0610b85e949",
++            "prev_pos": "d4e2f5cd521823c9063f255619ae37d02da12cedfb1b966df38ea05db28831d2"
++          },
++          "target_pdb_sha256": "74445faf0663c6c450ee284b9e0db5eed67e2089527b372729b44e2226e63b6a",
++          "sequence_sha256": "eb794ec35dd0cfe38408942e3853343660cceaaecdaec4cc94d5d1bc896636b1",
++          "key_sha256": "a5bd31ffb882b29f946f4e17aa421f115f16df944b071a67df32bc250d290afa",
++          "name": "b3",
++          "arm": "B",
++          "all_18_fields_bit_identical": true,
++          "warm_forward_hashes": {
++            "loss": "db7057fe01f5f3d6b2179186dd80ac4a1f78e5246f8c0c099bc564dc8f1e40ec",
++            "xyz": "a6eff108e81f80b9fcbcbd15dff36ec240dfc591b2ff6a6fdd1cf956e76fa5a1",
++            "plddt": "14aacc194d7c83e984be316acb9cc530a0a18ed52d5325f6a8e8be8fdf6f3923"
++          },
++          "gradient_dispatch": {
++            "dispatches": [
++              138441
++            ],
++            "command_buffers": [
++              309
++            ],
++            "empty_command_buffers": [
++              0
++            ],
++            "completed_command_buffers": [
++              309
++            ]
++          },
++          "forward_dispatch": {
++            "dispatches": [
++              55412
++            ],
++            "command_buffers": [
++              125
++            ],
++            "empty_command_buffers": [
++              0
++            ],
++            "completed_command_buffers": [
++              125
++            ]
++          },
++          "memory": {
++            "peak_tree_rss_bytes": 953679872,
++            "peak_sampled_tree_physical_footprint_bytes": 6906022768,
++            "maximum_process_lifetime_physical_footprint_bytes": 7197133440,
++            "minimum_system_available_bytes": 77591691264,
++            "peak_swap_growth_bytes": 0,
++            "pressure_samples": {
++              "1": 16
++            },
++            "stop_reason": null
++          },
++          "first_forward_recycle_state_3_fields_bit_identical": true
++        },
++        {
++          "metaljax": "0.11.9+fbc3attndev2",
++          "length": 146,
++          "grad_seconds": [
++            1.079816583020147,
++            1.079865624953527,
++            1.1074446249986067,
++            1.1086553750210442,
++            1.1074291249969974,
++            1.106173417007085
++          ],
++          "median_grad_seconds": 1.1068012710020412,
++          "forward_seconds": [
++            0.3437739170040004,
++            0.3599789590225555,
++            0.3364615829777904,
++            0.358503874973394,
++            0.333796875027474,
++            0.33352354197995737
++          ],
++          "median_forward_seconds": 0.3401177499908954,
++          "first_forward_seconds": 1.39076679199934,
++          "first_grad_seconds": 3.587577166967094,
++          "setup_seconds": 0.693449333019089,
++          "process_peak_rss_bytes": 977371136,
++          "lifetime_peak_physical_footprint_bytes": 7206324792,
++          "plugin_sha256": "19b28d865a0344768c75af9d25482dbc217954fa1b202e4b4258a7fb79bf9b2a",
++          "attention": "1",
++          "profiling": false,
++          "persistent_jax_cache": false,
++          "previous_sha256": {
++            "prev_msa_first_row": "ead56d02d2011f8c29518251096e264456db36a4307d5c6794fe0e3853e11b9a",
++            "prev_pair": "7b633826d7f07aa76b120b7b36c772eb4987f2fd3146210e75a2f0610b85e949",
++            "prev_pos": "d4e2f5cd521823c9063f255619ae37d02da12cedfb1b966df38ea05db28831d2"
++          },
++          "target_pdb_sha256": "74445faf0663c6c450ee284b9e0db5eed67e2089527b372729b44e2226e63b6a",
++          "sequence_sha256": "eb794ec35dd0cfe38408942e3853343660cceaaecdaec4cc94d5d1bc896636b1",
++          "key_sha256": "a5bd31ffb882b29f946f4e17aa421f115f16df944b071a67df32bc250d290afa",
++          "name": "b4",
++          "arm": "B",
++          "all_18_fields_bit_identical": true,
++          "warm_forward_hashes": {
++            "loss": "db7057fe01f5f3d6b2179186dd80ac4a1f78e5246f8c0c099bc564dc8f1e40ec",
++            "xyz": "a6eff108e81f80b9fcbcbd15dff36ec240dfc591b2ff6a6fdd1cf956e76fa5a1",
++            "plddt": "14aacc194d7c83e984be316acb9cc530a0a18ed52d5325f6a8e8be8fdf6f3923"
++          },
++          "gradient_dispatch": {
++            "dispatches": [
++              138441
++            ],
++            "command_buffers": [
++              309
++            ],
++            "empty_command_buffers": [
++              0
++            ],
++            "completed_command_buffers": [
++              309
++            ]
++          },
++          "forward_dispatch": {
++            "dispatches": [
++              55412
++            ],
++            "command_buffers": [
++              125
++            ],
++            "empty_command_buffers": [
++              0
++            ],
++            "completed_command_buffers": [
++              125
++            ]
++          },
++          "memory": {
++            "peak_tree_rss_bytes": 948092928,
++            "peak_sampled_tree_physical_footprint_bytes": 6915214120,
++            "maximum_process_lifetime_physical_footprint_bytes": 7206324792,
++            "minimum_system_available_bytes": 77616676864,
++            "peak_swap_growth_bytes": 0,
++            "pressure_samples": {
++              "1": 16
++            },
++            "stop_reason": null
++          },
++          "first_forward_recycle_state_3_fields_bit_identical": true
++        },
++        {
++          "metaljax": "0.11.9+fbc1",
++          "length": 146,
++          "grad_seconds": [
++            1.2136811669915915,
++            1.2072562499670312,
++            1.2310327499872074,
++            1.2368941250024363,
++            1.2174527919851243,
++            1.2202699999907054
++          ],
++          "median_grad_seconds": 1.2188613959879149,
++          "forward_seconds": [
++            0.40372362500056624,
++            0.3775492910062894,
++            0.37734362500486895,
++            0.4086055419757031,
++            0.3773299169843085,
++            0.40200666699092835
++          ],
++          "median_forward_seconds": 0.3897779789986089,
++          "first_forward_seconds": 1.3495520409778692,
++          "first_grad_seconds": 3.5177302079973742,
++          "setup_seconds": 0.6977635839721188,
++          "process_peak_rss_bytes": 976863232,
++          "lifetime_peak_physical_footprint_bytes": 7385844040,
++          "plugin_sha256": "005ab1302a7f49ec27e1447ab31db89e78b0e22793e6e14cf66bfe7773dce2fd",
++          "attention": "0",
++          "profiling": false,
++          "persistent_jax_cache": false,
++          "previous_sha256": {
++            "prev_msa_first_row": "ead56d02d2011f8c29518251096e264456db36a4307d5c6794fe0e3853e11b9a",
++            "prev_pair": "7b633826d7f07aa76b120b7b36c772eb4987f2fd3146210e75a2f0610b85e949",
++            "prev_pos": "d4e2f5cd521823c9063f255619ae37d02da12cedfb1b966df38ea05db28831d2"
++          },
++          "target_pdb_sha256": "74445faf0663c6c450ee284b9e0db5eed67e2089527b372729b44e2226e63b6a",
++          "sequence_sha256": "eb794ec35dd0cfe38408942e3853343660cceaaecdaec4cc94d5d1bc896636b1",
++          "key_sha256": "a5bd31ffb882b29f946f4e17aa421f115f16df944b071a67df32bc250d290afa",
++          "name": "a4",
++          "arm": "A",
++          "all_18_fields_bit_identical": true,
++          "warm_forward_hashes": {
++            "loss": "db7057fe01f5f3d6b2179186dd80ac4a1f78e5246f8c0c099bc564dc8f1e40ec",
++            "xyz": "a6eff108e81f80b9fcbcbd15dff36ec240dfc591b2ff6a6fdd1cf956e76fa5a1",
++            "plddt": "14aacc194d7c83e984be316acb9cc530a0a18ed52d5325f6a8e8be8fdf6f3923"
++          },
++          "gradient_dispatch": {
++            "dispatches": [
++              141615
++            ],
++            "command_buffers": [
++              310
++            ],
++            "empty_command_buffers": [
++              0
++            ],
++            "completed_command_buffers": [
++              310
++            ]
++          },
++          "forward_dispatch": {
++            "dispatches": [
++              56530
++            ],
++            "command_buffers": [
++              125
++            ],
++            "empty_command_buffers": [
++              0
++            ],
++            "completed_command_buffers": [
++              125
++            ]
++          },
++          "memory": {
++            "peak_tree_rss_bytes": 902479872,
++            "peak_sampled_tree_physical_footprint_bytes": 7212632680,
++            "maximum_process_lifetime_physical_footprint_bytes": 7385844040,
++            "minimum_system_available_bytes": 76656197632,
++            "peak_swap_growth_bytes": 0,
++            "pressure_samples": {
++              "1": 16
++            },
++            "stop_reason": null
++          },
++          "first_forward_recycle_state_3_fields_bit_identical": true
++        }
++      ],
++      "activity_log": "runs/metaljax-attention/balanced-repeat/contention.jsonl",
++      "warm_forward_hashes_all_equal": true,
++      "contention_note": "Bounded six-second CPU quiet window per process; sustained competing CPU compute aborts only our job. Aggregate GPU/process samples do not prove GPU exclusivity.",
++      "process_sampling_unit": "Four fresh processes per arm; six warmed calls per process are correlated.",
++      "medians": {
++        "median_grad_seconds": {
++          "A": 1.2186982397397514,
++          "B": 1.1068918122473406,
++          "speedup": 1.101009354532498,
++          "reduction_percent": 9.174250347344948
++        },
++        "median_forward_seconds": {
++          "A": 0.3894505417556502,
++          "B": 0.3413804685114883,
++          "speedup": 1.1408108479485088,
++          "reduction_percent": 12.343049524969496
++        },
++        "first_forward_seconds": {
++          "A": 1.348706686985679,
++          "B": 1.3893064380099531,
++          "speedup": 0.9707769647404576,
++          "reduction_percent": -3.0102728351568686
++        },
++        "first_grad_seconds": {
++          "A": 3.5143448954913765,
++          "B": 3.584497249976266,
++          "speedup": 0.9804289556965473,
++          "reduction_percent": -1.9961715930297386
++        }
++      },
++      "raw_summary_sha256": "9a93f0e872add1c06a631d811d8a35cbaec6e8de32fd9e4bc2f877e105e64e10",
++      "gradient_dispatch_gpu_busy_ms": {
++        "A": [
++          [
++            1090.927882,
++            1091.091971,
++            1089.34584,
++            1089.419601,
++            1093.463378,
++            1090.708961
++          ],
++          [
++            1090.905757,
++            1091.182304,
++            1091.249889,
++            1090.330718,
++            1091.010813,
++            1090.385928
++          ],
++          [
++            1092.429384,
++            1093.824087,
++            1090.949513,
++            1090.761923,
++            1089.718094,
++            1089.899806
++          ],
++          [
++            1094.167172,
++            1093.695603,
++            1090.502553,
++            1090.855115,
++            1091.745399,
++            1091.241884
++          ]
++        ],
++        "B": [
++          [
++            968.943974,
++            970.185552,
++            968.183009,
++            967.958633,
++            967.84184,
++            966.482031
++          ],
++          [
++            970.802074,
++            972.052466,
++            969.634683,
++            969.309059,
++            968.904483,
++            971.368259
++          ],
++          [
++            971.070225,
++            971.377218,
++            969.218261,
++            969.901839,
++            969.090717,
++            969.278388
++          ],
++          [
++            971.582719,
++            971.061192,
++            969.067509,
++            968.484092,
++            969.391218,
++            969.387849
++          ]
++        ]
++      },
++      "forward_dispatch_gpu_busy_ms": {
++        "A": [
++          [
++            335.625776,
++            334.660189,
++            334.738277,
++            334.860649,
++            334.765022,
++            335.489896
++          ],
++          [
++            335.955597,
++            335.413935,
++            335.138354,
++            335.532059,
++            335.78998,
++            335.521899
++          ],
++          [
++            335.497986,
++            335.69048,
++            335.318151,
++            335.555722,
++            335.248021,
++            335.486147
++          ],
++          [
++            335.315478,
++            336.680941,
++            335.402191,
++            335.573673,
++            335.646902,
++            336.176064
++          ]
++        ],
++        "B": [
++          [
++            295.579981,
++            295.441018,
++            295.137017,
++            295.134888,
++            295.475646,
++            295.15598
++          ],
++          [
++            297.805855,
++            299.041392,
++            296.801981,
++            296.415065,
++            295.461483,
++            295.430351
++          ],
++          [
++            295.89131,
++            295.656859,
++            296.02011,
++            296.059141,
++            295.431892,
++            295.717644
++          ],
++          [
++            295.912688,
++            296.037893,
++            295.312436,
++            295.96756,
++            294.932518,
++            295.435561
++          ]
++        ]
++      },
++      "gpu_busy_note": "Native cumulative completed-command-buffer GPU time sampled outside the wall timers; no profiling fences. Each inner list is one fresh process."
++    },
++    "large-final": {
++      "order": "AB",
++      "repeats_per_process": 2,
++      "processes": [
++        {
++          "metaljax": "0.11.9+fbc1",
++          "length": 185,
++          "grad_seconds": [
++            1.9636070830165409,
++            1.9737022089539096
++          ],
++          "median_grad_seconds": 1.9686546459852252,
++          "forward_seconds": [
++            0.5824267499847338,
++            0.5924923329730518
++          ],
++          "median_forward_seconds": 0.5874595414788928,
++          "first_forward_seconds": 1.512244583980646,
++          "first_grad_seconds": 4.200184667017311,
++          "setup_seconds": 0.6633918340085074,
++          "process_peak_rss_bytes": 977502208,
++          "lifetime_peak_physical_footprint_bytes": 11850369568,
++          "plugin_sha256": "005ab1302a7f49ec27e1447ab31db89e78b0e22793e6e14cf66bfe7773dce2fd",
++          "attention": "0",
++          "profiling": false,
++          "persistent_jax_cache": false,
++          "previous_sha256": {
++            "prev_msa_first_row": "451f81884189d641ddf770d71b2a97c6c7034d2d0aec5417c2ed29c59239f2d2",
++            "prev_pair": "6f316d49a44b1afd098285f424bad01571f5a91427d78cccbdd7ceb7cb9a8f09",
++            "prev_pos": "6344fcb35c7a5cf89fb9d5977e26c85216f9983d519315702bbb8270d56ca196"
++          },
++          "target_pdb_sha256": "d3c95434dcadf26d005340b15bd92be61e101ed921478c26f2a5550f198e61f6",
++          "sequence_sha256": "eb794ec35dd0cfe38408942e3853343660cceaaecdaec4cc94d5d1bc896636b1",
++          "key_sha256": "a5bd31ffb882b29f946f4e17aa421f115f16df944b071a67df32bc250d290afa",
++          "name": "a1",
++          "arm": "A",
++          "all_18_fields_bit_identical": true,
++          "warm_forward_hashes": {
++            "loss": "3964836eddb70600916177732efc1456d7aeacb6d25c996254b2a72f79a6fce7",
++            "xyz": "70aa6cb7a7db215774569a3833f6fae2eb06d8330ef6c2bc7741b32fcb577df2",
++            "plddt": "6fb7c2a89fbbca1279c878d61443fac5e6a88e9e57a278898d86dc3674143233"
++          },
++          "gradient_dispatch": {
++            "dispatches": [
++              141616
++            ],
++            "command_buffers": [
++              416
++            ],
++            "empty_command_buffers": [
++              0
++            ],
++            "completed_command_buffers": [
++              416
++            ]
++          },
++          "forward_dispatch": {
++            "dispatches": [
++              56531
++            ],
++            "command_buffers": [
++              126
++            ],
++            "empty_command_buffers": [
++              0
++            ],
++            "completed_command_buffers": [
++              126
++            ]
++          },
++          "memory": {
++            "peak_tree_rss_bytes": 918896640,
++            "peak_sampled_tree_physical_footprint_bytes": 10349791968,
++            "maximum_process_lifetime_physical_footprint_bytes": 11850369568,
++            "minimum_system_available_bytes": 74076422144,
++            "peak_swap_growth_bytes": 0,
++            "pressure_samples": {
++              "1": 13
++            },
++            "stop_reason": null
++          },
++          "first_forward_recycle_state_3_fields_bit_identical": true
++        },
++        {
++          "metaljax": "0.11.9+fbc3attndev2",
++          "length": 185,
++          "grad_seconds": [
++            1.7051525000133552,
++            1.733903124986682
++          ],
++          "median_grad_seconds": 1.7195278125000186,
++          "forward_seconds": [
++            0.4875616669887677,
++            0.5093213329673745
++          ],
++          "median_forward_seconds": 0.4984414999780711,
++          "first_forward_seconds": 1.5107933330000378,
++          "first_grad_seconds": 4.357032625004649,
++          "setup_seconds": 0.6661927499808371,
++          "process_peak_rss_bytes": 977223680,
++          "lifetime_peak_physical_footprint_bytes": 10905127432,
++          "plugin_sha256": "19b28d865a0344768c75af9d25482dbc217954fa1b202e4b4258a7fb79bf9b2a",
++          "attention": "1",
++          "profiling": false,
++          "persistent_jax_cache": false,
++          "previous_sha256": {
++            "prev_msa_first_row": "451f81884189d641ddf770d71b2a97c6c7034d2d0aec5417c2ed29c59239f2d2",
++            "prev_pair": "6f316d49a44b1afd098285f424bad01571f5a91427d78cccbdd7ceb7cb9a8f09",
++            "prev_pos": "6344fcb35c7a5cf89fb9d5977e26c85216f9983d519315702bbb8270d56ca196"
++          },
++          "target_pdb_sha256": "d3c95434dcadf26d005340b15bd92be61e101ed921478c26f2a5550f198e61f6",
++          "sequence_sha256": "eb794ec35dd0cfe38408942e3853343660cceaaecdaec4cc94d5d1bc896636b1",
++          "key_sha256": "a5bd31ffb882b29f946f4e17aa421f115f16df944b071a67df32bc250d290afa",
++          "name": "b1",
++          "arm": "B",
++          "all_18_fields_bit_identical": true,
++          "warm_forward_hashes": {
++            "loss": "3964836eddb70600916177732efc1456d7aeacb6d25c996254b2a72f79a6fce7",
++            "xyz": "70aa6cb7a7db215774569a3833f6fae2eb06d8330ef6c2bc7741b32fcb577df2",
++            "plddt": "6fb7c2a89fbbca1279c878d61443fac5e6a88e9e57a278898d86dc3674143233"
++          },
++          "gradient_dispatch": {
++            "dispatches": [
++              138442
++            ],
++            "command_buffers": [
++              415
++            ],
++            "empty_command_buffers": [
++              0
++            ],
++            "completed_command_buffers": [
++              415
++            ]
++          },
++          "forward_dispatch": {
++            "dispatches": [
++              55413
++            ],
++            "command_buffers": [
++              126
++            ],
++            "empty_command_buffers": [
++              0
++            ],
++            "completed_command_buffers": [
++              126
++            ]
++          },
++          "memory": {
++            "peak_tree_rss_bytes": 924106752,
++            "peak_sampled_tree_physical_footprint_bytes": 10392587000,
++            "maximum_process_lifetime_physical_footprint_bytes": 10392963592,
++            "minimum_system_available_bytes": 74335289344,
++            "peak_swap_growth_bytes": 0,
++            "pressure_samples": {
++              "1": 12
++            },
++            "stop_reason": null
++          },
++          "first_forward_recycle_state_3_fields_bit_identical": true
++        }
++      ],
++      "activity_log": "runs/metaljax-attention/large-final/contention.jsonl",
++      "warm_forward_hashes_all_equal": true,
++      "contention_note": "Bounded six-second CPU quiet window per process; sustained competing CPU compute aborts only our job. Aggregate GPU/process samples do not prove GPU exclusivity.",
++      "raw_summary_sha256": "a3d3ecb0ed3875a3d947b620fd75bae605d86ac772e64d441a1bc4401f11560f"
++    }
++  },
++  "profiling": {
++    "method": "Optional diagnostic-only native identity barriers, paired stats, no global ordering chain; only nonoverlapping timing intervals accepted",
++    "scope": "Instrumented dependency regions, not exact production operator cost or fractions; layouts and independent unprofiled operations can fall inside an interval",
++    "counter_limitation": "Device reports dispatch-boundary counters unsupported; stage-boundary supported. xctrace unavailable with CommandLineTools-only installation.",
++    "aggregation": {
++      "qk": [
++        {
++          "phase": "gradient-0",
++          "op": "63_146x146x4x32xd12_146x146x4x32xd12",
++          "count": 208,
++          "overlapping": 0,
++          "gpu_ms_nonoverlapping": 32.569398,
++          "dispatches_nonoverlapping": 3149
++        },
++        {
++          "phase": "forward-0",
++          "op": "63_146x146x4x32xd12_146x146x4x32xd12",
++          "count": 104,
++          "overlapping": 0,
++          "gpu_ms_nonoverlapping": 18.374788,
++          "dispatches_nonoverlapping": 2408
++        }
++      ],
++      "dqdk": [
++        {
++          "phase": "gradient-0",
++          "op": "63_146x4x146x146xd12_146x146x4x32xd12",
++          "count": 208,
++          "overlapping": 208,
++          "gpu_ms_nonoverlapping": 0.0,
++          "dispatches_nonoverlapping": 0
++        }
++      ],
++      "sum32": [
++        {
++          "phase": "gradient-0",
++          "op": "59_146x4x146x146xd10_d10_reduce0",
++          "count": 216,
++          "overlapping": 0,
++          "gpu_ms_nonoverlapping": 25.684474,
++          "dispatches_nonoverlapping": 3436
++        },
++        {
++          "phase": "forward-0",
++          "op": "59_146x4x146x146xd10_d10_reduce0",
++          "count": 108,
++          "overlapping": 0,
++          "gpu_ms_nonoverlapping": 18.056146,
++          "dispatches_nonoverlapping": 2343
++        }
++      ],
++      "sum16": [
++        {
++          "phase": "gradient-0",
++          "op": "59_146x4x146x146xd12_d12_reduce0",
++          "count": 216,
++          "overlapping": 0,
++          "gpu_ms_nonoverlapping": 14.575982,
++          "dispatches_nonoverlapping": 2089
++        }
++      ]
++    },
++    "numerical": {
++      "qk": {
++        "all_18_fields_bit_identical": true,
++        "warm_forward_bit_identical": true
++      },
++      "dqdk": {
++        "all_18_fields_bit_identical": true,
++        "warm_forward_bit_identical": true
++      },
++      "sum32": {
++        "all_18_fields_bit_identical": true,
++        "warm_forward_bit_identical": true
++      },
++      "sum16": {
++        "all_18_fields_bit_identical": true,
++        "warm_forward_bit_identical": true
++      }
++    },
++    "build_manifest_sha256": "b0a98105080955da9fda8d2f967fd11d9e9424aae3d50a5ca93c704c3e76b180",
++    "artifact": {
++      "version": "0.11.9+fbc3attnprofile2",
++      "patches": {
++        "0001-bf16-attention-epilogues.patch": "e3526e2adf6bda25c0a241a6ca2f06147fecad84a6dac41dbbbe305eb319b7bd",
++        "diagnostic-fences.patch": "a51443a4ddcd3d26757fda08c4137851cab132e51f7d14f2e499384aab0d34b6"
++      },
++      "plugin_sha256": "5190e033266ef376ea3922619ef622224065a741a476abc2817edebb3d44b30b",
++      "wheel_sha256": "886af6d1d8284df543d4956499ac7fa549e7163771179d6f2244229a92add959"
++    },
++    "source_note": "Built before a comment correction and patch-index correction in the main patch; executable expressions and admission are the same. This diagnostic binary is excluded from performance timings."
++  },
++  "scope_limits": [
++    "One M5 Max desktop; thermal and desktop GPU activity are not controlled or attributed by process.",
++    "Finite tested outputs are byte-identical to the frozen Metal baseline; this does not establish arbitrary shapes or hardware, accepted-binder throughput, or CUDA equivalence.",
++    "No production installer pins, release assets, shared scientific source or CUDA source changed.",
++    "No new public wheel is published; local candidate requires the explicit builder and opt-in flag.",
++    "Trajectory equality covers printed iteration records, confidence checkpoint values and serialized raw PDB bytes; every internal optimizer array was not dumped."
++  ],
++  "artifacts": {
++    "installation/build_metaljax_attention.py": "77575268c7d83e02bc1f575b4b190536c425d5cd6dbbb92ea4ffeb0b916c7ede",
++    "installation/metaljax/attention/0001-bf16-attention-epilogues.patch": "36fa7ac3f6d169fe0e9176f4d819a38428369fe4ba105144bff26a8a037ced17",
++    "installation/metaljax/attention/diagnostic-fences.patch": "a51443a4ddcd3d26757fda08c4137851cab132e51f7d14f2e499384aab0d34b6",
++    "extras/benchmark_metaljax_attention.py": "c2ba01336e271850deb9d8e32516d1e6d8a9a57964f810b0dd373ea78b631080",
++    "extras/run_metaljax_attention_comparison.py": "63f8c2849d3482ae1197b36ae28b2107e926ef894c8160cbf1106b124a30cb47",
++    "runs/metaljax-attention/benchmark-fixed-budget.py": "e73d95f8c09f4e5dec907ac68fd2240e2220242873250e7c07eb93cf3462075a"
++  },
++  "negative_evidence": [
++    "Widths <=64 prototype changed gradients, excluded from admission.",
++    "Early rewrite skipped its root and fell back; its speed measurements are excluded.",
++    "Early broad profile intervals overlapped. A subsequent ordering-chain profiler retained dead work, doubled counts, and is excluded. Final dq/dk filter still overlaps: retain counts only and reject all its times.",
++    "Prior normalization/projection experiments were not imported; the BF16 raw-moments rewrite changed numerics."
++  ],
++  "fixed_work_trajectory": {
++    "status": "complete; two fresh processes per arm",
++    "harness_sha256": "e73d95f8c09f4e5dec907ac68fd2240e2220242873250e7c07eb93cf3462075a",
++    "source_commit": "15114cbcb2379f2d16c77da48b0173dfbdb4aca4",
++    "order": "ABBA",
++    "processes": [
++      {
++        "name": "a1",
++        "arm": "a",
++        "stage_seconds": {
++          "startup": 8.955108916969039,
++          "design_140_iterations": 223.9344892919762,
++          "trajectory_relaxation_and_scoring": 12.287348499987274,
++          "mpnn": 0.5111900420160964,
++          "validation_model_setup": 2.9015799170010723,
++          "complex_prediction_and_relaxation": 24.056395874998998,
++          "complex_scoring": 3.0370145000051707,
++          "binder_prediction_and_alignment": 1.2787611670210026,
++          "filter_evaluation_and_selection": 0.0037255409988574684
++        },
++        "internal_total_seconds": 277.1037956249784,
++        "work_counts": {
++          "design_backprop": 125,
++          "design_forward": 16,
++          "scored_complexes": 3,
++          "dssp_complete_structures": 3,
++          "mpnn_samples": 1,
++          "complex_forward": 2,
++          "binder_forward": 2,
++          "filter_evaluations": 1,
++          "best_model_selections": 1
++        },
++        "original_design_function_sha256": "a8692f63edf733ad695241a947dd45d3d2990b9a5af507a00571e1f439f4c324",
++        "design_confidences": [
++          0.949999988079071,
++          0.9599999785423279,
++          0.9599999785423279,
++          0.4399999976158142,
++          0.4699999988079071
++        ],
++        "original_final_trajectory_decision": "LowConfidence",
++        "fixture_hashes": {
++          "fixture.json": "595955d93dc37d0f3105ab5c0ad0635277af59bac3e812d70192af83f87f780f",
++          "trajectory.pdb": "846c1ce3ac34b30f8c26fdf2f3878ba24d1ebc820a9dec6a36a793d71b77c068",
++          "target.pdb": "74445faf0663c6c450ee284b9e0db5eed67e2089527b372729b44e2226e63b6a"
++        },
++        "seed": 121958,
++        "design_iteration_records": 140,
++        "iteration_records_sha256": "b67dc5caace0eef477bc74a4dc437fc118058751b4fbd245da66e294401f8baf",
++        "actual_design_pdb_sha256": "c2a36b18202d8c1eb2a56051ec31e46c0eb4bd44000702cabbbbb519633ba62c",
++        "mpnn_sample": "MQIFVKTLTGKTITLEVEPSDTIENVKAKIQDKEGIPPDQQRLIFAGKQLEDGRTLSDYNIQKESTLHLVLRLRGG/SDTADFYVPVDDTNDDLWDKWIEEFKKYMAENPDNPKASSQKAVDKLTADGKYDRKDFMWVEDVPKKFIP",
++        "selected_model": 2,
++        "raw_validation_pdb_sha256": {
++          "fixed_ubiquitin_benchmark_model1.pdb": "fb36de15c16f4dd603eee971a21683919828319988411aede4ecd204d90bf83d",
++          "fixed_ubiquitin_benchmark_model2.pdb": "298da65fdf8b2767a5b93f5557c2c2b3592a058782f53374fd8989e468cf8dc4",
++          "Binder/fixed_ubiquitin_benchmark_model1.pdb": "30b8522af76351b5393f59b0e06db10970d15eed5e7fa265f6f32f6d334d5e0d",
++          "Binder/fixed_ubiquitin_benchmark_model2.pdb": "798952ce6d2532cfa6592e5952236df20503c651f83eb5cdeeda4e4dd80f2e69"
++        },
++        "memory": {
++          "elapsed_seconds": 278.15851375000784,
++          "peak_tree_rss_bytes": 1944125440,
++          "peak_sampled_tree_physical_footprint_bytes": 9499478848,
++          "maximum_process_lifetime_physical_footprint_bytes": 9498184272,
++          "peak_swap_growth_bytes": 0,
++          "pressure_samples": {
++            "1": 258
++          },
++          "stop_reason": null
++        },
++        "report_sha256": "35fdbc75e180a261f9f08097a1f63a258f591b09d665efdbffb620b0b500d0e8",
++        "activity_log": "runs/metaljax-attention/trajectory-a1/contention.jsonl",
++        "activity_log_sha256": "72056e3a5b3504aebd918dc20d5b172ea6c3005b92611778394e1f4ffa7a7155"
++      },
++      {
++        "name": "b1",
++        "arm": "b",
++        "stage_seconds": {
++          "startup": 8.34910679195309,
++          "design_140_iterations": 198.22530354204355,
++          "trajectory_relaxation_and_scoring": 12.843861958011985,
++          "mpnn": 0.5115993749932386,
++          "validation_model_setup": 2.7869533749762923,
++          "complex_prediction_and_relaxation": 24.13435470801778,
++          "complex_scoring": 3.0392049580113962,
++          "binder_prediction_and_alignment": 1.4462456249748357,
++          "filter_evaluation_and_selection": 0.003938000008929521
++        },
++        "internal_total_seconds": 251.49678483395837,
++        "work_counts": {
++          "design_backprop": 125,
++          "design_forward": 16,
++          "scored_complexes": 3,
++          "dssp_complete_structures": 3,
++          "mpnn_samples": 1,
++          "complex_forward": 2,
++          "binder_forward": 2,
++          "filter_evaluations": 1,
++          "best_model_selections": 1
++        },
++        "original_design_function_sha256": "a8692f63edf733ad695241a947dd45d3d2990b9a5af507a00571e1f439f4c324",
++        "design_confidences": [
++          0.949999988079071,
++          0.9599999785423279,
++          0.9599999785423279,
++          0.4399999976158142,
++          0.4699999988079071
++        ],
++        "original_final_trajectory_decision": "LowConfidence",
++        "fixture_hashes": {
++          "fixture.json": "595955d93dc37d0f3105ab5c0ad0635277af59bac3e812d70192af83f87f780f",
++          "trajectory.pdb": "846c1ce3ac34b30f8c26fdf2f3878ba24d1ebc820a9dec6a36a793d71b77c068",
++          "target.pdb": "74445faf0663c6c450ee284b9e0db5eed67e2089527b372729b44e2226e63b6a"
++        },
++        "seed": 121958,
++        "design_iteration_records": 140,
++        "iteration_records_sha256": "b67dc5caace0eef477bc74a4dc437fc118058751b4fbd245da66e294401f8baf",
++        "actual_design_pdb_sha256": "c2a36b18202d8c1eb2a56051ec31e46c0eb4bd44000702cabbbbb519633ba62c",
++        "mpnn_sample": "MQIFVKTLTGKTITLEVEPSDTIENVKAKIQDKEGIPPDQQRLIFAGKQLEDGRTLSDYNIQKESTLHLVLRLRGG/SDTVDFYVPVDDTNDDLWDKWIEVFKKYMAKNPENPKESSQKAVDELTKDGKYKKEDFMWVEDVPKKFIP",
++        "selected_model": 2,
++        "raw_validation_pdb_sha256": {
++          "fixed_ubiquitin_benchmark_model1.pdb": "fb36de15c16f4dd603eee971a21683919828319988411aede4ecd204d90bf83d",
++          "fixed_ubiquitin_benchmark_model2.pdb": "298da65fdf8b2767a5b93f5557c2c2b3592a058782f53374fd8989e468cf8dc4",
++          "Binder/fixed_ubiquitin_benchmark_model1.pdb": "30b8522af76351b5393f59b0e06db10970d15eed5e7fa265f6f32f6d334d5e0d",
++          "Binder/fixed_ubiquitin_benchmark_model2.pdb": "798952ce6d2532cfa6592e5952236df20503c651f83eb5cdeeda4e4dd80f2e69"
++        },
++        "memory": {
++          "elapsed_seconds": 252.1663452499779,
++          "peak_tree_rss_bytes": 1977974784,
++          "peak_sampled_tree_physical_footprint_bytes": 9010596912,
++          "maximum_process_lifetime_physical_footprint_bytes": 9013529384,
++          "peak_swap_growth_bytes": 0,
++          "pressure_samples": {
++            "1": 234
++          },
++          "stop_reason": null
++        },
++        "report_sha256": "9167dea9059e87b34df527c5ac04c5be1aefdebae0f720745c76475d6e8fd217",
++        "activity_log": "runs/metaljax-attention/trajectory-b1/contention.jsonl",
++        "activity_log_sha256": "1f56b3897b18d258b85d4fe0ea677a57ea5cd802b46997b2bbaa97d9029e122c"
++      },
++      {
++        "name": "b2",
++        "arm": "b",
++        "stage_seconds": {
++          "startup": 8.355097124993335,
++          "design_140_iterations": 196.24762954202015,
++          "trajectory_relaxation_and_scoring": 13.436568042030558,
++          "mpnn": 0.5171998330042697,
++          "validation_model_setup": 2.804385084018577,
++          "complex_prediction_and_relaxation": 25.55297233402962,
++          "complex_scoring": 3.0488433749997057,
++          "binder_prediction_and_alignment": 1.286873042001389,
++          "filter_evaluation_and_selection": 0.0035970000317320228
++        },
++        "internal_total_seconds": 251.4386410000152,
++        "work_counts": {
++          "design_backprop": 125,
++          "design_forward": 16,
++          "scored_complexes": 3,
++          "dssp_complete_structures": 3,
++          "mpnn_samples": 1,
++          "complex_forward": 2,
++          "binder_forward": 2,
++          "filter_evaluations": 1,
++          "best_model_selections": 1
++        },
++        "original_design_function_sha256": "a8692f63edf733ad695241a947dd45d3d2990b9a5af507a00571e1f439f4c324",
++        "design_confidences": [
++          0.949999988079071,
++          0.9599999785423279,
++          0.9599999785423279,
++          0.4399999976158142,
++          0.4699999988079071
++        ],
++        "original_final_trajectory_decision": "LowConfidence",
++        "fixture_hashes": {
++          "fixture.json": "595955d93dc37d0f3105ab5c0ad0635277af59bac3e812d70192af83f87f780f",
++          "trajectory.pdb": "846c1ce3ac34b30f8c26fdf2f3878ba24d1ebc820a9dec6a36a793d71b77c068",
++          "target.pdb": "74445faf0663c6c450ee284b9e0db5eed67e2089527b372729b44e2226e63b6a"
++        },
++        "seed": 121958,
++        "design_iteration_records": 140,
++        "iteration_records_sha256": "b67dc5caace0eef477bc74a4dc437fc118058751b4fbd245da66e294401f8baf",
++        "actual_design_pdb_sha256": "c2a36b18202d8c1eb2a56051ec31e46c0eb4bd44000702cabbbbb519633ba62c",
++        "mpnn_sample": "MQIFVKTLTGKTITLEVEPSDTIENVKAKIQDKEGIPPDQQRLIFAGKQLEDGRTLSDYNIQKESTLHLVLRLRGG/SDTANFYVPVDDTNDDLWDKWIEEFKKYMAENPDDPEASSQKAVDKLTADGKYKESDFMWVEDVPKKFIP",
++        "selected_model": 2,
++        "raw_validation_pdb_sha256": {
++          "fixed_ubiquitin_benchmark_model1.pdb": "fb36de15c16f4dd603eee971a21683919828319988411aede4ecd204d90bf83d",
++          "fixed_ubiquitin_benchmark_model2.pdb": "298da65fdf8b2767a5b93f5557c2c2b3592a058782f53374fd8989e468cf8dc4",
++          "Binder/fixed_ubiquitin_benchmark_model1.pdb": "30b8522af76351b5393f59b0e06db10970d15eed5e7fa265f6f32f6d334d5e0d",
++          "Binder/fixed_ubiquitin_benchmark_model2.pdb": "798952ce6d2532cfa6592e5952236df20503c651f83eb5cdeeda4e4dd80f2e69"
++        },
++        "memory": {
++          "elapsed_seconds": 251.93208937498275,
++          "peak_tree_rss_bytes": 1977696256,
++          "peak_sampled_tree_physical_footprint_bytes": 9010138136,
++          "maximum_process_lifetime_physical_footprint_bytes": 9009810240,
++          "peak_swap_growth_bytes": 0,
++          "pressure_samples": {
++            "1": 234
++          },
++          "stop_reason": null
++        },
++        "report_sha256": "bcbd4f124f0e2cd9b1e17440ed876d13e0d2e7ebd0e2c5c178f9935a1ce895a3",
++        "activity_log": "runs/metaljax-attention/trajectory-b2/contention.jsonl",
++        "activity_log_sha256": "f0112577b606b4c2f145284790bc9e9545ca5249b07c1c29a426c6654f0d3f6b"
++      },
++      {
++        "name": "a2",
++        "arm": "a",
++        "stage_seconds": {
++          "startup": 8.329922500008252,
++          "design_140_iterations": 218.4879649580107,
++          "trajectory_relaxation_and_scoring": 13.334264625038486,
++          "mpnn": 0.5134969580103643,
++          "validation_model_setup": 2.816775333019905,
++          "complex_prediction_and_relaxation": 23.62147045903839,
++          "complex_scoring": 3.033103875000961,
++          "binder_prediction_and_alignment": 1.2775376249919645,
++          "filter_evaluation_and_selection": 0.003786458051763475
++        },
++        "internal_total_seconds": 271.5543312500231,
++        "work_counts": {
++          "design_backprop": 125,
++          "design_forward": 16,
++          "scored_complexes": 3,
++          "dssp_complete_structures": 3,
++          "mpnn_samples": 1,
++          "complex_forward": 2,
++          "binder_forward": 2,
++          "filter_evaluations": 1,
++          "best_model_selections": 1
++        },
++        "original_design_function_sha256": "a8692f63edf733ad695241a947dd45d3d2990b9a5af507a00571e1f439f4c324",
++        "design_confidences": [
++          0.949999988079071,
++          0.9599999785423279,
++          0.9599999785423279,
++          0.4399999976158142,
++          0.4699999988079071
++        ],
++        "original_final_trajectory_decision": "LowConfidence",
++        "fixture_hashes": {
++          "fixture.json": "595955d93dc37d0f3105ab5c0ad0635277af59bac3e812d70192af83f87f780f",
++          "trajectory.pdb": "846c1ce3ac34b30f8c26fdf2f3878ba24d1ebc820a9dec6a36a793d71b77c068",
++          "target.pdb": "74445faf0663c6c450ee284b9e0db5eed67e2089527b372729b44e2226e63b6a"
++        },
++        "seed": 121958,
++        "design_iteration_records": 140,
++        "iteration_records_sha256": "b67dc5caace0eef477bc74a4dc437fc118058751b4fbd245da66e294401f8baf",
++        "actual_design_pdb_sha256": "c2a36b18202d8c1eb2a56051ec31e46c0eb4bd44000702cabbbbb519633ba62c",
++        "mpnn_sample": "MQIFVKTLTGKTITLEVEPSDTIENVKAKIQDKEGIPPDQQRLIFAGKQLEDGRTLSDYNIQKESTLHLVLRLRGG/SDTANFYVPVDDTNDDLWDEWIKVFKEYMEKNPENPEESSKKAVEELTKDGKYKEEDFMWVEDVPKKFIP",
++        "selected_model": 2,
++        "raw_validation_pdb_sha256": {
++          "fixed_ubiquitin_benchmark_model1.pdb": "fb36de15c16f4dd603eee971a21683919828319988411aede4ecd204d90bf83d",
++          "fixed_ubiquitin_benchmark_model2.pdb": "298da65fdf8b2767a5b93f5557c2c2b3592a058782f53374fd8989e468cf8dc4",
++          "Binder/fixed_ubiquitin_benchmark_model1.pdb": "30b8522af76351b5393f59b0e06db10970d15eed5e7fa265f6f32f6d334d5e0d",
++          "Binder/fixed_ubiquitin_benchmark_model2.pdb": "798952ce6d2532cfa6592e5952236df20503c651f83eb5cdeeda4e4dd80f2e69"
++        },
++        "memory": {
++          "elapsed_seconds": 272.8213903750293,
++          "peak_tree_rss_bytes": 1940652032,
++          "peak_sampled_tree_physical_footprint_bytes": 9493236640,
++          "maximum_process_lifetime_physical_footprint_bytes": 9758853928,
++          "peak_swap_growth_bytes": 0,
++          "pressure_samples": {
++            "1": 253
++          },
++          "stop_reason": null
++        },
++        "report_sha256": "6edebd07030db566c45e699272a5e3319ac3ef09aefa4e57775d4f787e714c22",
++        "activity_log": "runs/metaljax-attention/trajectory-a2/contention.jsonl",
++        "activity_log_sha256": "feacd3548db9b3209a0496657463d4f3d45a9fd43f591d701e880e150adcff60"
++      }
++    ],
++    "scope": "Unchanged prior fixed-work harness; confidence early-exit adaptation is in memory only. Actual generated design is compared before common fixture substitution. Downstream work uses common saved structure and sequence; MPNN/OpenMM stochastic differences are not attention quality evidence.",
++    "all_140_iteration_records_byte_equal": true,
++    "actual_generated_design_pdb_byte_equal": true,
++    "all_work_counts_equal": true,
++    "all_confidence_checkpoints_equal": true,
++    "design_140_iterations": {
++      "values": {
++        "a": [
++          223.9344892919762,
++          218.4879649580107
++        ],
++        "b": [
++          198.22530354204355,
++          196.24762954202015
++        ]
++      },
++      "baseline_median": 221.21122712499346,
++      "candidate_median": 197.23646654203185,
++      "speedup": 1.1215533871767698,
++      "reduction_percent": 10.837949273440305
++    },
++    "internal_total_seconds": {
++      "values": {
++        "a": [
++          277.1037956249784,
++          271.5543312500231
++        ],
++        "b": [
++          251.49678483395837,
++          251.4386410000152
++        ]
++      },
++      "baseline_median": 274.32906343750074,
++      "candidate_median": 251.46771291698678,
++      "speedup": 1.0909116731342001,
++      "reduction_percent": 8.333550311457383
++    },
++    "raw_validation_pdb_hashes_all_equal": true
++  },
++  "installed_package_version_differences": {
++    "metaljax": {
++      "baseline": "0.11.9+fbc1",
++      "candidate": "0.11.9+fbc3attndev2"
++    }
++  },
++  "recommendation": "Keep the bounded opt-in epilogue fusion for review. Incremental fixed-input and fixed-work gains justify a draft; broader hardware/shape coverage and a separate immutable fork release are required before any default dependency change. Retain the original attention GEMMs and BF16 rounding; do not import the unsuccessful raw-moments normalization rewrite."
++}

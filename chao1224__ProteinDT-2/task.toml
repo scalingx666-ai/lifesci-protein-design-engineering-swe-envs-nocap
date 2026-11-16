@@ -1,0 +1,63 @@
+version = "1.0"
+
+[task]
+name = "default/chao1224__ProteinDT-2"
+description = "Simplify installation instructions"
+
+[metadata]
+difficulty = "medium"
+category = "bugfix"
+keywords = [
+    "ProteinDT",
+    "pr_diff",
+]
+
+[metadata.repo2env]
+pipeline = "pr_diff"
+pipeline_version = "0.3.0"
+repo = "chao1224/ProteinDT"
+ref = "06a018923cc9ee5c5bd1dad78503f2ce37e0f28c"
+reference = "https://github.com/chao1224/ProteinDT/pull/2"
+source_access = "auto"
+built_at = "2026-11-16T04:33:20.144744+00:00"
+reward_kinds = [
+    "diff_similarity",
+]
+spec_version = "0.2.0"
+content_hash = "sha256:551b4e5f6e62721c5877682c7b0f45f1d4d9a3d92efeb314e9ba9beb7a486610"
+
+[metadata.repo2env.pr_diff]
+pr_merged_at = "2024-07-20T05:33:23Z"
+diff_format = "unified"
+context_files = [
+    ".github/workflows/test.yml",
+    "environment.yml",
+]
+
+[metadata.repo2env.reward_calibration]
+baseline_reward = 0.0
+loc_changed = 77
+difficulty = "medium"
+
+[metadata.repo2env.evaluation]
+schema_version = "1"
+status = "unverified"
+stage = "generation"
+reason_codes = [
+    "validation_not_run",
+]
+detail = "Generated task; validation has not been established."
+provenance = "unknown"
+evidence = []
+
+[metadata.repo2env.reproducibility]
+mode = "local_only"
+image_ref = "python:3.12-slim"
+image_tag = "python:3.12-slim"
+image_visibility = "private"
+
+[agent]
+timeout_sec = 1800.0
+
+[verifier]
+timeout_sec = 300.0

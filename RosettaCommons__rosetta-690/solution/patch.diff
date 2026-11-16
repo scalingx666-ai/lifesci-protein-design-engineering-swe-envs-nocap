@@ -1,0 +1,34 @@
+diff --git a/source/src/utility/BitSet.hh b/source/src/utility/BitSet.hh
+index 217e2bdfede..2d03772efe3 100644
+--- a/source/src/utility/BitSet.hh
++++ b/source/src/utility/BitSet.hh
+@@ -135,12 +135,6 @@ public: // Creation
+ 	}
+ 
+ 
+-	/// @brief Destructor
+-	inline
+-	~BitSet()
+-	{}
+-
+-
+ public: // Assignment
+ 
+ 
+diff --git a/source/src/utility/BitVector.hh b/source/src/utility/BitVector.hh
+index 2cea202089b..c4542a0626f 100644
+--- a/source/src/utility/BitVector.hh
++++ b/source/src/utility/BitVector.hh
+@@ -147,12 +147,6 @@ public: // Creation
+ 	}
+ 
+ 
+-	/// @brief Destructor
+-	inline
+-	~BitVector()
+-	{}
+-
+-
+ public: // Assignment
+ 
+ 

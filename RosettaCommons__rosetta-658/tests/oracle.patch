@@ -1,0 +1,873 @@
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/bindings/scores/base.py b/source/src/python/PyRosetta/src/pyrosetta/bindings/scores/base.py
+index fbea8cb21b3..de5e1274f7a 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/bindings/scores/base.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/bindings/scores/base.py
+@@ -41,6 +41,14 @@ def apply(self, metric, key, value):
+         metric.set_value(self.maybe_encode(value))
+         metric.apply(out_label=key, pose=self.pose, override_existing_data=True)
+ 
++    def fast_items(self):
++        for k, v in self.all.items():
++            yield k, self.maybe_decode(v)
++
++    def fast_values(self):
++        for v in self.all.values():
++            yield self.maybe_decode(v)
++
+     @property
+     def _reserved_custom_metric_keys(self):
+         """Reserved scoretype keys for SimpleMetrics that cannot be set or deleted."""
+@@ -74,7 +82,7 @@ def _unsupported_sm_data_accessor_attrs(self):
+ 
+     def _get_sm_data_dict(self, attributes):
+         return {
+-            _attr: dict(getattr(self.pose.cache.metrics, _attr))
++            _attr: dict(getattr(self.pose.cache.metrics, _attr).fast_items())
+             for _attr in attributes
+         }
+ 
+@@ -94,8 +102,9 @@ def _maybe_delete_keys_from_sm_data(self, keys=None, attributes=None):
+             _sm_data_dict = self._get_sm_data_dict(self._sm_data_accessor_attrs)
+             _unsupported_sm_data_dict = self._get_sm_data_dict(self._unsupported_sm_data_accessor_attrs)
+             # Raise if deleting an item we cannot restore
+-            for _d in _unsupported_sm_data_dict.values():
+-                for _k in _d.keys():
++            _vals = _unsupported_sm_data_dict.values()
++            for _d in _vals:
++                for _k in _d:
+                     for key in keys:
+                         if key == _k:
+                             raise KeyError(
+@@ -103,7 +112,7 @@ def _maybe_delete_keys_from_sm_data(self, keys=None, attributes=None):
+                                     key, self._unsupported_sm_data_accessor_attrs
+                                 ) + "Consider using `pose.cache.metrics.clear()`."
+                             )
+-            if any(map(len, _unsupported_sm_data_dict.values())):
++            if any(map(len, _vals)):
+                 raise KeyError(
+                     "Cannot delete SimpleMetric data keys {0} because Pose contains SimpleMetric data from: {1}".format(
+                         keys, self._unsupported_sm_data_accessor_attrs
+@@ -136,11 +145,11 @@ def _maybe_delete_reserved_keys_from_sm_data(self):
+         aims to delete these extra default keys if they were created and we can delete them.
+         """
+         _static_keys = (
+-            self.pose.cache.metrics.composite_string.keys(),
+-            self.pose.cache.metrics.composite_real.keys(),
+-            self.pose.cache.metrics.per_residue_string.keys(),
+-            self.pose.cache.metrics.per_residue_real.keys(),
+-            self.pose.cache.metrics.per_residue_probabilities.keys(),
++            self.pose.cache.metrics.composite_string,
++            self.pose.cache.metrics.composite_real,
++            self.pose.cache.metrics.per_residue_string,
++            self.pose.cache.metrics.per_residue_real,
++            self.pose.cache.metrics.per_residue_probabilities,
+         )
+         if not any(map(len, _static_keys)):
+             _has_custom_string_valued_metric, _has_custom_real_valued_metric = self._has_reserved_custom_metric_keys()
+@@ -160,13 +169,13 @@ def _reserved_custom_metric_keys_warning(self):
+         _has_custom_string_valued_metric, _has_custom_real_valued_metric = self._has_reserved_custom_metric_keys()
+         if _has_custom_string_valued_metric:
+             warnings.warn(
+-                "`CustomStringValueMetric` implemented the key 'custom_string_valued_metric' in `pose.cache`.",
++                "`CustomStringValueMetric` implemented the key 'custom_string_valued_metric' in `Pose.cache` dictionary.",
+                 RuntimeWarning,
+                 stacklevel=2,
+             )
+         if _has_custom_real_valued_metric:
+             warnings.warn(
+-                "`CustomRealValueMetric` implemented the key 'custom_real_valued_metric' in `pose.cache`.",
++                "`CustomRealValueMetric` implemented the key 'custom_real_valued_metric' in `Pose.cache` dictionary.",
+                 RuntimeWarning,
+                 stacklevel=2,
+             )
+@@ -189,6 +198,10 @@ def _validate_del(self, key):
+         if key in self._reserved:
+             raise KeyError("Cannot delete a key with a reserved name: {0}".format(key))
+ 
++    def __getitem__(self, key):
++        """Get a value from a key in the `Pose.cache` dictionary."""
++        return self.maybe_decode(self.all[key])
++
+     def __len__(self):
+         return len(self.all)
+ 
+@@ -196,8 +209,8 @@ def __iter__(self):
+         return iter(self.all)
+ 
+     def __str__(self):
+-        return str(dict(self))
++        return str(dict(self.fast_items()))
+ 
+     def _repr_pretty_(self, p, cycle):
+         """IPython-display representation."""
+-        p.pretty(dict(self))
++        p.pretty(dict(self.fast_items()))
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/bindings/scores/core.py b/source/src/python/PyRosetta/src/pyrosetta/bindings/scores/core.py
+index 8cb9f853ba4..d6daf624b1a 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/bindings/scores/core.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/bindings/scores/core.py
+@@ -43,24 +43,57 @@ class PoseCacheAccessor(PoseCacheAccessorBase, MutableMapping):
+     arbitrary python objects to/from base64-encoded pickled byte streams, and stores/retrieves `float` and `str`
+     objects without serialization.
+ 
+-    **Warning**: ONLY LOAD DATA YOU TRUST. The pose.cache dictionary uses the pickle module to serialze and deserialize arbitrary scores in the Pose object. 
+-    When depickling (deserializing) is performed arbitrary code can be executed, learn more `here <https://docs.python.org/3/library/pickle.html>`_.
+-    The pose.cache object is only stored in memory, so this is only a risk if these objects are sent to a user in memory over a network
+-    such as a socket, queue, shared cache, etc. If you need to retrieve a pose.cache dictionary this way please make sure it is from a trusted source.
++    **Warning**: ONLY LOAD DATA YOU TRUST. The `Pose.cache` dictionary uses the `pickle` module to serialze and deserialize arbitrary scores in the `Pose` object.
++    When depickling (deserializing) is performed, arbitrary code can be executed. Learn more `here <https://docs.python.org/3/library/pickle.html>`_.
++    The `Pose.cache` object is only stored in memory, so this is only a risk if these objects are sent to a user in memory over a network
++    such as a socket, queue, shared cache, etc. If you need to retrieve a `Pose.cache` dictionary this way, please make sure it is from a trusted source.
+ 
+     Examples:
+ 
+-    Get score dictionaries:
++    Get score dictionaries (time complexity shown in parentheses, where N is the number of scores accessed by that layer):
+         - Return nested, read-only dictionaries of all cached score data:
+-            `pose.cache.all_scores`
++            `pose.cache.all_scores` (~O(N))
+         - Return a flattened, read-only dictionary of all cached score data (with clobber warnings):
+-            `pose.cache`
++            `pose.cache` (~O(N^2))
++            `dict(pose.cache.fast_items())` (~O(N))
+         - Return a flattened, read-only dictionary of all SimpleMetric data (with clobber warnings):
+-            `pose.cache.metrics`
++            `pose.cache.metrics` (~O(N^2))
++            `dict(pose.cache.metrics.fast_items())` (~O(N))
++        - Return a read-only dictionary of all SimpleMetric real metric data:
++            `pose.cache.metrics.real` (~O(N^2))
++            `dict(pose.cache.metrics.real.fast_items())` (~O(N))
++       - Return a read-only dictionary of all SimpleMetric string metric data:
++            `pose.cache.metrics.string` (~O(N^2))
++            `dict(pose.cache.metrics.string.fast_items())` (~O(N))
++       - Return a read-only dictionary of all SimpleMetric composite real metric data:
++            `pose.cache.metrics.composite_real` (~O(N^2))
++            `dict(pose.cache.metrics.composite_real.fast_items())` (~O(N))
++       - Return a read-only dictionary of all SimpleMetric composite string metric data:
++            `pose.cache.metrics.composite_string` (~O(N^2))
++            `dict(pose.cache.metrics.composite_string.fast_items())` (~O(N))
++       - Return a read-only dictionary of all SimpleMetric per-residue real metric data:
++            `pose.cache.metrics.per_residue_real` (~O(N^2))
++            `dict(pose.cache.metrics.per_residue_real.fast_items())` (~O(N))
++       - Return a read-only dictionary of all SimpleMetric per-residue string metric data:
++            `pose.cache.metrics.per_residue_string` (~O(N^2))
++            `dict(pose.cache.metrics.per_residue_string.fast_items())` (~O(N))
++       - Return a read-only dictionary of all SimpleMetric per-residue probabilities metric data:
++            `pose.cache.metrics.per_residue_probabilities` (~O(N^2))
++            `dict(pose.cache.metrics.per_residue_probabilities.fast_items())` (~O(N))
+         - Return a flattened, read-only dictionary of all arbitrary extra float and extra string score data (with clobber warnings):
+-            `pose.cache.extra`
++            `pose.cache.extra` (~O(N^2))
++            `dict(pose.cache.extra.fast_items())` (~O(N))
++        - Return a read-only dictionary of all arbitrary extra float score data:
++            `pose.cache.extra.real` (~O(N^2))
++            `dict(pose.cache.extra.real.fast_items())` (~O(N))
++        - Return a read-only dictionary of all arbitrary extra string score data:
++            `pose.cache.extra.string` (~O(N^2))
++            `dict(pose.cache.extra.string.fast_items())` (~O(N))
+         - Return a read-only dictionary of active total energies:
+-            `pose.cache.energies`
++            `pose.cache.energies` (~O(N^2))
++            `dict(pose.cache.extra.fast_items())` (~O(N))
++
++        Note: see corresponding `*.fast_values()` methods (~O(N)) versus `*.values()` methods (~O(N^2)).
+ 
+     Get a score value:
+         - Return the value of a key from any `pose.cache.extra`, `pose.cache.metrics`, or `pose.cache.energies` dictionary
+@@ -104,8 +137,12 @@ class PoseCacheAccessor(PoseCacheAccessorBase, MutableMapping):
+                 `pose.cache.metrics["key"] = value`
+             - Set a key/value pair as a `CustomRealValueMetric`:
+                 `pose.cache.metrics.real["key"] = value`
++            - Set a mappable to multiple `CustomRealValueMetric`s in bulk (improved performance over one at a time):
++                `pose.cache.metrics.real.set_mappable(mappable)`
+             - Set a key/value pair as a `CustomStringValueMetric`:
+                 `pose.cache.metrics.string["key"] = value`
++            - Set a mappable to multiple `CustomStringValueMetric`s in bulk (improved performance over one at a time):
++                `pose.cache.metrics.string.set_mappable(mappable)`
+ 
+         To arbitrary extra score data:
+             - Set a key/value pair as an arbitrary extra float or string score with automatic type checking:
+@@ -155,22 +192,22 @@ def all_scores(self):
+             {
+                 "extra": types.MappingProxyType(
+                     {
+-                        "string": types.MappingProxyType(dict(self.extra.string)),
+-                        "real": types.MappingProxyType(dict(self.extra.real)),
++                        "string": types.MappingProxyType(dict(self.extra.string.fast_items())),
++                        "real": types.MappingProxyType(dict(self.extra.real.fast_items())),
+                     }
+                 ),
+                 "metrics": types.MappingProxyType(
+                         {
+-                        "string": types.MappingProxyType(dict(self.metrics.string)),
+-                        "real": types.MappingProxyType(dict(self.metrics.real)),
+-                        "composite_string": types.MappingProxyType(dict(self.metrics.composite_string)),
+-                        "composite_real": types.MappingProxyType(dict(self.metrics.composite_real)),
+-                        "per_residue_string": types.MappingProxyType(dict(self.metrics.per_residue_string)),
+-                        "per_residue_real": types.MappingProxyType(dict(self.metrics.per_residue_real)),
+-                        "per_residue_probabilities": types.MappingProxyType(dict(self.metrics.per_residue_probabilities)),
++                        "string": types.MappingProxyType(dict(self.metrics.string.fast_items())),
++                        "real": types.MappingProxyType(dict(self.metrics.real.fast_items())),
++                        "composite_string": types.MappingProxyType(dict(self.metrics.composite_string.fast_items())),
++                        "composite_real": types.MappingProxyType(dict(self.metrics.composite_real.fast_items())),
++                        "per_residue_string": types.MappingProxyType(dict(self.metrics.per_residue_string.fast_items())),
++                        "per_residue_real": types.MappingProxyType(dict(self.metrics.per_residue_real.fast_items())),
++                        "per_residue_probabilities": types.MappingProxyType(dict(self.metrics.per_residue_probabilities.fast_items())),
+                     }
+                 ),
+-                "energies": types.MappingProxyType(dict(self.energies)),
++                "energies": types.MappingProxyType(dict(self.energies.fast_items())),
+             }
+         )
+ 
+@@ -220,21 +257,21 @@ def all(self):
+             1. SimpleMetric data
+             2. Arbitrary extra string scores
+         """
+-        extra = self.extra
+-        metrics = self.metrics
+-        energies = self.energies
++        extra = dict(self.extra.all)
++        metrics = dict(self.metrics.all)
++        energies = dict(self.energies.all)
+ 
+-        for k in extra.keys():
+-            if k in metrics.keys():
++        for k in extra:
++            if k in metrics:
+                 self._clobber_warning(
+                     "SimpleMetrics data key is clobbering arbitrary extra scores data key: '{0}'".format(k)
+                 )
+-            if k in energies.keys():
++            if k in energies:
+                 self._clobber_warning(
+                     "Active total energies key is clobbering arbitrary extra scores data key: '{0}'".format(k)
+                 )
+-        for k in metrics.keys():
+-            if k in energies.keys():
++        for k in metrics:
++            if k in energies:
+                 self._clobber_warning(
+                     "Active total energies key is clobbering SimpleMetrics data key: '{0}'".format(k)
+                 )
+@@ -247,10 +284,6 @@ def all(self):
+             }
+         )
+ 
+-    def __getitem__(self, key):
+-        "Get a value from a key from the `Pose.cache` dictionary."
+-        return self.maybe_decode(self.all[key])
+-
+     def __setitem__(self, key, value):
+         """
+         Save a key and value to SimpleMetric data by default.
+@@ -279,6 +312,6 @@ def __delitem__(self, key):
+ 
+     def clear(self):
+         """Clear pose energies, extra scores, and SimpleMetric data."""
+-        self.pose.energies().clear()
++        self.energies.clear()
+         clearPoseExtraScores(self.pose)
+         clear_sm_data(self.pose)
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/bindings/scores/energies.py b/source/src/python/PyRosetta/src/pyrosetta/bindings/scores/energies.py
+index cd53e2ddfcd..3e675f6a3c9 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/bindings/scores/energies.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/bindings/scores/energies.py
+@@ -34,9 +34,6 @@ def all(self):
+             dict(self.pose.energies().active_total_energies().items())
+         )
+ 
+-    def __getitem__(self, key):
+-        return self.all[key]
+-
+     def __setitem__(self, key, value):
+         raise NotImplementedError(
+             "Cannot set an item to pose energies. Consider scoring the pose with a score function."
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/bindings/scores/extra_scores.py b/source/src/python/PyRosetta/src/pyrosetta/bindings/scores/extra_scores.py
+index 34650dde7d6..6de5b4b38cf 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/bindings/scores/extra_scores.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/bindings/scores/extra_scores.py
+@@ -41,9 +41,6 @@ class ExtraScoresAccessorBase(PoseCacheAccessorBase, MutableMapping):
+     def __init__(self, pose):
+         super().__init__(pose)
+ 
+-    def __getitem__(self, key):
+-        return self.maybe_decode(self.all[key])
+-
+     def __setitem__(self, key, value):
+         self._validate_set(key)
+         value = self.maybe_encode(value)
+@@ -147,11 +144,11 @@ def all(self):
+             2. `ScoreMap.get_arbitrary_score_data_from_pose(pose)`
+             3. `ScoreMap.get_arbitrary_string_data_from_pose(pose)`
+         """
+-        extra_string_scores = self.string
+-        extra_float_scores = self.real
++        extra_string_scores = dict(self.string.all)
++        extra_float_scores = dict(self.real.all)
+ 
+-        for k in extra_float_scores.keys():
+-            if k in extra_string_scores.keys():
++        for k in extra_float_scores:
++            if k in extra_string_scores:
+                 self._clobber_warning(
+                     "Arbitrary extra float score key is clobbering arbitrary extra string score key: '{0}'".format(k)
+                 )
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/bindings/scores/simple_metrics.py b/source/src/python/PyRosetta/src/pyrosetta/bindings/scores/simple_metrics.py
+index 04812692797..e4553f7489a 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/bindings/scores/simple_metrics.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/bindings/scores/simple_metrics.py
+@@ -31,9 +31,6 @@ class SimpleMetricDataAccessorBase(PoseCacheAccessorBase, MutableMapping):
+     def __init__(self, pose):
+         super().__init__(pose)
+ 
+-    def __getitem__(self, key):
+-        return self.maybe_decode(self.all[key])
+-
+     def __setitem__(self, key, value):
+         self._validate_set(key)
+         if isinstance(value, float):
+@@ -52,8 +49,8 @@ def __delitem__(self, key):
+         else:
+             raise KeyError(key)
+ 
+-    def _has_sm_data(self, pose):
+-        return pose.data().has(CacheableDataType.SIMPLE_METRIC_DATA)
++    def _has_sm_data(self):
++        return self.pose.data().has(CacheableDataType.SIMPLE_METRIC_DATA)
+ 
+     def _format_metric(self, raw_data, as_dict=False):
+         out_data = {} 
+@@ -95,7 +92,7 @@ def format_per_residue_probabilities(self, raw_data):
+ 
+     def clear(self):
+         self._maybe_delete_keys_from_sm_data(
+-            keys=tuple(self.all.keys()),
++            keys=tuple(self.all),
+             attributes=("string", "real"),
+         )
+ 
+@@ -110,7 +107,7 @@ def __init__(self, pose):
+     @property
+     def all(self):
+         return types.MappingProxyType(
+-            dict(get_sm_data(self.pose).get_string_metric_data()) if self._has_sm_data(self.pose) else {}
++            dict(get_sm_data(self.pose).get_string_metric_data()) if self._has_sm_data() else {}
+         )
+ 
+     def __setitem__(self, key, value):
+@@ -132,6 +129,15 @@ def __delitem__(self, key):
+         else:
+             raise KeyError(key)
+ 
++    def set_mappable(self, mappable):
++        try:
++            for key, value in mappable.items():
++                self._validate_set(key)
++                self.apply(self.custom_string_value_metric, key, value)
++        finally:
++            self._maybe_delete_reserved_keys_from_sm_data()
++            self._reserved_custom_metric_keys_warning()
++
+     def clear(self):
+         self._maybe_delete_keys_from_sm_data(keys=tuple(self.all.keys()), attributes=("string",))
+ 
+@@ -146,7 +152,7 @@ def __init__(self, pose):
+     @property
+     def all(self):
+         return types.MappingProxyType(
+-            dict(get_sm_data(self.pose).get_real_metric_data()) if self._has_sm_data(self.pose) else {}
++            dict(get_sm_data(self.pose).get_real_metric_data()) if self._has_sm_data() else {}
+         )
+ 
+     def __setitem__(self, key, value):
+@@ -168,6 +174,15 @@ def __delitem__(self, key):
+         else:
+             raise KeyError(key)
+ 
++    def set_mappable(self, mappable):
++        try:
++            for key, value in mappable.items():
++                self._validate_set(key)
++                self.apply(self.custom_real_value_metric, key, value)
++        finally:
++            self._maybe_delete_reserved_keys_from_sm_data()
++            self._reserved_custom_metric_keys_warning()
++
+     def clear(self):
+         self._maybe_delete_keys_from_sm_data(keys=tuple(self.all.keys()), attributes=("real",))
+ 
+@@ -184,7 +199,7 @@ def all(self):
+         return types.MappingProxyType(
+             self.format_composite_string(
+                 get_sm_data(self.pose).get_composite_string_metric_data()
+-            ) if self._has_sm_data(self.pose) else {}
++            ) if self._has_sm_data() else {}
+         )
+ 
+     def __setitem__(self, key, value):
+@@ -203,7 +218,7 @@ def all(self):
+         return types.MappingProxyType(
+             self.format_composite_real(
+                 get_sm_data(self.pose).get_composite_real_metric_data()
+-            ) if self._has_sm_data(self.pose) else {}
++            ) if self._has_sm_data() else {}
+         )
+ 
+     def __setitem__(self, key, value):
+@@ -222,7 +237,7 @@ def all(self):
+         return types.MappingProxyType(
+             self.format_per_residue_string(
+                 get_sm_data(self.pose).get_per_residue_string_metric_output()
+-            ) if self._has_sm_data(self.pose) else {}
++            ) if self._has_sm_data() else {}
+         )
+ 
+     def __setitem__(self, key, value):
+@@ -241,7 +256,7 @@ def all(self):
+         return types.MappingProxyType(
+             self.format_per_residue_real(
+                 get_sm_data(self.pose).get_per_residue_real_metric_output()
+-            ) if self._has_sm_data(self.pose) else {}
++            ) if self._has_sm_data() else {}
+         )
+ 
+     def __setitem__(self, key, value):
+@@ -260,7 +275,7 @@ def all(self):
+         return types.MappingProxyType(
+             self.format_per_residue_probabilities(
+                 get_sm_data(self.pose).get_per_residue_probabilities_metric_output()
+-            ) if self._has_sm_data(self.pose) else {}
++            ) if self._has_sm_data() else {}
+         )
+ 
+     def __setitem__(self, key, value):
+@@ -293,62 +308,62 @@ def all(self):
+             3. Composite string metrics
+             4. String metrics
+         """
+-        sm_string = self.string # Lowest precedence
+-        sm_composite_string = self.composite_string
+-        sm_per_residue_string = self.per_residue_string
+-        sm_per_residue_probabilities = self.per_residue_probabilities
+-        sm_real = self.real
+-        sm_composite_real = self.composite_real
+-        sm_per_residue_real = self.per_residue_real # Highest precedence
++        sm_string = dict(self.string.all) # Lowest precedence
++        sm_composite_string = dict(self.composite_string.all)
++        sm_per_residue_string = dict(self.per_residue_string.all)
++        sm_per_residue_probabilities = dict(self.per_residue_probabilities.all)
++        sm_real = dict(self.real.all)
++        sm_composite_real = dict(self.composite_real.all)
++        sm_per_residue_real = dict(self.per_residue_real.all) # Highest precedence
+ 
+         _msg = "SimpleMetric {0} data key is clobbering SimpleMetric {1} data key: '{2}'"
+-        for k in sm_string.keys():
+-            if k in sm_composite_string.keys():
++        for k in sm_string:
++            if k in sm_composite_string:
+                 self._clobber_warning(_msg.format("composite string", "string", k))
+-            if k in sm_per_residue_string.keys():
++            if k in sm_per_residue_string:
+                 self._clobber_warning(_msg.format("per-residue string", "string", k))
+-            if k in sm_per_residue_probabilities.keys():
++            if k in sm_per_residue_probabilities:
+                 self._clobber_warning(_msg.format("per-residue probabilities", "string", k))
+-            if k in sm_real.keys():
++            if k in sm_real:
+                 self._clobber_warning(_msg.format("real", "string", k))
+-            if k in sm_composite_real.keys():
++            if k in sm_composite_real:
+                 self._clobber_warning(_msg.format("composite real", "string", k))
+-            if k in sm_per_residue_real.keys():
++            if k in sm_per_residue_real:
+                 self._clobber_warning(_msg.format("per-residue real", "string", k))
+-        for k in sm_composite_string.keys():
+-            if k in sm_per_residue_string.keys():
++        for k in sm_composite_string:
++            if k in sm_per_residue_string:
+                 self._clobber_warning(_msg.format("per-residue string", "composite string", k))
+-            if k in sm_per_residue_probabilities.keys():
++            if k in sm_per_residue_probabilities:
+                 self._clobber_warning(_msg.format("per-residue probabilities", "composite string", k))
+-            if k in sm_real.keys():
++            if k in sm_real:
+                 self._clobber_warning(_msg.format("real", "composite string", k))
+-            if k in sm_composite_real.keys():
++            if k in sm_composite_real:
+                 self._clobber_warning(_msg.format("composite real", "composite string", k))
+-            if k in sm_per_residue_real.keys():
++            if k in sm_per_residue_real:
+                 self._clobber_warning(_msg.format("per-residue real", "composite string", k))
+-        for k in sm_per_residue_string.keys():
+-            if k in sm_per_residue_probabilities.keys():
++        for k in sm_per_residue_string:
++            if k in sm_per_residue_probabilities:
+                 self._clobber_warning(_msg.format("per-residue probabilities", "per-residue string", k))
+-            if k in sm_real.keys():
++            if k in sm_real:
+                 self._clobber_warning(_msg.format("real", "per-residue string", k))
+-            if k in sm_composite_real.keys():
++            if k in sm_composite_real:
+                 self._clobber_warning(_msg.format("composite real", "per-residue string", k))
+-            if k in sm_per_residue_real.keys():
++            if k in sm_per_residue_real:
+                 self._clobber_warning(_msg.format("per-residue real", "per-residue string", k))
+-        for k in sm_per_residue_probabilities.keys():
+-            if k in sm_real.keys():
++        for k in sm_per_residue_probabilities:
++            if k in sm_real:
+                 self._clobber_warning(_msg.format("real", "per-residue probabilities", k))
+-            if k in sm_composite_real.keys():
++            if k in sm_composite_real:
+                 self._clobber_warning(_msg.format("composite real", "per-residue probabilities", k))
+-            if k in sm_per_residue_real.keys():
++            if k in sm_per_residue_real:
+                 self._clobber_warning(_msg.format("per-residue real", "per-residue probabilities", k))
+-        for k in sm_real.keys():
+-            if k in sm_composite_real.keys():
++        for k in sm_real:
++            if k in sm_composite_real:
+                 self._clobber_warning(_msg.format("composite real", "real", k))
+-            if k in sm_per_residue_real.keys():
++            if k in sm_per_residue_real:
+                 self._clobber_warning(_msg.format("per-residue real", "real", k))
+-        for k in sm_composite_real.keys():
+-            if k in sm_per_residue_real.keys():
++        for k in sm_composite_real:
++            if k in sm_per_residue_real:
+                 self._clobber_warning(_msg.format("per-residue real", "composite real", k))
+ 
+         return types.MappingProxyType(
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/__init__.py b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/__init__.py
+index 04539a0e256..816c65a0ce0 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/__init__.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/__init__.py
+@@ -53,7 +53,7 @@
+     "secure_read_pickle",
+     "update_scores",
+ ]
+-__version__: str = "5.0.3"
++__version__: str = "5.0.4"
+ 
+ with warnings.catch_warnings() and suppress(NameError):
+     warnings.simplefilter("ignore", category=UserWarning)
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/converter_tasks.py b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/converter_tasks.py
+index 97c35b4bc2f..a54996bf69e 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/converter_tasks.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/converter_tasks.py
+@@ -818,7 +818,7 @@ def _merge_and_update_scores(
+     input files you trust. Learn more about the `pickle` module and its security
+     `here <https://docs.python.org/3/library/pickle.html>`_.
+     """
+-    _new_scores_dict = dict(update_scores(packed).pose.cache)
++    _new_scores_dict = dict(update_scores(packed).pose.cache.fast_items())
+     _merged_scores_dict = toolz.dicttoolz.merge(_reserved_scores_dict, _new_scores_dict)
+     _reserved_scoretypes = packed.pose.cache._reserved
+     _resolved_scores_dict = toolz.dicttoolz.keyfilter(
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/io.py b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/io.py
+index 61c39341250..1298cc4ee3b 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/io.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/io.py
+@@ -169,7 +169,7 @@ def _format_result(
+         """
+ 
+         _pdbstring = io.to_pdbstring(result)
+-        _scores_dict = dict(update_scores(PackedPose(result)).pose.cache)
++        _scores_dict = dict(update_scores(PackedPose(result)).pose.cache.fast_items())
+         _filtered_scores_dict = IO._filter_scores_dict(self.serializer.deepcopy_kwargs(_scores_dict))
+ 
+         return (result, _pdbstring, _scores_dict, _filtered_scores_dict)
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/tools.py b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/tools.py
+index 247b258cd29..8e5fd545d36 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/tools.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/tools.py
+@@ -433,7 +433,7 @@ def wrapper(packed_pose: Optional[PackedPose], **kwargs: Any) -> PyRosettaProtoc
+         _output = func(packed_pose, **kwargs)
+         # Only deserialize after the user-provided PyRosetta protocol finished executing, giving
+         # the user an opportunity to add secure packages to the unpickle-allowed list as necessary
+-        _scores_dict = dict(_reserved_pose.cache) if _reserved_pose is not None else {}
++        _scores_dict = dict(_reserved_pose.cache.fast_items()) if _reserved_pose is not None else {}
+ 
+         return reserve_scores_in_results(_output, _scores_dict, func.__name__)
+ 
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/tests/bindings/core/test_pose.py b/source/src/python/PyRosetta/src/pyrosetta/tests/bindings/core/test_pose.py
+index a0d0ec341bc..61da03a0f21 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/tests/bindings/core/test_pose.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/tests/bindings/core/test_pose.py
+@@ -398,6 +398,45 @@ def setUpClass(cls):
+     def tearDownClass(cls):
+         cls.workdir.cleanup()
+ 
++    @staticmethod
++    def maybe_get_pose_state(obj):
++        if isinstance(obj, pyrosetta.Pose):
++            state = []
++            for res in range(1, obj.size() + 1):
++                residue = obj.residue(res)
++                state.append(res)
++                state.append(residue.name())
++                for atom in range(1, residue.natoms() + 1):
++                    state.append(atom)
++                    state.append(residue.atom_name(atom))
++                    xyz = residue.atom(atom).xyz()
++                    for axis in "xyz":
++                        state.append(getattr(xyz, axis))
++            return state
++        else:
++            return obj
++
++    def assert_items_equal(self, a, b):
++        self.assertEqual(len(a), len(b), msg="Objects have different size.")
++        self.assertEqual(type(a), type(b), msg="Object types differ.")
++        for k in a:
++            self.assertIn(k, b)
++            self.assertEqual(
++                TestPoseCacheAccessor.maybe_get_pose_state(a[k]),
++                TestPoseCacheAccessor.maybe_get_pose_state(b[k]),
++                msg="Objects are not equal.",
++            )
++
++    def assert_values_equal(self, a, b):
++        self.assertEqual(len(a), len(b), msg="Objects have different size.")
++        self.assertEqual(type(a), type(b), msg="Object types differ.")
++        for i in range(len(a)):
++            self.assertEqual(
++                TestPoseCacheAccessor.maybe_get_pose_state(a[i]),
++                TestPoseCacheAccessor.maybe_get_pose_state(b[i]),
++                msg="Objects are not equal.",
++            )
++
+     def test_pose_cache(self):
+         self.assertEqual(self.pose.cache, {})
+ 
+@@ -675,7 +714,7 @@ def test_pose_cache(self):
+ 
+         self.assertDictEqual(dict(self.pose.cache.metrics.per_residue_string), {})
+ 
+-        # Test clearing scores
++        # Test all scores
+         self.scorefxn(self.pose)
+         ref_scores = dict(self.pose.cache.all_scores)
+         self.assertDictEqual(dict(ref_scores["metrics"]["real"]), dict(self.pose.cache.metrics.real))
+@@ -691,6 +730,32 @@ def test_pose_cache(self):
+         ref_keys = list(self.pose.cache.all_keys)
+         self.pose.cache.assert_unique_keys()
+ 
++        # Test `Pose.cache.all_scores` parity after refactor to fast accessor path
++        all_scores_old = types.MappingProxyType(
++            {
++                "extra": types.MappingProxyType(
++                    {
++                        "string": types.MappingProxyType(dict(self.pose.cache.extra.string)), # Slow path
++                        "real": types.MappingProxyType(dict(self.pose.cache.extra.real)), # Slow path
++                    }
++                ),
++                "metrics": types.MappingProxyType(
++                        {
++                        "string": types.MappingProxyType(dict(self.pose.cache.metrics.string)), # Slow path
++                        "real": types.MappingProxyType(dict(self.pose.cache.metrics.real)), # Slow path
++                        "composite_string": types.MappingProxyType(dict(self.pose.cache.metrics.composite_string)), # Slow path
++                        "composite_real": types.MappingProxyType(dict(self.pose.cache.metrics.composite_real)), # Slow path
++                        "per_residue_string": types.MappingProxyType(dict(self.pose.cache.metrics.per_residue_string)), # Slow path
++                        "per_residue_real": types.MappingProxyType(dict(self.pose.cache.metrics.per_residue_real)), # Slow path
++                        "per_residue_probabilities": types.MappingProxyType(dict(self.pose.cache.metrics.per_residue_probabilities)), # Slow path
++                    }
++                ),
++                "energies": types.MappingProxyType(dict(self.pose.cache.energies)), # Slow path
++            }
++        )
++        all_scores_new = self.pose.cache.all_scores
++        self.assertEqual(all_scores_old, all_scores_new)
++
+         # Test SimpleMetric data that is immutable
+         with self.assertRaises(KeyError):
+             self.pose.cache.metrics.composite_real.clear()
+@@ -736,6 +801,35 @@ def test_pose_cache(self):
+             self.pose.cache.extra.real["dict"] = dict(a=1, b=2)
+         self.assertIn("dict", self.pose.cache.extra.string.keys())
+ 
++        # Test parity between fast and slow accessor paths
++        self.assert_items_equal(dict(self.pose.cache.items()), dict(self.pose.cache.fast_items()))
++        self.assert_values_equal(list(self.pose.cache.values()), list(self.pose.cache.fast_values()))
++        self.assert_items_equal(dict(self.pose.cache.metrics.items()), dict(self.pose.cache.metrics.fast_items()))
++        self.assert_values_equal(list(self.pose.cache.metrics.values()), list(self.pose.cache.metrics.fast_values()))
++        self.assert_items_equal(dict(self.pose.cache.metrics.real.items()), dict(self.pose.cache.metrics.real.fast_items()))
++        self.assert_values_equal(list(self.pose.cache.metrics.real.values()), list(self.pose.cache.metrics.real.fast_values()))
++        self.assert_items_equal(dict(self.pose.cache.metrics.string.items()), dict(self.pose.cache.metrics.string.fast_items()))
++        self.assert_values_equal(list(self.pose.cache.metrics.string.values()), list(self.pose.cache.metrics.string.fast_values()))
++        self.assert_items_equal(dict(self.pose.cache.metrics.composite_real.items()), dict(self.pose.cache.metrics.composite_real.fast_items()))
++        self.assert_values_equal(list(self.pose.cache.metrics.composite_real.values()), list(self.pose.cache.metrics.composite_real.fast_values()))
++        self.assert_items_equal(dict(self.pose.cache.metrics.composite_string.items()), dict(self.pose.cache.metrics.composite_string.fast_items()))
++        self.assert_values_equal(list(self.pose.cache.metrics.composite_string.values()), list(self.pose.cache.metrics.composite_string.fast_values()))
++        self.assert_items_equal(dict(self.pose.cache.metrics.per_residue_real.items()), dict(self.pose.cache.metrics.per_residue_real.fast_items()))
++        self.assert_values_equal(list(self.pose.cache.metrics.per_residue_real.values()), list(self.pose.cache.metrics.per_residue_real.fast_values()))
++        self.assert_items_equal(dict(self.pose.cache.metrics.per_residue_string.items()), dict(self.pose.cache.metrics.per_residue_string.fast_items()))
++        self.assert_values_equal(list(self.pose.cache.metrics.per_residue_string.values()), list(self.pose.cache.metrics.per_residue_string.fast_values()))
++        self.assert_items_equal(dict(self.pose.cache.metrics.per_residue_probabilities.items()), dict(self.pose.cache.metrics.per_residue_probabilities.fast_items()))
++        self.assert_values_equal(list(self.pose.cache.metrics.per_residue_probabilities.values()), list(self.pose.cache.metrics.per_residue_probabilities.fast_values()))
++        self.assert_items_equal(dict(self.pose.cache.extra.items()), dict(self.pose.cache.extra.fast_items()))
++        self.assert_values_equal(list(self.pose.cache.extra.values()), list(self.pose.cache.extra.fast_values()))
++        self.assert_items_equal(dict(self.pose.cache.extra.real.items()), dict(self.pose.cache.extra.real.fast_items()))
++        self.assert_values_equal(list(self.pose.cache.extra.real.values()), list(self.pose.cache.extra.real.fast_values()))
++        self.assert_items_equal(dict(self.pose.cache.extra.string.items()), dict(self.pose.cache.extra.string.fast_items()))
++        self.assert_values_equal(list(self.pose.cache.extra.string.values()), list(self.pose.cache.extra.string.fast_values()))
++        self.assert_items_equal(dict(self.pose.cache.energies.items()), dict(self.pose.cache.energies.fast_items()))
++        self.assert_values_equal(list(self.pose.cache.energies.values()), list(self.pose.cache.energies.fast_values()))
++
++        # Test clearing scores
+         self.pose.cache.clear()
+         self.pose.cache.extra.real["1"] = float(1)
+         with self.assertRaises(KeyError):
+@@ -781,15 +875,19 @@ def test_pose_cache(self):
+         pickler = partial(pickle.dumps, protocol=pickle.DEFAULT_PROTOCOL)
+         bytes_start_1 = pickler(pose)
+         self.assertFalse(pose.data().has(CacheableDataType.SIMPLE_METRIC_DATA))
++        self.assertFalse(pose.cache.metrics._has_sm_data())
+         _ = dict(pose.cache) # Access `Pose.cache`
+         self.assertFalse(pose.data().has(CacheableDataType.SIMPLE_METRIC_DATA))
++        self.assertFalse(pose.cache.metrics._has_sm_data())
+         bytes_final_1 = pickler(pose)
+         self.assertEqual(bytes_start_1, bytes_final_1, msg="Pose is not bitwise identical after accessing `Pose.cache`.")
+         pose.cache.metrics["pi"] = math.pi # Add SimpleMetrics data
+         bytes_start_2 = pickler(pose)
+         self.assertTrue(pose.data().has(CacheableDataType.SIMPLE_METRIC_DATA))
++        self.assertTrue(pose.cache.metrics._has_sm_data())
+         _ = dict(pose.cache) # Access `Pose.cache`
+         self.assertTrue(pose.data().has(CacheableDataType.SIMPLE_METRIC_DATA))
++        self.assertTrue(pose.cache.metrics._has_sm_data())
+         bytes_final_2 = pickler(pose)
+         self.assertEqual(bytes_start_2, bytes_final_2, msg="Pose is not bitwise identical after accessing `Pose.cache`.")
+         self.assertNotEqual(bytes_final_1, bytes_final_2, msg="Pose is bitwise identical after adding SimpleMetrics data to `Pose.cache`.")
+@@ -797,6 +895,7 @@ def test_pose_cache(self):
+         # Test `Pose.cache` access to SimpleMetrics data when `CacheableDataType.SIMPLE_METRIC_DATA` is not yet set up
+         pose = pyrosetta.io.pose_from_sequence("EMPTY/DATA/CACHE")
+         self.assertFalse(pose.data().has(CacheableDataType.SIMPLE_METRIC_DATA))
++        self.assertFalse(pose.cache.metrics._has_sm_data())
+         for _attr in (
+             "real",
+             "string",
+@@ -810,6 +909,73 @@ def test_pose_cache(self):
+             self.assertIsInstance(data.all, types.MappingProxyType)
+             self.assertDictEqual(dict(data), {})
+         self.assertFalse(pose.data().has(CacheableDataType.SIMPLE_METRIC_DATA))
++        self.assertFalse(pose.cache.metrics._has_sm_data())
++
++        # Test `Pose.cache` bulk setters
++        pose = pyrosetta.io.pose_from_sequence("EMPTY/DATA/CACHE")
++        N = 10000
++        real_mappable = {f"real_{i}": float(i) for i in range(N)}
++        string_mappable = {f"string_{i}": str(i) for i in range(N)}
++        pose.cache.metrics.real.set_mappable(real_mappable)
++        pose.cache.metrics.string.set_mappable(string_mappable)
++        self.assertEqual(len(dict(pose.cache.metrics.fast_items())), N * 2, msg="Bulk `Pose.cache` setter failed.")
++        self.assertEqual(len(dict(pose.cache.fast_items())), N * 2, msg="Bulk `Pose.cache` setter failed.")
++        self.assertEqual(len(list(pose.cache.metrics.fast_values())), N * 2, msg="Bulk `Pose.cache` setter failed.")
++        self.assertEqual(len(list(pose.cache.fast_values())), N * 2, msg="Bulk `Pose.cache` setter failed.")
++        self.assertEqual(len(pose.cache.metrics.real.all), N, msg="Bulk `Pose.cache` setter failed.") # Test encoded scores data
++        self.assertEqual(len(pose.cache.metrics.string.all), N, msg="Bulk `Pose.cache` setter failed.") # Test encoded scores data
++        self.assertEqual(len(pose.cache.metrics.all), N * 2, msg="Bulk `Pose.cache` setter failed.")
++        self.assertEqual(len(pose.cache.all), N * 2, msg="Bulk `Pose.cache` setter failed.")
++        self.assertEqual(len(list(pose.cache.metrics)), N * 2, msg="Bulk `Pose.cache` setter failed.")
++        self.assertEqual(len(list(pose.cache)), N * 2, msg="Bulk `Pose.cache` setter failed.")
++        all_mappable = {}
++        all_mappable.update(real_mappable)
++        all_mappable.update(string_mappable)
++        for k, v in pose.cache.fast_items():
++            self.assertIn(k, all_mappable, msg="Bulk `Pose.cache` setter failed.")
++            self.assertEqual(v, all_mappable[k], msg="Bulk `Pose.cache` setter failed.")
++
++        # Test `Pose.cache` bulk setters with arbitrary Python types
++        pose.cache.metrics.real.clear()
++        pose.cache.metrics.string.clear()
++        arbitrary_mappable = {f"arbitrary_{i}": {i: list(range(0, 3))} if i % 2 == 0 else complex(0, 3) for i in range(N)}
++        with self.assertRaises(TypeError): # Cannot set `dict` types to a real metric
++            pose.cache.metrics.real.set_mappable(arbitrary_mappable)
++        pose.cache.metrics.string.set_mappable(arbitrary_mappable)
++        _matches = 0
++        _arbitrary_prefix = [*arbitrary_mappable][0].split("_")[0]
++        for k, v in pose.cache.all.items(): # Test encoded scores data
++            if k.startswith(_arbitrary_prefix):
++                self.assertTrue(v.startswith("[CustomArbitraryValueMetric]"), msg="Bulk `Pose.cache` setter failed.")
++                _matches += 1
++        self.assertEqual(_matches, N, msg="Bulk `Pose.cache` setter failed.")
++        for k, v in pose.cache.fast_items():
++            self.assertIn(k, arbitrary_mappable, msg="Bulk `Pose.cache` setter failed.")
++            self.assertEqual(v, arbitrary_mappable[k], msg="Bulk `Pose.cache` setter failed.")
++
++        # Test parity of energy clearing paths
++        pose.cache.clear()
++        pose1 = pose.clone()
++        pose2 = pose.clone()
++        self.scorefxn(pose1)
++        self.scorefxn(pose2)
++        self.assertEqual(pose1.cache.energies, pose2.cache.energies)
++        self.assertEqual(dict(pose1.cache.energies.fast_items()), dict(pose2.cache.energies.fast_items()))
++        self.assertEqual(dict(pose1.energies().active_total_energies().items()), dict(pose2.energies().active_total_energies().items()))
++        self.assertEqual(pose1.cache.energies, dict(pose2.energies().active_total_energies().items()))
++        self.assertEqual(dict(pose1.energies().active_total_energies().items()), pose2.cache.energies)
++        self.assertIn("total_score", pose1.cache.energies)
++        self.assertIn("total_score", pose2.cache.energies)
++        pose1.energies().clear() # Clear energies via `Pose.energies`
++        pose2.cache.energies.clear() # Clear energies via `Pose.cache`
++        self.assertEqual(pose1.cache.energies, pose2.cache.energies)
++        self.assertEqual(dict(pose1.cache.energies.fast_items()), dict(pose2.cache.energies.fast_items()))
++        self.assertEqual(dict(pose1.energies().active_total_energies().items()), dict(pose2.energies().active_total_energies().items()))
++        self.assertEqual(pose1.cache.energies, dict(pose2.energies().active_total_energies().items()))
++        self.assertEqual(dict(pose1.energies().active_total_energies().items()), pose2.cache.energies)
++        self.assertNotIn("total_score", pose1.cache.energies)
++        self.assertNotIn("total_score", pose2.cache.energies)
++
+ 
+ class TestPoseResidueLabelAccessor(unittest.TestCase):
+ 
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/tests/distributed/cluster/test_io.py b/source/src/python/PyRosetta/src/pyrosetta/tests/distributed/cluster/test_io.py
+index 8f58eb24e79..a3fab14333c 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/tests/distributed/cluster/test_io.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/tests/distributed/cluster/test_io.py
+@@ -84,15 +84,36 @@ def tearDown(self):
+     def my_pyrosetta_protocol(packed_pose, **kwargs):
+         import pyrosetta
+         import pyrosetta.distributed.io as io
++        from pyrosetta.distributed.packed_pose.core import PackedPose
++        from pyrosetta.distributed.cluster import PackedPoseHasher, update_scores
+ 
+         packed_pose = io.pose_from_sequence(kwargs["seq"])
++        my_pose_score = pyrosetta.pose_from_sequence(IOTest._my_pose_value)
++        my_pose_score.cache["test_cache"] = 123
++        pyrosetta.rosetta.core.pose.add_comment(my_pose_score, "test_comment_key", "test_comment_value")
+         packed_pose = packed_pose.update_scores(
+             my_string_score=IOTest._my_string_value,
+             my_real_score=IOTest._my_real_value,
+-            my_pose_score=pyrosetta.pose_from_sequence(IOTest._my_pose_value),
++            my_pose_score=my_pose_score,
+             my_complex_score=IOTest._my_complex_value,
+         )
+ 
++        _scores_dict_slow = dict(update_scores(PackedPose(packed_pose)).pose.cache)
++        _scores_dict_fast = dict(update_scores(PackedPose(packed_pose)).pose.cache.fast_items())
++        assert len(_scores_dict_slow) == len(_scores_dict_fast)
++        for k in _scores_dict_slow:
++            assert k in _scores_dict_fast
++            v1 = _scores_dict_slow[k]
++            v2 = _scores_dict_fast[k]
++            if isinstance(v1, pyrosetta.Pose):
++                assert isinstance(v2, pyrosetta.Pose)
++                h1 = PackedPoseHasher(v1, include_cache=True, include_comments=True).digest()
++                h2 = PackedPoseHasher(v2, include_cache=True, include_comments=True).digest()
++                assert h1 == h2
++            else:
++                assert type(v1) == type(v2)
++                assert v1 == v2
++
+         return packed_pose
+ 
+     @staticmethod
+@@ -132,6 +153,7 @@ def test_io(self):
+                         with self.assertRaises(AssertionError):  # output_scorefile_types=[".gz", ...] requires 'pandas' as a secure package
+                             run(**instance_kwargs)
+                     pyrosetta.secure_unpickle.add_secure_package("pandas")
++                    pyrosetta.secure_unpickle.add_secure_package("pyarrow")
+                     run(**instance_kwargs)
+                     # Test decoy outputs
+                     _n_tasks = len(IOTest.create_tasks())

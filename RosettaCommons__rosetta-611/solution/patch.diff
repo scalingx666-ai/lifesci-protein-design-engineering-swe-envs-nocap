@@ -1,0 +1,127 @@
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/secure_unpickle.py b/source/src/python/PyRosetta/src/pyrosetta/secure_unpickle.py
+index c31ae9b7fb7..e4d7362cb15 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/secure_unpickle.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/secure_unpickle.py
+@@ -77,6 +77,7 @@
+     # Block process spawning:
+     "billiard",
+     "celery",
++    "concurrent",
+     "dask",
+     "distributed",
+     "multiprocessing",
+@@ -84,12 +85,26 @@
+     "base64",
+     "hashlib",
+     "http",
++    "importlib",
++    "inspect",
++    "io",
+     "logging",
++    "marshal",
++    "msgpack",
++    "pathlib",
++    "PIL",
++    "psutil",
+     "random",
++    "requests",
++    "send2trash",
+     "shelve",
++    "sqlite3",
+     "ssl",
+     "tempfile",
++    "types",
+     "xml",
++    "yaml",
++    "zipimport",
+     "zipfile",
+ })
+ 
+@@ -99,12 +114,19 @@
+     ("builtins",  "compile"),
+     ("builtins",  "eval"),
+     ("builtins",  "exec"),
++    ("builtins",  "input"),
+     ("builtins",  "open"),
+     ("http",      "server"),
+     ("importlib", "import_module"),
++    ("numpy",     "load"),
+     ("os",        "_exit"),
++    ("os",        "open"),
+     ("os",        "popen"),
+     ("os",        "system"),
++    ("pandas",    "read_pickle"),
++    ("pandas.io", "pickle"),
++    ("pandas.io.pickle", "read_pickle"),
++    ("posix",     "open"),
+     ("posix",     "popen"),
+     ("posix",     "system"),
+     ("sys",       "exit"),
+@@ -131,7 +153,8 @@
+         "open",
+     ),
+     "shutil": (
+-        "chown",        "make_archive", "move",        "rmtree",
++        "chown",        "copy",         "make_archive", "move",
++        "rmtree",
+     ),
+     "sys": (
+         "addaudithook", "setprofile",   "settrace",
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/tests/bindings/core/test_pose.py b/source/src/python/PyRosetta/src/pyrosetta/tests/bindings/core/test_pose.py
+index bec8bf21f17..466bc6f683e 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/tests/bindings/core/test_pose.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/tests/bindings/core/test_pose.py
+@@ -1243,6 +1243,53 @@ def __reduce__(self):
+                     _msg = str(ex.exception)
+                     self.assertTrue(_msg.startswith("Disallowed unpickling"), msg=_msg)
+ 
++        # Test that `numpy.load` is disallowed
++        test_pose = pyrosetta.pose_from_sequence("TEST")
++        pyrosetta.secure_unpickle.clear_secure_packages()
++        pyrosetta.secure_unpickle.add_secure_package("numpy")
++        class _ReduceObject:
++            def __reduce__(self):
++                return (numpy.load, tuple())
++        key = "np.load"
++        test_pose.cache[key] = _ReduceObject()
++        with self.assertRaises(UnpickleSecurityError) as ex:
++            _obj = test_pose.cache[key] # Test that `np.load` is disallowed
++        _msg = str(ex.exception)
++        self.assertTrue(_msg.startswith("Disallowed unpickling"), msg=_msg)
++        test_pose.cache.clear()
++        class _ReduceObject:
++            def __reduce__(self):
++                return (numpy.array, (list(range(10)),))
++        key = "np.array"
++        test_pose.cache[key] = _ReduceObject()
++        _obj = test_pose.cache[key] # Test that `np.array` is allowed
++
++        # Test that `pandas.read_pickle` is disallowed
++        try:
++            import pandas
++        except ImportError:
++            print("Skipping test with `pandas.read_pickle` because 'pandas' is not installed.")
++        if "pandas" in sys.modules:
++            pyrosetta.secure_unpickle.clear_secure_packages()
++            pyrosetta.secure_unpickle.add_secure_package("pandas")
++            test_pose.cache.clear()
++            class _ReduceObject:
++                def __reduce__(self):
++                    return (pandas.read_pickle, tuple())
++            key = "pd.read_pickle"
++            test_pose.cache[key] = _ReduceObject()
++            with self.assertRaises(UnpickleSecurityError) as ex:
++                _obj = test_pose.cache[key] # Test that `pd.read_pickle` is disallowed
++            _msg = str(ex.exception)
++            self.assertTrue(_msg.startswith("Disallowed unpickling"), msg=_msg)
++            test_pose.cache.clear()
++            class _ReduceObject:
++                def __reduce__(self):
++                    return (pandas.DataFrame, ({0: []},))
++            key = "pd.DataFrame"
++            test_pose.cache[key] = _ReduceObject()
++            _obj = test_pose.cache[key] # Test that `pd.DataFrame` is allowed
++            test_pose.cache.clear()
+ 
+ # if __name__ == "__main__":
+ #    unittest.main()

@@ -1,0 +1,1603 @@
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/__init__.py b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/__init__.py
+index 2633c266871..3637e8b18bd 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/__init__.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/__init__.py
+@@ -15,6 +15,7 @@
+ from pyrosetta.distributed.cluster.toolkit import (
+     Serialization,
+     export_init_file,
++    generate_dask_tls_security,
+     get_instance_kwargs,
+     get_protocols,
+     get_protocols_list_of_str,
+@@ -37,6 +38,7 @@
+     "PyRosettaCluster",
+     "Serialization",
+     "export_init_file",
++    "generate_dask_tls_security",
+     "get_instance_kwargs",
+     "get_protocols",
+     "get_protocols_list_of_str",
+@@ -51,7 +53,7 @@
+     "run",
+     "update_scores",
+ ]
+-__version__: str = "3.0.1"
++__version__: str = "3.1.0"
+ 
+ _print_conda_warnings()
+ 
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/core.py b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/core.py
+index 7c572f4114d..09cdb84306b 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/core.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/core.py
+@@ -271,6 +271,35 @@
+     dry_run: A `bool` object specifying whether or not to save '.pdb' files to
+         disk. If `True`, then do not write '.pdb' or '.pdb.bz2' files to disk.
+         Default: False
++    security: A `bool` object or instance of `dask.distributed.Security()`, only having
++        effect if `client=None` and `clients=None`, that is passed to 'dask' if using
++        `scheduler=None` or passed to 'dask-jobqueue' if using `scheduler="slurm"` or
++        `scheduler="sge"`. If `True` is provided, then invoke the 'cryptography' package
++        to generate a `Security.temporary()` object through 'dask' or 'dask-jobqueue'. See
++        https://distributed.dask.org/en/latest/tls.html#distributed.security.Security.temporary
++        for more information. If a dask `Security()` object is provided, then pass it to
++        dask with `scheduler=None`, or pass it to 'dask-jobqueue' (where 'shared_temp_directory'
++        is set to the `output_path` keyword argument parameter) with `scheduler="slurm"` or
++        `scheduler="sge"`. If `False` is provided, then security is disabled regardless
++        of the `scheduler` keyword argument parameter (which is not recommended for remote
++        clusters unless using a firewall). If `None` is provided, then `True` is used by
++        default. In order to generate a `dask.distributed.Security()` object with OpenSSL,
++        the `pyrosetta.distributed.cluster.generate_dask_tls_security()` function may also
++        be used (see docstring for more information) instead of the 'cryptography' package.
++        Default: `False` if `scheduler=None`, otherwise `True`
++    max_nonce: An `int` object greater than or equal to 1 specifying the maximum number of
++        nonces to cache per process if dask security is disabled while using remote clusters,
++        which protects against replay attacks. If nonce caching is in use, each process
++        (including the host node process and all dask worker processes) cache nonces upon
++        communication exchange over the network, which can increase memory usage in each
++        process. A rough estimate of additional memory usage is ~0.2 KB per task
++        per user-provided PyRosetta protocol per process. For example, submitting
++        1000 tasks with 2 user-provided PyRosetta protocols adds ~0.2 KB/task/protocol
++        * 1000 tasks * 2 protocols = ~0.4 MB of memory per processs. If memory usage
++        per process permits, it is recommended to set this parameter to at least the
++        number of tasks times the number of protocols submitted, so that every nonce
++        from every communication exchange over the network gets cached.
++        Default: 4096
+     cooldown_time: A `float` or `int` object specifying how many seconds to sleep after the
+         simulation is complete to allow loggers to flush. For very slow network filesystems,
+         2.0 or more seconds may be reasonable.
+@@ -311,7 +340,7 @@
+     import attr
+     import distributed
+     import toolz
+-    from dask.distributed import Client, Future, as_completed
++    from dask.distributed import Client, Future, Security, as_completed
+     from distributed.scheduler import KilledWorker
+ except ImportError:
+     print(
+@@ -355,7 +384,8 @@
+ from pyrosetta.distributed.cluster.io import IO
+ from pyrosetta.distributed.cluster.logging_support import LoggingSupport, MaskedBytes
+ from pyrosetta.distributed.cluster.multiprocessing import user_spawn_thread
+-from pyrosetta.distributed.cluster.serialization import Serialization
++from pyrosetta.distributed.cluster.security import SecurityIO
++from pyrosetta.distributed.cluster.serialization import NonceCache, Serialization
+ from pyrosetta.distributed.cluster.utilities import SchedulerManager
+ from pyrosetta.distributed.cluster.validators import (
+     _validate_dir,
+@@ -385,7 +415,7 @@
+ 
+ 
+ @attr.s(kw_only=True, slots=True, frozen=False)
+-class PyRosettaCluster(IO[G], LoggingSupport[G], SchedulerManager[G], TaskBase[G]):
++class PyRosettaCluster(IO[G], LoggingSupport[G], SchedulerManager[G], SecurityIO[G], TaskBase[G]):
+     tasks = attr.ib(
+         type=list,
+         default=[{}],
+@@ -730,6 +760,29 @@ class PyRosettaCluster(IO[G], LoggingSupport[G], SchedulerManager[G], TaskBase[G
+         validator=attr.validators.instance_of(str),
+         converter=_parse_pyrosetta_build,
+     )
++    security = attr.ib(
++        type=Union[bool, Security],
++        default=attr.Factory(
++            lambda self: bool(self.scheduler),
++            takes_self=True,
++        ),
++        validator=attr.validators.instance_of((bool, Security)),
++        converter=attr.converters.default_if_none(default=True),
++    )
++    instance_id = attr.ib(
++        type=str,
++        default=attr.Factory(
++            lambda: f"PyRosettaCluster_instance_id_{uuid.uuid4().hex}",
++            takes_self=False,
++        ),
++        init=False,
++        validator=attr.validators.instance_of(str),
++    )
++    max_nonce = attr.ib(
++        type=int,
++        default=4096,
++        validator=[attr.validators.instance_of(int), _validate_int],
++    )
+     environment = attr.ib(
+         type=str,
+         default=None,
+@@ -807,6 +860,16 @@ def __attrs_post_init__(self) -> None:
+         self._write_init_file()
+         self.serializer = Serialization(compression=self.compression)
+         self.clients_dict = self._setup_clients_dict()
++        self.with_nonce = self._setup_with_nonce()
++        self.serializer = Serialization(
++            instance_id=self.instance_id,
++            compression=self.compression,
++            with_nonce=self.with_nonce,
++        )
++        self.nonce_cache = NonceCache(
++            instance_id=self.instance_id,
++            max_nonce=self.max_nonce,
++        ) if self.with_nonce else None
+ 
+     def _create_future(
+         self,
+@@ -922,14 +985,15 @@ def _run(
+                 Default: None
+         """
+         yield_results = _parse_yield_results(self.yield_results)
++        clients, cluster, adaptive = self._setup_clients_cluster_adaptive()
++        self._setup_task_security_plugin(clients)
++        socket_listener_address, passkey = self._setup_socket_listener(clients)
+         compressed_input_packed_pose = self.serializer.compress_packed_pose(self.input_packed_pose)
+         protocols, protocol, seed, clients_index, resource = self._setup_protocols_protocol_seed(
+             args, protocols, clients_indices, resources
+         )
+         protocol_name = protocol.__name__
+         compressed_protocol = self.serializer.compress_object(protocol)
+-        clients, cluster, adaptive = self._setup_clients_cluster_adaptive()
+-        socket_listener_address, passkey = self._setup_socket_listener(clients)
+         client_residue_type_set = _get_residue_type_set()
+         extra_args = dict(
+             decoy_ids=self.decoy_ids,
+@@ -937,8 +1001,10 @@ def _run(
+             timeout=self.timeout,
+             ignore_errors=self.ignore_errors,
+             datetime_format=self.DATETIME_FORMAT,
+-            norm_task_options=self.norm_task_options,
++            instance_id=self.instance_id,
+             compression=self.compression,
++            with_nonce=self.with_nonce,
++            norm_task_options=self.norm_task_options,
+             max_delay_time=self.max_delay_time,
+             logging_level=self.logging_level,
+             socket_listener_address=socket_listener_address,
+@@ -957,10 +1023,10 @@ def _run(
+                     passkey,
+                     resource,
+                 )
++                for _ in range(self.nstruct)
+                 for compressed_kwargs, pyrosetta_init_kwargs in (
+                     self._setup_initial_kwargs(protocols, seed, task_kwargs) for task_kwargs in self.tasks
+                 )
+-                for _ in range(self.nstruct)
+             ]
+         )
+         for i, future in enumerate(seq, start=1):
+@@ -973,6 +1039,8 @@ def _run(
+                 "Percent Complete = {0:0.5f} %".format((i / self.tasks_size) * 100.0)
+             )
+             for compressed_packed_pose, compressed_kwargs in results:
++                if self.with_nonce:
++                    self.nonce_cache._cache_nonce(compressed_kwargs)
+                 kwargs = self.serializer.decompress_kwargs(compressed_kwargs)
+                 if not kwargs[self.protocols_key]:
+                     if yield_results:
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/hkdf.py b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/hkdf.py
+index 04617a7a265..25dc22e9c91 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/hkdf.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/hkdf.py
+@@ -33,6 +33,15 @@
+ SALT: bytes = b"PyRosettaCluster_salt"
+ 
+ 
++class MaskedBytes(bytes):
++    """A `bytes` subclass to mask its contents if the `repr` method is called."""
++    def __new__(cls, value: bytes) -> bytes:
++        return super().__new__(cls, value)
++
++    def __repr__(self) -> str:
++        return "#"
++
++
+ def compare_digest(a: bytes, b: bytes) -> bool:
+     """Return `a == b` result."""
+     return hmac.compare_digest(a, b)
+@@ -83,6 +92,17 @@ def derive_task_key(passkey: bytes, task_id: str) -> bytes:
+     return hkdf_expand(prk, info)
+ 
+ 
++def derive_instance_key(key: bytes, instance_id: str) -> bytes:
++    """
++    Derive a per-instance secret key using the extract-and-expand hash-based message
++    authentication code (HMAC)-based key derivation function (HKDF).
++    """
++    info = msgpack.packb(["PyRosettaCluster.instance_id", instance_id], use_bin_type=True)
++    prk = hkdf_extract(key, salt=SALT)
++
++    return hkdf_expand(prk, info)
++
++
+ def derive_init_key(key: bytes, data: bytes) -> bytes:
+     """
+     Derive a PyRosetta initialization file secret key using the extract-and-expand
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/io.py b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/io.py
+index 91c9aff18bb..40061ae8fc9 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/io.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/io.py
+@@ -86,6 +86,7 @@ def _get_instance_and_metadata(
+         if isinstance(instance_state, tuple):
+             instance_state = dict(zip(self.__slots__, self.__getstate__()))
+         assert isinstance(instance_state, dict)
++        instance_state.pop("security", None)
+         instance_state.pop("client", None)
+         instance_state.pop("clients", None)
+         instance_state.pop("output_init_file", None)
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/logging_listeners.py b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/logging_listeners.py
+index 5263e1698cb..2ee8566dae4 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/logging_listeners.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/logging_listeners.py
+@@ -37,7 +37,7 @@
+     Union,
+ )
+ 
+-from pyrosetta.distributed.cluster.hkdf import compare_digest, derive_task_key, hmac_digest
++from pyrosetta.distributed.cluster.hkdf import MaskedBytes, compare_digest, derive_task_key, hmac_digest
+ from pyrosetta.distributed.cluster.logging_filters import (
+     SocketAddressFilter,
+     split_socket_address,
+@@ -100,15 +100,6 @@ def unPickle(self, msg: bytes) -> Dict[str, Any]:
+         return record
+ 
+ 
+-class MaskedBytes(bytes):
+-    """A `bytes` subclass to mask its contents if the `repr` method is called."""
+-    def __new__(cls, value: bytes) -> bytes:
+-        return super().__new__(cls, value)
+-
+-    def __repr__(self) -> str:
+-        return "#"
+-
+-
+ class SocketListener(socketserver.ThreadingTCPServer):
+     """
+     TCP socket-based logging receiver modified from logging cookbook recipe:
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/logging_support.py b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/logging_support.py
+index f2d5debe3db..44dfad96333 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/logging_support.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/logging_support.py
+@@ -284,7 +284,10 @@ def wrapper(
+         ignore_errors: bool,
+         protocols_key: str,
+         decoy_ids: List[int],
++        instance_id: str,
++        prk: bytes,
+         compression: Optional[Union[str, bool]],
++        with_nonce: bool,
+         client_residue_type_set: AbstractSet[str],
+         client_repr: str,
+         masked_key: bytes,
+@@ -318,7 +321,10 @@ def wrapper(
+                 ignore_errors,
+                 protocols_key,
+                 decoy_ids,
++                instance_id,
++                prk,
+                 compression,
++                with_nonce,
+                 client_residue_type_set,
+                 client_repr,
+                 None,
+@@ -326,6 +332,7 @@ def wrapper(
+                 **pyrosetta_init_kwargs,
+             )
+         finally:
++            del prk
+             close_target_logger(logger, socket_handler, filters)
+ 
+     return cast(L, wrapper)
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/multiprocessing.py b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/multiprocessing.py
+index c1c06485465..1132d368d91 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/multiprocessing.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/multiprocessing.py
+@@ -11,13 +11,15 @@
+ 
+ try:
+     import billiard
++    from distributed import get_worker
+ except ImportError:
+     print(
+         "Importing 'pyrosetta.distributed.cluster.multiprocessing' requires the "
+-        + "third-party package 'billiard' as a dependency!\n"
+-        + "Please install this package into your python environment. "
++        + "third-party packages 'billiard' and 'distributed' as dependencies!\n"
++        + "Please install these packages into your python environment. "
+         + "For installation instructions, visit:\n"
+         + "https://pypi.org/project/billiard/\n"
++        + "https://pypi.org/project/distributed/\n"
+     )
+     raise
+ 
+@@ -141,7 +143,10 @@ def target(
+     ignore_errors: bool,
+     protocols_key: str,
+     decoy_ids: List[int],
++    instance_id: str,
++    prk: bytes,
+     compression: Optional[Union[str, bool]],
++    with_nonce: bool,
+     client_residue_type_set: AbstractSet[str],
+     client_repr: str,
+     masked_key: Optional[bytes],
+@@ -149,10 +154,17 @@ def target(
+     **pyrosetta_init_kwargs: Dict[str, Any],
+ ) -> None:
+     """A wrapper function for a user-provided PyRosetta protocol."""
+-    serializer = Serialization(compression=compression)
++    serializer = Serialization(
++        instance_id=instance_id,
++        prk=prk,
++        compression=compression,
++        with_nonce=with_nonce,
++    )
++    del prk
+     protocol = serializer.decompress_object(compressed_protocol)
+     packed_pose = serializer.decompress_packed_pose(compressed_packed_pose)
+     kwargs = serializer.decompress_kwargs(compressed_kwargs)
++
+     kwargs["PyRosettaCluster_client_repr"] = client_repr
+     results = run_protocol(
+         protocol_name,
+@@ -192,8 +204,10 @@ def user_spawn_thread(
+     timeout = extra_args["timeout"]
+     ignore_errors = extra_args["ignore_errors"]
+     datetime_format = extra_args["datetime_format"]
+-    norm_task_options = extra_args["norm_task_options"]
++    instance_id = extra_args["instance_id"]
+     compression = extra_args["compression"]
++    with_nonce = extra_args["with_nonce"]
++    norm_task_options = extra_args["norm_task_options"]
+     max_delay_time = extra_args["max_delay_time"]
+     logging_level = extra_args["logging_level"]
+     socket_listener_address = extra_args["socket_listener_address"]
+@@ -201,6 +215,17 @@ def user_spawn_thread(
+ 
+     logger = get_worker_logger(protocol_name, socket_listener_address, task_id)
+ 
++    try:
++        worker = get_worker()
++    except BaseException as ex:
++        raise ValueError(f"Cannot get dask worker. {ex}")
++
++    plugin = worker.plugins[instance_id]
++    assert plugin.__getstate__()["prk"] is None, (
++        "Pseudo-random key is not hidden on the worker nonce cache."
++    )
++    plugin._cache_nonce(compressed_kwargs)
++
+     # Set the start method to 'spawn' to prevent subprocesses from
+     # inheriting PyRosetta's already initialized static singletons
+     context = billiard.get_context("spawn")
+@@ -220,7 +245,10 @@ def user_spawn_thread(
+             ignore_errors,
+             protocols_key,
+             decoy_ids,
++            instance_id,
++            plugin.prk,
+             compression,
++            with_nonce,
+             client_residue_type_set,
+             client_repr,
+             masked_key,
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/security.py b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/security.py
+new file mode 100644
+index 00000000000..e58db1dc5f2
+--- /dev/null
++++ b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/security.py
+@@ -0,0 +1,474 @@
++# :noTabs=true:
++# (c) Copyright Rosetta Commons Member Institutions.
++# (c) This file is part of the Rosetta software suite and is made available under license.
++# (c) The Rosetta software is developed by the contributing members of the Rosetta Commons.
++# (c) For more information, see http://www.rosettacommons.org. Questions about this can be
++# (c) addressed to University of Washington CoMotion, email: license@uw.edu.
++
++
++__author__ = "Jason C. Klima"
++
++
++try:
++    from dask.distributed import Client, LocalCluster, Security
++except ImportError:
++    print(
++        "Importing 'pyrosetta.distributed.cluster.security' requires the "
++        + "third-party package 'dask' as a dependency!\n"
++        + "Please install this package into your python environment. "
++        + "For installation instructions, visit:\n"
++        + "https://pypi.org/project/dask/\n"
++    )
++    raise
++
++import collections
++import logging
++import os
++import shutil
++import subprocess
++
++from pathlib import Path
++from typing import (
++    Dict,
++    Generic,
++    Iterable,
++    List,
++    NoReturn,
++    Optional,
++    TypeVar,
++    Union,
++)
++
++from pyrosetta.distributed.cluster.hkdf import MaskedBytes, derive_task_key
++from pyrosetta.distributed.cluster.serialization import NonceCache
++from pyrosetta.distributed.cluster.worker_plugins import TaskSecurityPlugin
++
++
++G = TypeVar("G")
++
++
++class SecurityIO(Generic[G]):
++    def _setup_task_security_plugin(self, clients: Dict[int, Client]) -> None:
++        """Setup tast security worker plugin(s)."""
++        prk = MaskedBytes(derive_task_key(os.urandom(32), self.instance_id))
++        self._register_task_security_plugin(clients, prk)
++        self.serializer.prk = prk
++        assert self.serializer.__getstate__()["prk"] is None, "Pseudo-random key is not hidden on host serializer."
++        if self.with_nonce:
++            self.nonce_cache.prk = self.serializer.prk
++            # The `NonceCache.__getstate__` method must be overridden after running `self._register_task_security_plugin()`
++            # since WorkerPlugin registration first pickles `NonceCache.prk` with the default `__getstate__` method:
++            self.nonce_cache.__getstate__ = NonceCache._get_state.__get__(self.nonce_cache, self.nonce_cache.__class__)
++            assert self.nonce_cache.__getstate__()["prk"] is None, "Pseudo-random key is not hidden on host nonce cache."
++
++    def _register_task_security_plugin(self, clients: Dict[int, Client], prk: MaskedBytes) -> None:
++        """Register `TaskSecurityPlugin` as a dask worker plugin on dask clients."""
++        for client in clients.values():
++            plugin = TaskSecurityPlugin(self.instance_id, prk, self.max_nonce)
++            plugin.idempotent = True # Never re-register plugin
++            if hasattr(client, "register_plugin"):
++                client.register_plugin(plugin=plugin, name=self.instance_id)
++            else: # Deprecated since dask version 2023.9.2
++                client.register_worker_plugin(plugin=plugin, name=self.instance_id, nanny=False)
++
++    def _clients_dict_has_security(self) -> bool:
++        """
++        Test if the `self.clients_dict` has security enabled on all clients, excluding
++        clients with `LocalCluster` clusters.
++        """
++        assert len(self.clients_dict) > 0, "No clients in `self.clients_dict` to test for `security` attribute."
++        for _client in self.clients_dict.values():
++            if not isinstance(_client.cluster, LocalCluster) and not isinstance(_client.security, Security):
++                _has_security = False
++                break
++        else:
++            _has_security = True
++
++        return _has_security
++
++    def _setup_with_nonce(self) -> bool:
++        """Post-init hook to setup the `PyRosettaCluster().with_nonce` instance attribute."""
++        if self.clients_dict:
++            with_nonce = not self._clients_dict_has_security()
++            if with_nonce:
++                logging.warning(
++                    "A PyRosettaCluster input client with a remote cluster does not have security enabled, "
++                    + "so PyRosettaCluster is enabling nonce caching on the host and all worker processes. "
++                    + "Please consider setting the `PyRosettaCluster(max_nonce=...)` keyword argument parameter "
++                    + "to limit nonce cache memory usage. To silence this warning, enable dask security on all "
++                    + "PyRosettaCluster input clients that are not instances of `dask.distributed.LocalCluster`."
++                )
++        else:
++            if bool(self.scheduler):
++                with_nonce = not bool(self.security)
++                if with_nonce:
++                    logging.warning(
++                        "The PyRosettaCluster instance is configured to use a remote cluster that does not have "
++                        + "security enabled, so PyRosettaCluster is enabling nonce caching on the host and all "
++                        + "worker processes. Please consider setting the `PyRosettaCluster(max_nonce=...)` keyword "
++                        + "argument parameter to limit nonce cache memory usage. To silence this warning, please set "
++                        + "the `PyRosettaCluster(security=...)` keyword argument parameter to `True` or provide "
++                        + "a `dask.distributed.Security()` object (see docstring for more information)."
++                    )
++            else:
++                with_nonce = False
++
++        return with_nonce
++
++
++def generate_dask_tls_security(
++    output_dir: str = ".",
++    common_name: str = "dask_tls_security",
++    days: int = 365,
++    openssl_bin: str = "openssl",
++    overwrite: bool = False,
++    san_dns: Optional[Iterable[str]] = None,
++    san_ip: Optional[Iterable[str]] = None,
++    cleanup: bool = True,
++) -> Union[Security, NoReturn]:
++    """
++    Create cryptographic certificates and private keys for securing a dask cluster,
++    and return a dask `Security` object that can be passed directly to the
++    `PyRosettaCluster(security=...)` keyword argument parameter.
++
++    This function uses the `openssl` command-line tool to generate the following:
++
++    - A "certificate authority" certificate and key:
++      These act as a trusted "parent" identity used to sign other certificates.
++      Files: `ca.pem` (certificate), `ca.key` (private key).
++
++    - A "leaf" certificate and key:
++      These represent the actual dask processes (scheduler, workers, and client).
++      Files: `tls.crt` (certificate), `tls.key` (private key).
++
++    By default, the leaf certificate is signed by the certificate authority,
++    meaning that any process configured with this authority will trust the leaf
++    certificate as valid.
++
++    All generated files are placed in the `output_dir` keyword argument parameter,
++    which defaults to the current working directory.
++
++    Keyword Args:
++        output_dir: A `str` object representing the directory where all certificate and
++            key files will be written. The directory will be created if it does not exist.
++            All generated files (CA certificate, leaf certificate, leaf private key, and
++            optional bookkeeping files) are output to this single directory. Therefore,
++            for a distributed dask setup, this directory must be readable by the scheduler,
++            workers, and client processes, either via a shared filesystem or via copying and
++            mounting (e.g., if using Docker, Apptainer, or other container applications).
++            Default: "."
++        common_name: A `str` object representing the "Common Name" placed inside the leaf
++            certificate. This is a human-readable identifier that typically names the
++            system or service to which the certificate belongs.
++            Default: "dask_tls_security"
++        days: An `int` object representing the number of days the certificates will be
++            valid before expiring.
++            Default: 365
++        openssl_bin: A `str` object representing the path or name of the `openssl`
++            executable. If the OpenSSL executable is not in the system "PATH"
++            environment variable, then the full path must be provided.
++            Default: "openssl"
++        overwrite: A `bool` object specifying whether or not to overwrite existing
++            files in 'output_dir' keyword argument parameter. If `True` is provided,
++            the same filenames will be deleted and replaced with newly generated ones.
++            If `False` is provided, then existing files are re-used.
++            Default: False
++        san_dns: An optional iterable of `str` object representing a list of hostnames
++            (e.g., `["localhost", "cluster.example.com"]`) that should be accepted when
++            verifying the certificate. These are included in an extension field called
++            "Subject Alternative Names".
++            Default: None
++        san_ip: An optional iterable of `str` object representing a list of IP addresses
++            (e.g., `["127.0.0.1", "111.111.111.1"]`) that should be accepted when verifying
++            the certificate. These are also included in the "Subject Alternative Names" field.
++            Default: None
++        cleanup: An optional `bool` object specifying whether or not to delete the `index.txt`
++            and `serial` bookkeeping files used by OpenSSL.
++            Default: True
++
++    Returns:
++        A `dask.distributed.Security()` instance configured to require encryption (with
++        `require_encryption=True`) and configured to use the generated certificates
++        and keys for the scheduler, workers, and client.
++
++
++    Examples:
++        Generate a new set of certificates and a configured dask `Security` object:
++        ```
++        security = pyrosetta.distributed.cluster.generate_dask_tls_security(
++            output_dir="./dask_certs",
++            common_name="my-cluster",
++            san_dns=["localhost", "my-host.local"],
++            san_ip=["127.0.0.1"],
++            cleanup=False,
++        )
++        ```
++        After running this function, the directory `./dask_certs` will contain:
++        - `ca.pem`: certificate authority certificate (used by dask)
++        - `ca.key`: certificate authority private key
++        - `tls.crt`: leaf certificate (used by dask)
++        - `tls.key`: leaf private key (used by dask)
++        - `index.txt`, `serial`, and `ca.cnf`: bookkeeping files used by OpenSSL (with `cleanup=False`)
++
++        Then use the configured dask `Security` object with PyRosettaCluster:
++        ```
++        PyRosettaCluster(security=security, ...).distribute(...)
++        ```
++
++    Additional Notes:
++        - A "certificate authority" (CA) act as a trusted "parent" identity that
++        confirms whether a certificate is real. In this function, the user generates
++        their own local CA for the dask cluster.
++        - A "leaf certificate" is the actual identity used by a running process
++        (i.e., the scheduler, a worker, or a client).
++        - "Subject Alternative Names" (SANs) are extra hostnames or IP addresses
++        for which the certificate is valid. This enables the user to connect using
++        either a machine name or an IP address without validation errors.
++        - File permissions are automatically set for private keys using `chmod 600`
++        so they are restricted to the owner (read/write only) for basic security.
++        - This function generates all necessary files in a single directory. For
++        proper TLS validation in a distributed dask setup, the CA certificate must
++        be accessible from all nodes (i.e., the scheduler, workers, and client).
++        Leaf certificates and keys must be accessible by the process using them.
++        For example, all files can be placed in a common directory from which all
++        processes can read, or the directory can be mounted (e.g., if using Docker,
++        Apptainer, or other container applications).
++        - If `cleanup=False` and the same directory is used for multiple function
++        calls, then OpenSSL may create additional files in the output directory
++        (e.g., `*.pem`, `index.txt.attr`, `index.txt.old`, and `serial.old`).
++        These are simply bookkeeping files used internally by OpenSSL and are not
++        required by dask, so they can be safely deleted after the leaf certificate
++        has been issued.
++    """
++    def _run(cmd: List[str]) -> Optional[NoReturn]:
++        try:
++            subprocess.run(cmd, check=True, capture_output=True, text=True)
++        except subprocess.CalledProcessError as ex:
++            raise RuntimeError(
++                "OpenSSL command failed!\n"
++                + f"Command: {' '.join(cmd) if isinstance(cmd, list) else cmd}\n"
++                + f"Return code: {ex.returncode}\n"
++                + f"STDOUT:\n{ex.stdout}\n"
++                + f"STDERR:\n{ex.stderr}\n"
++            ) from ex
++
++    def _chmod_600(path: Path) -> None:
++        try:
++            os.chmod(path, 0o600)
++        except Exception:
++            pass # Ignored on platforms that do not support `chmod`
++
++    def _maybe_unlink(path: Path) -> None:
++        try:
++            if path.exists():
++                path.unlink()
++        except Exception:
++            pass # Ignore if files cannot be deleted
++
++    # Check types
++    if not isinstance(output_dir, str):
++        raise TypeError(
++            "The 'output_dir' keyword argument parameter must be of type `str`. "
++            + f"Received: {type(output_dir)}"
++        )
++    if not isinstance(common_name, str):
++        raise TypeError(
++            "The 'common_name' keyword argument parameter must be of type `str`. "
++            f"Received: {type(common_name)}"
++        )
++    if not isinstance(days, int):
++        raise TypeError(
++            "The 'days' keyword argument parameter must be of type `int`. "
++            + f"Received: {type(days)}"
++        )
++    if not isinstance(openssl_bin, str):
++        raise TypeError(
++            "The 'openssl_bin' keyword argument parameter must be of type `str`. "
++            + f"Received: {type(openssl_bin)}"
++        )
++    if not isinstance(overwrite, bool):
++        raise TypeError(
++            "The 'overwrite' keyword argument parameter must be of type `bool`. "
++            + f"Received: {type(overwrite)}"
++        )
++    if san_dns is not None:
++        if not isinstance(san_dns, collections.abc.Iterable):
++            raise TypeError(
++                "The 'san_dns' keyword argument parameter must be an iterable. "
++                + f"Received: {type(san_dns)}"
++            )
++        else:
++            for obj in san_dns:
++                if not isinstance(obj, str):
++                    raise TypeError(
++                        "The 'san_dns' keyword argument parameter must be an iterable of `str` objects. "
++                        + f"Received: {type(obj)}"
++                    )
++    if san_ip is not None:
++        if not isinstance(san_ip, collections.abc.Iterable):
++            raise TypeError(
++                "The 'san_ip' keyword argument parameter must be an iterable. "
++                + f"Received: {type(san_ip)}"
++            )
++        else:
++            for obj in san_ip:
++                if not isinstance(obj, str):
++                    raise TypeError(
++                        "The 'san_ip' keyword argument parameter must be an iterable of `str` objects. "
++                        + f"Received: {type(obj)}"
++                    )
++    if not isinstance(cleanup, bool):
++        raise TypeError(
++            "The 'cleanup' keyword argument parameter must be of type `bool`. "
++            + f"Received: {type(cleanup)}"
++        )
++
++    openssl = shutil.which(openssl_bin)
++    if not openssl:
++        raise FileNotFoundError(
++            f"Could not find the provided OpenSSL executable. Please install OpenSSL or pass the full "
++            + f"path to the 'openssl_bin' keyword argument parameter. Received: '{openssl_bin}'"
++        )
++
++    outdir = Path(os.path.expanduser(output_dir)).resolve()
++    outdir.mkdir(parents=True, exist_ok=True)
++
++    ca_cert = outdir / "ca.pem"
++    ca_key = outdir / "ca.key"
++    leaf_crt = outdir / "tls.crt"
++    leaf_key = outdir / "tls.key"
++    leaf_csr = outdir / "tls.csr"
++    leaf_ext = outdir / "leaf_ext.cnf"
++
++    if overwrite:
++        for path in (ca_cert, ca_key, leaf_crt, leaf_key, leaf_csr, leaf_ext):
++            _maybe_unlink(path)
++
++    if ca_key.exists():
++        _chmod_600(ca_key)
++
++    # Create CA if it does not exist
++    if not (ca_cert.exists() and ca_key.exists()):
++        _run(
++            [
++                openssl,
++                "req",
++                "-x509",
++                "-newkey", "rsa:2048",
++                "-days", str(days),
++                "-nodes",
++                "-keyout", str(ca_key),
++                "-out", str(ca_cert),
++                "-verbose",
++                "-subj", "/CN=dask_security_ca",
++            ]
++        )
++        _chmod_600(ca_key)
++
++    # Create leaf key + CSR if they do not exist
++    if not (leaf_crt.exists() and leaf_key.exists()):
++        _run(
++            [
++                openssl,
++                "req",
++                "-new",
++                "-newkey", "rsa:2048",
++                "-nodes",
++                "-keyout", str(leaf_key),
++                "-out", str(leaf_csr),
++                "-subj", f"/CN={common_name}",
++                "-verbose",
++            ]
++        )
++        _chmod_600(leaf_key)
++
++        # Optional SANs: build extfile if requested
++        san_entries = []
++        if san_dns:
++            san_entries += [f"DNS:{d}" for d in san_dns]
++        if san_ip:
++            san_entries += [f"IP:{ip}" for ip in san_ip]
++        if san_entries:
++            text = "[v3_req]\nsubjectAltName = " + ", ".join(san_entries) + "\n"
++            leaf_ext.write_text(text)
++        else:
++            # Ensure extfile does not exist if no SANs requested
++            if leaf_ext.exists():
++                _maybe_unlink(leaf_ext)
++
++        # Setup CA database
++        index = outdir / "index.txt"
++        serial = outdir / "serial"
++        if not index.exists():
++            index.write_text("")
++        if not serial.exists():
++            serial.write_text("1000\n")
++
++        # Build a custom CA config
++        ca_config = outdir / "ca.cnf"
++        config_text = f"""
++        [ ca ]
++        default_ca = CA_default
++
++        [ CA_default ]
++        dir               = {outdir}
++        new_certs_dir     = {outdir}
++        database          = {index}
++        serial            = {serial}
++        certificate       = {ca_cert}
++        private_key       = {ca_key}
++        default_md        = sha256
++        policy            = policy_any
++        x509_extensions   = v3_req
++
++        [ policy_any ]
++        commonName        = supplied
++
++        [ v3_req ]
++        """
++        if san_entries:
++            config_text += "subjectAltName = " + ", ".join(san_entries) + "\n"
++
++        ca_config.write_text(config_text)
++
++        # Run `openssl ca` with custom configuration
++        cmd = [
++            openssl,
++            "ca",
++            "-config", str(ca_config),
++            "-in", str(leaf_csr),
++            "-out", str(leaf_crt),
++            "-days", str(days),
++            "-batch",
++        ]
++        _run(cmd)
++
++        # Update permissions on produced files
++        _chmod_600(leaf_key)
++        if leaf_crt.exists():
++            _chmod_600(leaf_crt)
++        # Clean up intermediate files
++        _maybe_unlink(leaf_csr)
++        _maybe_unlink(leaf_ext)
++        if cleanup:
++            # Clean up OpenSSL bookkeeping files
++            for path in (index, serial, ca_config):
++                _maybe_unlink(path)
++            for path in outdir.glob("*.old"):
++                _maybe_unlink(path)
++            for path in outdir.glob("*.attr"):
++                _maybe_unlink(path)
++            for path in outdir.glob("[0-9]*.pem"):
++                _maybe_unlink(path)
++
++    # Return dask `Security` object configured to use the CA and the leaf certs
++    return Security(
++        tls_ca_file=str(ca_cert),
++        tls_client_cert=str(leaf_crt),
++        tls_client_key=str(leaf_key),
++        tls_scheduler_cert=str(leaf_crt),
++        tls_scheduler_key=str(leaf_key),
++        tls_worker_cert=str(leaf_crt),
++        tls_worker_key=str(leaf_key),
++        require_encryption=True,
++    )
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/serialization.py b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/serialization.py
+index 4497ef82e27..46b892da68c 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/serialization.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/serialization.py
+@@ -9,9 +9,29 @@
+ __author__ = "Jason C. Klima"
+ 
+ 
+-import attr
++try:
++    import attr
++    import cloudpickle
++    import msgpack
++    import toolz
++    from distributed import get_worker
++except ImportError:
++    print(
++        "Importing 'pyrosetta.distributed.cluster.serialization' requires the "
++        + "third-party packages 'attrs', 'cloudpickle', 'distributed', 'msgpack', "
++        + "and 'toolz' as dependencies!\nPlease install these packages into your "
++        + "python environment. For installation instructions, visit:\n"
++        + "https://pypi.org/project/attrs/\n"
++        + "https://pypi.org/project/cloudpickle/\n"
++        + "https://pypi.org/project/distributed/\n"
++        + "https://pypi.org/project/msgpack/\n"
++        + "https://pypi.org/project/toolz/\n"
++    )
++    raise
++
+ import bz2
+ import logging
++import os
+ import pyrosetta.distributed.io as io
+ import sys
+ import warnings
+@@ -22,21 +42,8 @@
+ except ImportError:
+     pass
+ 
+-try:
+-    import cloudpickle
+-    import toolz
+-except ImportError:
+-    print(
+-        "Importing 'pyrosetta.distributed.cluster.serialization' requires the "
+-        + "third-party packages 'cloudpickle' and 'toolz' as dependencies!\n"
+-        + "Please install these packages into your python environment. "
+-        + "For installation instructions, visit:\n"
+-        + "https://pypi.org/project/cloudpickle/\n"
+-        + "https://pypi.org/project/toolz/\n"
+-    )
+-    raise
+-
+-from functools import singledispatch, wraps
++from collections import deque
++from functools import partial, singledispatch, wraps
+ from pyrosetta.distributed.packed_pose.core import PackedPose
+ from pyrosetta.secure_unpickle import SecureSerializerBase
+ from typing import (
+@@ -48,8 +55,12 @@
+     Optional,
+     TypeVar,
+     Union,
++    cast,
+ )
+ 
++from pyrosetta.distributed.cluster.hkdf import MaskedBytes, compare_digest, hmac_digest
++
++
+ T = TypeVar("T", bound=Callable[..., Any])
+ G = TypeVar("G")
+ 
+@@ -125,16 +136,194 @@ def update_scores(packed_pose: PackedPose) -> PackedPose:
+     return packed_pose
+ 
+ 
+-@attr.s(kw_only=False, slots=False, frozen=False)
++@attr.s(kw_only=False, slots=True, frozen=True)
++class MessagePacking(Generic[G]):
++    """PyRosettaCluster MessagePack base class."""
++    pack = attr.ib(
++        type=partial,
++        default=partial(msgpack.packb, use_bin_type=True),
++        init=False,
++        validator=attr.validators.instance_of(partial),
++    )
++    unpack = attr.ib(
++        type=partial,
++        default=partial(msgpack.unpackb, raw=False),
++        init=False,
++        validator=attr.validators.instance_of(partial),
++    )
++
++
++@attr.s(kw_only=True, slots=False, frozen=False)
++class NonceCache(Generic[G]):
++    """PyRosettaCluster nonce cache base class."""
++    instance_id = attr.ib(
++        type=str,
++        validator=attr.validators.instance_of(str),
++    )
++    prk = attr.ib(
++        type=Optional[bytes],
++        default=None,
++        repr=False,
++        converter=lambda k: MaskedBytes(k) if isinstance(k, bytes) else k,
++        validator=attr.validators.optional(attr.validators.instance_of(MaskedBytes)),
++    )
++    max_nonce = attr.ib(
++        type=int,
++        validator=attr.validators.instance_of(int),
++    )
++    _seen = attr.ib(
++        type=set,
++        default=attr.Factory(set, takes_self=False),
++        init=False,
++        validator=attr.validators.instance_of(set),
++    )
++    _order = attr.ib(
++        type=deque,
++        default=attr.Factory(
++            lambda self: deque(maxlen=self.max_nonce),
++            takes_self=True,
++        ),
++        init=False,
++        validator=attr.validators.instance_of(deque),
++    )
++    _debug = attr.ib(
++        type=bool,
++        default=False,
++        init=False,
++        validator=attr.validators.instance_of(bool),
++    )
++
++    def __attrs_pre_init__(self) -> None:
++        MessagePacking.__init__(self)
++
++    @staticmethod
++    def _get_state(self) -> Dict[str, Any]:
++        """
++        A method used to override the default `NonceCache.__getstate__()` method
++        that sets the pseudo-random key value to `None` in the returned state.
++        """
++        state = self.__dict__.copy()
++        state["prk"] = None
++
++        return state
++
++    @staticmethod
++    def _on_worker() -> bool:
++        """Test if the nonce cache is on a dask worker."""
++        try:
++            _worker = get_worker()
++            return True
++        except BaseException:
++            return False
++
++    def _cache_nonce(self, sealed: bytes) -> None:
++        """
++        Run Hash-based Message Authentication Code (HMAC) verification and cache nonces
++        for replay protection without data decompression.
++        """
++        package = self.unpack(sealed)
++        if not isinstance(package, dict) or package.get("v", None) != 1:
++            _err_msg = (
++                "Invalid sealed package or version on {0} nonce cache! "
++                + f"Received: {type(package)!r}"
++            )
++            if NonceCache._on_worker():
++                raise ValueError(_err_msg.format("worker"))
++            else:
++                raise ValueError(_err_msg.format("host"))
++
++        _instance_id = package["a"] # `str`: PyRosettaCluster instance identifier/App
++        _data = package["d"] # `bytes`: Data bytestring
++        _mac = package["m"] # `bytes`: MAC (HMAC tag)
++        _nonce = package["n"] # `bytes`: Nonce
++        _version = package["v"] # `int`: Version
++
++        if _instance_id != self.instance_id:
++            raise ValueError("PyRosettaCluster instance identifier mismatch in sealed package.")
++
++        msg = self.pack([_instance_id, _data, _nonce, _version])
++        _expected_mac = hmac_digest(bytes(self.prk), msg)
++        if not compare_digest(_expected_mac, _mac):
++            _err_msg = (
++                "Task HMAC verification failed during nonce cache on {0}!\n"
++                + f"Expected: {_expected_mac!r}\n"
++                + f"Value:    {_mac!r}\n"
++            )
++            if NonceCache._on_worker():
++                raise SystemExit(_err_msg.format("worker"))
++            else:
++                raise SystemExit(_err_msg.format("host"))
++
++        if _nonce is not None:
++            if _nonce in self._seen:
++                # Replay protection
++                _err_msg = (
++                    "PyRosettaCluster detected a repeat nonce on the {0} for the instance identifier "
++                    + f"'{self.instance_id}', which might indicate a replay attack is in progress! "
++                    + "Exiting process for security. Please ensure that `PyRosettaCluster(security=True)` "
++                    + f"is enabled in future PyRosettaCluster simulations. Received: '{_nonce}'."
++                )
++                if NonceCache._on_worker():
++                    raise SystemExit(_err_msg.format("worker"))
++                else:
++                    raise SystemExit(_err_msg.format("host"))
++            self._seen.add(_nonce)
++            self._order.append(_nonce)
++            while len(self._seen) > self._order.maxlen:
++                _expired = self._order.popleft()
++                self._seen.discard(_expired)
++
++            if self._debug:
++                _memory_usage = round(sum(map(sys.getsizeof, (self._seen, self._order))) / 1e3, 3)  # KB
++                _msg = (
++                    f"Size={len(self._seen)}/{self.max_nonce}; "
++                    + f"Memory usage: {_memory_usage} KB; "
++                    + f"Example: {sorted(self._seen)[0]}"
++                )
++                if NonceCache._on_worker():
++                    print(f"Remote worker ({get_worker().contact_address}) nonce cache: {_msg}")
++                else:
++                    print(f"Local host nonce cache: {_msg}")
++
++
++@attr.s(kw_only=True, slots=False, frozen=False)
+ class Serialization(Generic[G]):
++    """PyRosettaCluster serialization base class."""
++    instance_id = attr.ib(
++        type=Optional[str],
++        default=None,
++        validator=attr.validators.optional(attr.validators.instance_of(str)),
++    )
++    prk = attr.ib(
++        type=Optional[bytes],
++        default=None,
++        repr=False,
++        converter=lambda k: MaskedBytes(k) if isinstance(k, bytes) else k,
++        validator=attr.validators.optional(attr.validators.instance_of(MaskedBytes)),
++    )
+     compression = attr.ib(
+         type=Optional[Union[str, bool]],
+         default="xz",
+         validator=attr.validators.optional(attr.validators.instance_of((str, bool))),
+         converter=_parse_compression,
+     )
++    with_nonce = attr.ib(
++        type=bool,
++        default=False,
++        validator=attr.validators.instance_of(bool),
++    )
++    _nonce_size = attr.ib(
++        type=int,
++        default=32, # bytes
++        init=False,
++        validator=attr.validators.instance_of(int),
++    )
+ 
+-    def __attrs_post_init__(self):
++
++    def __attrs_pre_init__(self) -> None:
++        MessagePacking.__init__(self)
++
++    def __attrs_post_init__(self) -> None:
+         if self.compression == "xz":
+             if "lzma" not in sys.modules:
+                 raise ImportError(
+@@ -156,26 +345,98 @@ def __attrs_post_init__(self):
+             self.encoder = None
+             self.decoder = None
+ 
++    def __getstate__(self) -> Dict[str, Any]:
++        """
++        A method used to override the default `Serialization.__getstate__()` method
++        that sets the pseudo-random key value to `None` in the returned state.
++        """
++        state = self.__dict__.copy()
++        state["prk"] = None
++
++        return state
++
+     @classmethod
+-    def zlib_compress(cls, obj):
++    def zlib_compress(cls, obj: bytes) -> bytes:
++        """Compress an object with `zlib` level 9."""
+         return zlib.compress(obj, 9)
+ 
+-    def requires_compression(func):
++    def requires_compression(func: T) -> T:
++        """
++        Wrapper testing if compression is enabled, and skips compression if it's disabled.
++        """
+         @wraps(func)
+-        def wrapper(self, obj):
++        def wrapper(self, obj: Any) -> Any:
+             if all(x is not None for x in (self.encoder, self.decoder)):
+                 return func(self, obj)
+             else:
+                 logging.debug("Compression/decompression is disabled.")
+                 return obj
+ 
+-        return wrapper
++        return cast(T, wrapper)
++
++    def _seal(self, data: bytes) -> bytes:
++        """Seal data with MessagePack."""
++        if self.instance_id is None or self.prk is None:
++            raise ValueError(
++                "Sealing requires the 'instance_id' and 'prk' instance attributes."
++            )
++
++        version = 1
++        nonce = os.urandom(self._nonce_size) if self.with_nonce else None
++        msg = self.pack([self.instance_id, data, nonce, version])
++        mac = hmac_digest(self.prk, msg)
++        package = {
++            "a": self.instance_id, # `str`: PyRosettaCluster instance identifier/App
++            "d": data, # `bytes`: Data bytestring
++            "m": mac, # `bytes`: MAC (HMAC tag)
++            "n": nonce, # `bytes`: Nonce
++            "v": version, # `int`: Version
++        }
++
++        return self.pack(package)
++
++    def _unseal(self, obj: bytes) -> bytes:
++        """
++        Unseal data with MessagePack and perform Hash-based
++        Message Authentication Code (HMAC) verification.
++        """
++        if self.instance_id is None or self.prk is None:
++            raise ValueError(
++                "Unsealing requires the 'instance_id' and 'prk' instance attributes."
++            )
++
++        package = self.unpack(obj)
++        if not isinstance(package, dict) or package.get("v", None) != 1:
++            raise ValueError(f"Invalid sealed package or version. Received: {type(package)}")
++
++        _instance_id = package["a"] # `str`: PyRosettaCluster instance identifier/App
++        _data = package["d"] # `bytes`: Data bytestring
++        _mac = package["m"] # `bytes`: MAC (HMAC tag)
++        _nonce = package["n"] # `bytes`: Nonce
++        _version = package["v"] # `int`: Version
++
++        if self.instance_id is not None and _instance_id != self.instance_id:
++            raise ValueError(
++                "Instance identifier mismatch in packaged data!\n"
++                + f"'{_instance_id}' != '{self.instance_id}'"
++            )
++
++        msg = self.pack([_instance_id, _data, _nonce, _version])
++        _expected_mac = hmac_digest(self.prk, msg)
++        if not compare_digest(_expected_mac, _mac):
++            raise SystemExit(
++                "Task HMAC verification failed upon unsealing the data!\n"
++                + f"Expected: {_expected_mac!r}\n"
++                + f"Value:    {_mac!r}\n"
++            )
++
++        return _data
+ 
+     @requires_compression
+     def compress_packed_pose(self, packed_pose: Any) -> Union[NoReturn, None, bytes]:
+         """
+-        Compress a `PackedPose` object with the custom serialization module. If the 'packed_pose' argument parameter
+-        is `None`, then just return `None`.
++        Compress a `PackedPose` object with the custom serialization module. If the 'packed_pose' argument
++        parameter is `None`, then just return `None`.
+ 
+         Args:
+             packed_pose: the input `PackedPose` object to compress. If `None`, then just return `None`.
+@@ -201,8 +462,8 @@ def compress_packed_pose(self, packed_pose: Any) -> Union[NoReturn, None, bytes]
+     @requires_compression
+     def decompress_packed_pose(self, compressed_packed_pose: Any) -> Union[NoReturn, None, PackedPose]:
+         """
+-        Decompress a `bytes` object with the custom serialization module and secure implementation of the `pickle` module.
+-        If the 'compressed_packed_pose' argument parameter is `None`, then just return `None`.
++        Decompress a `bytes` object with the custom serialization module and secure implementation of the
++        `pickle` module. If the 'compressed_packed_pose' argument parameter is `None`, then just return `None`.
+ 
+         Args:
+             compressed_packed_pose: the input `bytes` object to decompress. If `None`, then just return `None`.
+@@ -216,8 +477,7 @@ def decompress_packed_pose(self, compressed_packed_pose: Any) -> Union[NoReturn,
+         if compressed_packed_pose is None:
+             packed_pose = None
+         elif isinstance(compressed_packed_pose, bytes):
+-            pose = SecureSerializerBase.secure_loads(self.decoder(compressed_packed_pose))
+-            packed_pose = io.to_packed(pose)
++            packed_pose = io.to_packed(SecureSerializerBase.secure_loads(self.decoder(compressed_packed_pose)))
+         else:
+             raise TypeError(
+                 "The 'compressed_packed_pose' argument parameter must be of type `NoneType` or `bytes`."
+@@ -225,7 +485,20 @@ def decompress_packed_pose(self, compressed_packed_pose: Any) -> Union[NoReturn,
+ 
+         return packed_pose
+ 
+-    @requires_compression
++    def loads_object(self, compressed_obj: bytes) -> Any:
++        """Unseal data and run the `cloudpickle.loads` method."""
++        data = self._unseal(compressed_obj)
++        buffer = self.decoder(data) if self.decoder else data
++
++        return cloudpickle.loads(buffer)
++
++    def dumps_object(self, obj: Any) -> bytes:
++        """Run the `cloudpickle.dumps` method and seal data."""
++        pickled = cloudpickle.dumps(obj)
++        buffer = self.encoder(pickled) if self.encoder else pickled
++
++        return self._seal(buffer)
++
+     def compress_kwargs(self, kwargs: Any) -> Union[NoReturn, bytes]:
+         """
+         Compress a `dict` object with the `cloudpickle` and custom serialization modules.
+@@ -240,11 +513,10 @@ def compress_kwargs(self, kwargs: Any) -> Union[NoReturn, bytes]:
+             `TypeError` if the 'kwargs' argument parameter is not of type `dict`.
+         """
+         if isinstance(kwargs, dict):
+-            return self.encoder(cloudpickle.dumps(kwargs))
++            return self.dumps_object(kwargs)
+         else:
+             raise TypeError("The 'kwargs' argument parameter must be of type `dict`.")
+ 
+-    @requires_compression
+     def decompress_kwargs(self, compressed_kwargs: bytes) -> Union[NoReturn, Dict[Any, Any]]:
+         """
+         Decompress a `bytes` object with the custom serialization and `cloudpickle` modules.
+@@ -257,13 +529,16 @@ def decompress_kwargs(self, compressed_kwargs: bytes) -> Union[NoReturn, Dict[An
+ 
+         Raises:
+             `TypeError` if the 'compressed_packed_pose' argument parameter is not of type `bytes`.
++            `TypeError` if the returned kwargs is not of type `dict`.
+         """
+         if isinstance(compressed_kwargs, bytes):
+-            return cloudpickle.loads(self.decoder(compressed_kwargs))
++            kwargs = self.loads_object(compressed_kwargs)
++            if not isinstance(kwargs, dict):
++                raise TypeError(f"Decoded kwargs must be of type `dict`. Received: {type(kwargs)}")
++            return kwargs
+         else:
+             raise TypeError("The 'compressed_kwargs' argument parameter must be of type `bytes`.")
+ 
+-    @requires_compression
+     def compress_object(self, obj: Any) -> bytes:
+         """
+         Compress an object with the `cloudpickle` and custom serialization modules.
+@@ -274,9 +549,8 @@ def compress_object(self, obj: Any) -> bytes:
+         Returns:
+             A `bytes` object representing the compressed object.
+         """
+-        return self.encoder(cloudpickle.dumps(obj))
++        return self.dumps_object(obj)
+ 
+-    @requires_compression
+     def decompress_object(self, compressed_obj: bytes) -> Any:
+         """
+         Decompress a `bytes` object with the custom serialization and `cloudpickle` modules.
+@@ -286,8 +560,14 @@ def decompress_object(self, compressed_obj: bytes) -> Any:
+ 
+         Returns:
+             An object representing the decompressed `bytes` object.
++
++        Raises:
++            `TypeError` if the 'compressed_obj' argument parameter is not of type `bytes`.
+         """
+-        return cloudpickle.loads(self.decoder(compressed_obj))
++        if isinstance(compressed_obj, bytes):
++            return self.loads_object(compressed_obj)
++        else:
++            raise TypeError("The 'compressed_obj' argument parameter must be of type `bytes`.")
+ 
+     @classmethod
+     def deepcopy_kwargs(cls, kwargs: Any) -> Union[NoReturn, Dict[Any, Any]]:
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/toolkit.py b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/toolkit.py
+index 5f4f69c38b3..c2d52c5bfa8 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/toolkit.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/toolkit.py
+@@ -14,6 +14,7 @@
+     get_scores_dict,
+     get_yml,
+ )
++from pyrosetta.distributed.cluster.security import generate_dask_tls_security
+ from pyrosetta.distributed.cluster.tools import (
+     Serialization,
+     get_instance_kwargs,
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/utilities.py b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/utilities.py
+index 8934e899616..a070af77c72 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/utilities.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/utilities.py
+@@ -26,6 +26,7 @@
+ 
+ import logging
+ import os
++import sys
+ import warnings
+ 
+ from typing import (
+@@ -83,6 +84,10 @@ def _get_cluster(self) -> ClusterType:
+                     dashboard_address=self.dashboard_address,
+                     local_directory=self.scratch_dir,
+                 )
++                if self.security:
++                    _cluster_kwargs["security"] = self.security
++                    if self.security is True:
++                        logging.info("Using the 'cryptography' package to generate a dask `Security.temporary()` object...")
+                 if __dask_version__ <= (2, 1, 0):
+                     _cluster_kwargs["local_dir"] = _cluster_kwargs.pop("local_directory", self.scratch_dir)
+                 cluster = LocalCluster(**_cluster_kwargs)
+@@ -104,11 +109,42 @@ def _get_cluster(self) -> ClusterType:
+                 death_timeout=9999,
+                 dashboard_address=self.dashboard_address,
+             )
++            if self.security:
++                _cluster_kwargs["security"] = self.security
++                if self.security is True:
++                    _cluster_kwargs["shared_temp_directory"] = self.output_path
++                    logging.info("Using the 'cryptography' package to generate a dask `Security.temporary()` object...")
+             if __dask_version__ <= (2, 1, 0):
+                 _cluster_kwargs["local_dir"] = _cluster_kwargs.pop("local_directory", self.scratch_dir)
+             if __dask_jobqueue_version__ < (0, 8, 0):
+                 _cluster_kwargs["job_extra"] = _cluster_kwargs.pop("job_extra_directives", _job_extra_directives)
+-            cluster = cluster_func(**_cluster_kwargs)
++            if self.security is True:
++                if sys.version_info[:2] <= (3, 7):
++                    logging.warning(
++                        "Use of `PyRosettaCluster(security=True)` may require Python version 3.8 or higher to use the "
++                        + "'cryptography' package. Please upgrade your python version, or otherwise provide a dask "
++                        + "`Security()` object (recommended) or `False` (not recommended unless using a firewall) "
++                        + "to the PyRosettaCluster `security` keyword argument parameter."
++                    )
++                try:  # Uses `cryptography` package: https://distributed.dask.org/en/latest/_modules/distributed/security.html#Security.temporary
++                    cluster = cluster_func(**_cluster_kwargs)
++                except ImportError as ex:
++                    raise ImportError(
++                        f"Use of `PyRosettaCluster(security=True)` implements `Security.temporary` from the 'dask' package. {ex}"
++                    )
++            else:
++                if self.security is False:
++                    logging.warning(
++                        "Warning! Dask TLS/SSL communication is not enabled while using a remote compute cluster! "
++                        + "PyRosettaCluster uses the `cloudpickle` module to serialize user-provided PyRosetta "
++                        + "protocols, which requires unpickling of the data received over the network. If not using "
++                        + "a firewall, it is highly recommended to provide a dask `Security()` object (or `True` to "
++                        + "automatically generate one with the 'cryptography' package) to the PyRosettaCluster "
++                        + "`security` keyword argument parameter. Alternatively, in order to generate a "
++                        + "`Security()` object with OpenSSL, the `pyrosetta.distributed.cluster.generate_dask_tls_security()` "
++                        + "function may also be used (see docstring for more information)."
++                    )
++                cluster = cluster_func(**_cluster_kwargs)
+         logging.info(f"Dashboard link: {cluster.dashboard_link}")
+ 
+         return cluster
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/worker_plugins.py b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/worker_plugins.py
+index 96b505ef2ad..0c3af10b346 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/worker_plugins.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/worker_plugins.py
+@@ -30,12 +30,14 @@
+ from contextlib import suppress
+ from typing import Optional
+ 
++from pyrosetta.distributed.cluster.hkdf import MaskedBytes, compare_digest, hmac_digest
+ from pyrosetta.distributed.cluster.logging_handlers import MultiSocketHandler
+ from pyrosetta.distributed.cluster.logging_filters import (
+     DefaultProtocolNameFilter,
+     DefaultSocketAddressFilter,
+     DefaultTaskIdFilter,
+ )
++from pyrosetta.distributed.cluster.serialization import NonceCache
+ 
+ 
+ SOCKET_LOGGER_PLUGIN_NAME: str = "PyRosettaCluster_socket_logger_plugin"
+@@ -73,3 +75,22 @@ def teardown(self, worker: Worker) -> None:
+             with suppress(Exception):
+                 self.router.close()
+         self.router = None
++
++
++class TaskSecurityPlugin(WorkerPlugin, NonceCache):
++    """Install a secure `NonceCache` instance with replay protection on a dask worker."""
++    def __init__(self, instance_id: str, prk: MaskedBytes, max_nonce: int) -> None:
++        NonceCache.__init__(self, instance_id=instance_id, prk=prk, max_nonce=max_nonce)
++
++    def setup(self, worker: Worker) -> None:
++        # Worker plugin name must be the PyRosettaCluster instance identifier
++        _maybe_existing_plugin = worker.plugins.get(self.instance_id, None)
++        if _maybe_existing_plugin is not None and _maybe_existing_plugin is not self:
++            raise NameError(f"The `TaskSecurityPlugin` worker plugin name already exists: '{self.instance_id}'")
++        # The `self.__getstate__` method must be overridden after instantiating `TaskSecurityPlugin` on worker
++        # since WorkerPlugin registration first pickles `self.prk` with the default `__getstate__` method:
++        self.__getstate__ = NonceCache._get_state.__get__(self, self.__class__)
++        assert self.__getstate__()["prk"] is None, f"Pseudo-random key is not hidden on worker nonce cache."
++
++    def teardown(self, worker: Worker) -> None:
++        self.prk = None
+diff --git a/source/src/python/PyRosetta/src/pyrosetta/tests/distributed/cluster/test_smoke.py b/source/src/python/PyRosetta/src/pyrosetta/tests/distributed/cluster/test_smoke.py
+index 3758148e9c3..45e45a7fbee 100644
+--- a/source/src/python/PyRosetta/src/pyrosetta/tests/distributed/cluster/test_smoke.py
++++ b/source/src/python/PyRosetta/src/pyrosetta/tests/distributed/cluster/test_smoke.py
+@@ -45,6 +45,12 @@
+     )
+     raise
+ 
++try:
++    import cryptography
++    has_cryptography = True
++except ImportError as ex:
++    has_cryptography = False
++
+ from pyrosetta import Pose
+ from pyrosetta.distributed.packed_pose.core import PackedPose
+ from pyrosetta.utility import get_package_version
+@@ -110,6 +116,13 @@ def my_pyrosetta_protocol(packed_pose, **kwargs):
+             return packed_pose
+ 
+         with tempfile.TemporaryDirectory() as workdir:
++            security = pyrosetta.distributed.cluster.generate_dask_tls_security(
++                os.path.join(workdir, "security_test")
++            )
++            print(
++                "Successfully ran `pyrosetta.distributed.cluster.generate_dask_tls_security()` "
++                + f"to generate a dask `Security` object: {security}"
++            )
+             instance_kwargs = dict(
+                 tasks=create_tasks,
+                 input_packed_pose=io.pose_from_sequence("TESTING"),
+@@ -146,6 +159,7 @@ def my_pyrosetta_protocol(packed_pose, **kwargs):
+                 output_decoy_types=[".pdb", ".b64_pose"],
+                 output_scorefile_types=[".json", ".gz", ".xz"],
+                 filter_results=True,
++                security=security,
+                 norm_task_options=False,
+                 output_init_file=None,
+             )
+@@ -157,9 +171,15 @@ def my_pyrosetta_protocol(packed_pose, **kwargs):
+             cluster.distribute(
+                 my_pyrosetta_protocol,
+             )
+-            instance_kwargs.update({"protocols": my_pyrosetta_protocol})
++            instance_kwargs.update({"protocols": my_pyrosetta_protocol, "security": False})
+             produce(**instance_kwargs)
+-            run(**instance_kwargs)
++            instance_kwargs.update({"security": True})
++            if has_cryptography:
++                print("Using the installed 'cryptography' package to generate a dask `Security.temporary()` object...")
++                run(**instance_kwargs)
++            else:
++                with self.assertRaises(ImportError):
++                    run(**instance_kwargs)
+ 
+     def test_ignore_errors(self):
+         """Test PyRosettaCluster usage with user-provided PyRosetta protocol error."""
+@@ -1168,6 +1188,7 @@ def test_save_all_dry_run(self):
+         )
+         _total_tasks = 2
+         _total_protocols = 5
++        _nstruct = 2
+ 
+         def create_tasks():
+             for i in range(_total_tasks):
+@@ -1199,7 +1220,7 @@ def my_pyrosetta_protocol(input_packed_pose, **kwargs):
+                 memory=None,
+                 min_workers=1,
+                 max_workers=1,
+-                nstruct=2,
++                nstruct=_nstruct,
+                 dashboard_address=None,
+                 compressed=True,
+                 logging_level="CRITICAL",
+@@ -1261,16 +1282,28 @@ def test_serialization(self):
+                 output_packed_pose = serializer.decompress_packed_pose(compressed_packed_pose)
+ 
+                 _error_msg = f"Failed on test case {_test_case} with compression {_compression}"
+-                self.assertLess(
+-                    sys.getsizeof(compressed_packed_pose),
+-                    sys.getsizeof(input_packed_pose.pickled_pose),
+-                    msg=_error_msg,
+-                )
+-                self.assertLess(
+-                    sys.getsizeof(compressed_packed_pose),
+-                    sys.getsizeof(output_packed_pose.pickled_pose),
+-                    msg=_error_msg,
+-                )
++                if _compression in (False, None):
++                    self.assertEqual(
++                        sys.getsizeof(compressed_packed_pose.pickled_pose),
++                        sys.getsizeof(input_packed_pose.pickled_pose),
++                        msg=_error_msg,
++                    )
++                    self.assertEqual(
++                        sys.getsizeof(compressed_packed_pose.pickled_pose),
++                        sys.getsizeof(output_packed_pose.pickled_pose),
++                        msg=_error_msg,
++                    )
++                else:
++                    self.assertLess(
++                        sys.getsizeof(compressed_packed_pose),
++                        sys.getsizeof(input_packed_pose.pickled_pose),
++                        msg=_error_msg,
++                    )
++                    self.assertLess(
++                        sys.getsizeof(compressed_packed_pose),
++                        sys.getsizeof(output_packed_pose.pickled_pose),
++                        msg=_error_msg,
++                    )
+                 if _compression in (False, None):
+                     self.assertEqual(id(input_packed_pose), id(output_packed_pose), msg=_error_msg)
+                 else:
+diff --git a/tests/benchmark/tests/__init__.py b/tests/benchmark/tests/__init__.py
+index 3c3cf75b6db..e7b2ab5ecf9 100644
+--- a/tests/benchmark/tests/__init__.py
++++ b/tests/benchmark/tests/__init__.py
+@@ -70,6 +70,7 @@
+     "billiard": ">=3.6.3.0",
+     "blosc": ">=1.8.3",
+     "cloudpickle": ">=1.5.0",
++    "cryptography": ">=2.8",
+     "dask": ">=2.16.0",
+     "dask-jobqueue": ">=0.7.0",
+     "distributed": ">=2.16.0",

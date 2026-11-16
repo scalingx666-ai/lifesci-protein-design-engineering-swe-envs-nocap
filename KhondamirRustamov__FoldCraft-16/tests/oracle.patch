@@ -1,0 +1,536 @@
+diff --git a/FoldCraft.py b/FoldCraft.py
+index adadc35..ba26803 100644
+--- a/FoldCraft.py
++++ b/FoldCraft.py
+@@ -8,7 +8,7 @@
+ import pandas as pd
+ import matplotlib.pyplot as plt
+ from Bio.PDB import PDBParser
+-from Bio.SeqUtils import seq1
++from Bio.PDB.Polypeptide import is_aa
+ import numpy as np
+ import pickle
+ from tqdm.notebook import tqdm
+@@ -106,7 +106,13 @@ def main():
+         # length is the 127-residue VHH scaffold, and the CDR (binder) hotspots
+         # are fixed -- any user-supplied binder_hotspots/binder_mask is ignored,
+         # matching the original behavior.
+-        load_np = np.load(f'framework/vhh.npy')
++        # Anchor the bundled VHH framework cmap to the script's directory so
++        # --vhh runs work from any CWD (SLURM job dirs, installed invocations);
++        # the previous CWD-relative 'framework/vhh.npy' raised FileNotFoundError
++        # whenever the process was not launched from the repo root.
++        vhh_framework = os.path.join(os.path.dirname(os.path.abspath(__file__)),
++                                     'framework', 'vhh.npy')
++        load_np = np.load(vhh_framework)
+         af_model = mk_afdesign_model(protocol="fixbb", use_templates=True)
+         af_model.prep_inputs(pdb_filename=pdb_target_path,
+                              ignore_missing=False,
+@@ -118,12 +124,17 @@ def main():
+         fc_cmap = assemble_fold_conditioned_cmap(load_np, target_len, binder_len,
+                                                  target_hotspots, binder_hotspots)
+     else:
+-        pdbparser = PDBParser()
+-
+-        structure = pdbparser.get_structure(binder_template, template_pdb)
+-        chains = {chain.id:seq1(''.join(residue.resname for residue in chain)) for chain in structure.get_chains()}
+-
+-        query_chain = chains[chain_template]
++        # Count the binder template's *polymer* residues for the gap-numbering
++        # guard below. is_aa() excludes waters/ions/ligands but keeps modified
++        # residues (e.g. MSE) that colabdesign promotes -- so the count matches the
++        # model's view. The sequence itself is taken from the model after
++        # prep_inputs (query_chain, below), NOT from seq1() over raw resnames: the
++        # latter let HETATM/water inflate the length (waters -> 'X') or frame-shift
++        # it (2-char ion names like ZN/NA), which spuriously aborted valid
++        # crystallographic templates at the guard and, more rarely, silently
++        # corrupted the conditioned cmap.
++        structure = PDBParser(QUIET=True).get_structure(binder_template, template_pdb)
++        n_polymer = sum(1 for residue in structure[0][chain_template] if is_aa(residue))
+ 
+         af_binder = mk_afdesign_model(protocol="fixbb", use_templates=True)
+         af_binder.prep_inputs(pdb_filename=template_pdb,
+@@ -132,22 +143,25 @@ def main():
+                              rm_template_seq=False,
+                              rm_template_sc=False,)
+ 
+-        # Validate that the extracted sequence covers every modelled position.
+-        # A mismatch means the binder template has gaps in its residue numbering
+-        # (non-contiguous resSeq), which otherwise fails deep inside the model
+-        # with an opaque broadcasting error.
+-        if len(query_chain) != af_binder._len:
++        # A polymer-count vs model-span mismatch means the binder template has gaps
++        # in its residue numbering (non-contiguous resSeq), which otherwise fails
++        # deep inside the model with an opaque broadcasting error.
++        if n_polymer != af_binder._len:
+             raise SystemExit(
+                 f"Error: binder template '{template_pdb}' (chain '{chain_template}') "
+-                f"yields {len(query_chain)} residues but the model spans "
++                f"has {n_polymer} polymer residues but the model spans "
+                 f"{af_binder._len} positions. This usually means the PDB has gaps in "
+                 "its residue numbering (missing resSeq entries). Renumber the binder "
+                 "template contiguously starting from 1 (and update --binder_hotspots "
+                 "accordingly) before running."
+             )
+ 
+-        #name='9had'
+-        af_binder.set_seq(query_chain[:af_binder._len])
++        # Native binder sequence exactly as colabdesign sees it: aligned to _len,
++        # HETATM/water-free, and MODRES-correct (MSE -> M, not 'X').
++        query_chain = ''.join(
++            residue_constants.restypes[a] if a < residue_constants.restype_num else 'X'
++            for a in af_binder._wt_aatype)
++        af_binder.set_seq(query_chain)
+         af_binder.predict(num_recycles=3, verbose=False)
+         print(f"CMAP of {binder_template} (monomer plddt: {af_binder.aux['log']['plddt']:.3f})")
+         #plt.imshow(af_model.aux['cmap'])
+@@ -234,17 +248,53 @@ def cmap_loss_binder(inputs, outputs, opt):
+     iptms = []
+     cmap_loss = []
+ 
++    # Persist results incrementally so an OOM/RunTimeError/preemption mid-run keeps
++    # every design recorded so far, instead of losing the whole table (it was
++    # previously written only once, after both loops). Progress streams to
++    # results.csv.partial after each accepted design; results.csv itself is created
++    # only by the finalizing call at the very end (atomic os.replace via
++    # write_atomic). This keeps "results.csv exists == chunk complete" true, which
++    # baseline/scheduler.py relies on for resume/merge -- a preempted chunk leaves
++    # results.csv.partial (recoverable) but no results.csv, so the scheduler
++    # re-runs it instead of skipping/merging it as done.
++    results_csv = f"{folder_name}/results.csv"
++    def write_results(finalize=False):
++        df = pd.DataFrame({'name':names,
++                           'sequence':sequences,
++                           'plddt':plddts,
++                           'ipae':ipaes,
++                           'iptm':iptms,
++                           'cmap_loss':cmap_loss})
++        write_atomic(results_csv, df.to_csv, finalize=finalize)
++
+     # Create folders to save outputs
+     os.makedirs(f'{folder_name}/traj/', exist_ok=True)
+     os.makedirs(f'{folder_name}/mpnn/', exist_ok=True)
+     os.makedirs(f'{folder_name}/designs/', exist_ok=True)
+ 
++    # Build ProteinMPNN once: model_name/backbone_noise/weights are constant for
++    # the whole run, but mk_mpnn_model joblib-loads the weights and rebuilds its
++    # jitted score/sample functions on every construction. Constructing it per
++    # trajectory (as before) repeated that work each iteration. Only prep_inputs
++    # (which writes self._inputs, not the model) varies per trajectory, so build
++    # here and re-prep inside the loop. The sampler RNG is seeded at construction
++    # with seed=None (non-deterministic), so a single shared key stream is
++    # statistically identical to a fresh model per trajectory -- no distribution
++    # change, just no reload.
++    mpnn_model = mk_mpnn_model(model_name, backbone_noise=mpnn_backbone_noise,
++                               weights=mpnn_version)
++
+     # Generate N number of trajectories
+     if sample == False:
+         
+         for i in range(num_designs):
+             i+=1
+             clear_mem() # clearing memory at each step helps to avoid RunTimeError
++            # clear_mem() deletes every live JAX device buffer, including the hoisted
++            # mpnn_model's RNG key (its params are host-side numpy and survive), which
++            # would break sample_parallel below. Re-seed it: set_seed(None) gives a
++            # fresh key per trajectory, matching the original per-trajectory build.
++            mpnn_model.set_seed(None)
+             name = f'traj_{i}'
+             rm_aa = 'C'
+             
+@@ -283,8 +333,7 @@ def cmap_loss_binder(inputs, outputs, opt):
+             else:
+                 raise ValueError("Wrong redesign_method was selected. Options: 'full','non-interface'")
+         
+-            mpnn_model = mk_mpnn_model(model_name, backbone_noise=mpnn_backbone_noise,weights=mpnn_version)
+-            mpnn_model.prep_inputs(pdb_filename=f"{folder_name}/traj/{name}.pdb", chain='A,B', 
++            mpnn_model.prep_inputs(pdb_filename=f"{folder_name}/traj/{name}.pdb", chain='A,B',
+                                    fix_pos=sol_design_pos, rm_aa = "C", inverse=True)
+         
+             samples = mpnn_model.sample_parallel(temperature=mpnn_sampling_temp, batch=mpnn_samples)
+@@ -295,17 +344,21 @@ def cmap_loss_binder(inputs, outputs, opt):
+                     pickle.dump(samples, handle, protocol=pickle.HIGHEST_PROTOCOL)   
+                 
+             #Predict Samples with AF2_ptm
+-            print('Predicting sequences with AF2_ptm...')    
++            print('Predicting sequences with AF2_ptm...')
++            # Build the AF2-ptm prediction model once per trajectory and reuse it
++            # across the mpnn_samples sequences (only set_seq changes). Previously a
++            # fresh model + prep_inputs was constructed for every sample, re-running
++            # template featurization and forcing a fresh XLA compile each time.
++            af_model = mk_afdesign_model(protocol="binder", loss_callback=cmap_loss_binder,
++                                                   use_templates=True,)
++            af_model.opt['cond_cmap'] = cond_cmap.copy()
++            af_model.opt['cond_cmap_mask'] = cond_cmap_mask.copy()
++            af_model.prep_inputs(pdb_filename=pdb_target_path,
++                                           chain=chain_id, binder_len = binder_len,
++                                           hotspot=target_hotspots,
++                                           rm_aa=rm_aa, #fix_pos=fixed_positions,
++                                           )
+             for num, seq in enumerate(samples['seq']):
+-                af_model = mk_afdesign_model(protocol="binder", loss_callback=cmap_loss_binder,
+-                                                       use_templates=True,)
+-                af_model.opt['cond_cmap'] = cond_cmap.copy()
+-                af_model.opt['cond_cmap_mask'] = cond_cmap_mask.copy()
+-                af_model.prep_inputs(pdb_filename=pdb_target_path,
+-                                               chain=chain_id, binder_len = binder_len,
+-                                               hotspot=target_hotspots,
+-                                               rm_aa=rm_aa, #fix_pos=fixed_positions,
+-                                               )
+                 af_model.set_seq(seq[-binder_len:])
+                 af_model.predict(num_recycles=3, verbose=False, models=["model_1_ptm","model_2_ptm"])
+                 print(f"predict: {name}_{num} plddt: {af_model.aux['log']['plddt']:.3f}, i_pae: {(af_model.aux['log']['i_pae']):.3f}, i_ptm: {af_model.aux['log']['i_ptm']:.3f}, cmap_loss: {af_model.aux['log']['cmap_loss_binder']:.3f}")
+@@ -318,13 +371,22 @@ def cmap_loss_binder(inputs, outputs, opt):
+                 ipaes.append(af_model.aux['log']['i_pae'])
+                 iptms.append(af_model.aux['log']['i_ptm'])
+                 cmap_loss.append(af_model.aux['log']['cmap_loss_binder'])
+-    
++                write_results()   # checkpoint after each design
++
+     else:
+         passed = 0
+         #success_target = success_target
+         i=0
+-        while passed <= success_target:
++        # Stop *starting* trajectories once the target is reached (`<`, not `<=`,
++        # which overshot by one). The inner MPNN-batch loop is *also* capped, via
++        # iter_until_target below -- otherwise the final batch kept saving every
++        # passing sample past the target (up to mpnn_samples-1 extra), since the
++        # outer guard only fires between trajectories. Together they make the
++        # accepted-design count exactly --target_success.
++        while passed < success_target:
+             clear_mem()
++            mpnn_model.set_seed(None)  # clear_mem() deletes the hoisted mpnn_model's
++                                       # RNG key; re-seed it (see the --num_designs branch)
+             i+=1
+             name = f'traj_{i}' #@param {type:"string"}
+             rm_aa = 'C' #@param {type:"string"}
+@@ -361,8 +423,7 @@ def cmap_loss_binder(inputs, outputs, opt):
+                 else:
+                     raise ValueError("Wrong redesign_method was selected. Options: 'full','non-interface'")
+             
+-                mpnn_model = mk_mpnn_model(model_name, backbone_noise=mpnn_backbone_noise,weights=mpnn_version)
+-                mpnn_model.prep_inputs(pdb_filename=f"{folder_name}/traj/{name}.pdb", chain='A,B', 
++                mpnn_model.prep_inputs(pdb_filename=f"{folder_name}/traj/{name}.pdb", chain='A,B',
+                                        fix_pos=sol_design_pos, rm_aa = "C", inverse=True)
+             
+                 samples = mpnn_model.sample_parallel(temperature=mpnn_sampling_temp, batch=mpnn_samples)
+@@ -371,18 +432,22 @@ def cmap_loss_binder(inputs, outputs, opt):
+                         pickle.dump(samples, handle, protocol=pickle.HIGHEST_PROTOCOL)   
+                     
+                 #Predict Samples with AF2_ptm
+-                print('Predicting sequences with AF2_ptm...')    
+-                for num, seq in enumerate(samples['seq']):
+-                    af_model = mk_afdesign_model(protocol="binder", loss_callback=cmap_loss_binder,
+-                                                           use_templates=True,)
+-                    af_model.opt['cond_cmap'] = cond_cmap.copy()
+-                    af_model.opt['cond_cmap_mask'] = cond_cmap_mask.copy()
+-            
+-                    af_model.prep_inputs(pdb_filename=pdb_target_path,
+-                                                   chain=chain_id, binder_len = binder_len,
+-                                                   hotspot=target_hotspots,
+-                                                   rm_aa=rm_aa, #fix_pos=fixed_positions,
+-                                                   )
++                print('Predicting sequences with AF2_ptm...')
++                # Build the AF2-ptm prediction model once per trajectory and reuse it
++                # across the batch (only set_seq changes), as in the non-sample path.
++                af_model = mk_afdesign_model(protocol="binder", loss_callback=cmap_loss_binder,
++                                                       use_templates=True,)
++                af_model.opt['cond_cmap'] = cond_cmap.copy()
++                af_model.opt['cond_cmap_mask'] = cond_cmap_mask.copy()
++                af_model.prep_inputs(pdb_filename=pdb_target_path,
++                                               chain=chain_id, binder_len = binder_len,
++                                               hotspot=target_hotspots,
++                                               rm_aa=rm_aa, #fix_pos=fixed_positions,
++                                               )
++                # Cap the batch at the remaining global budget so it can't push
++                # `passed` past success_target (see iter_until_target); lambda reads
++                # the live `passed`, which is incremented on each accepted design.
++                for num, seq in iter_until_target(samples['seq'], lambda: passed, success_target):
+                     af_model.set_seq(seq[-binder_len:])
+                     af_model.predict(num_recycles=3, verbose=False, models=["model_1_ptm","model_2_ptm"])
+                     print(f"predict: {name}_{num} plddt: {af_model.aux['log']['plddt']:.3f}, i_pae: {(af_model.aux['log']['i_pae']):.3f}, i_ptm: {af_model.aux['log']['i_ptm']:.3f}, cmap_loss: {af_model.aux['log']['cmap_loss_binder']:.3f}")
+@@ -397,15 +462,11 @@ def cmap_loss_binder(inputs, outputs, opt):
+                         iptms.append(af_model.aux['log']['i_ptm'])
+                         cmap_loss.append(af_model.aux['log']['cmap_loss_binder'])
+                         passed+=1
++                        write_results()   # checkpoint after each design
+     
+-    df = pd.DataFrame({'name':names,
+-                               'sequence':sequences,
+-                               'plddt':plddts,
+-                               'ipae':ipaes,
+-                               'iptm':iptms,
+-                               'cmap_loss':cmap_loss})
+-    
+-    df.to_csv(f"{folder_name}/results.csv")
++    # Final flush + atomic promote: results.csv now exists, signalling the chunk
++    # completed (also writes an empty table if no designs passed, as before).
++    write_results(finalize=True)
+ 
+ if __name__ == '__main__':
+     main()
+\ No newline at end of file
+diff --git a/biopython_utils.py b/biopython_utils.py
+index 35b3f5e..4cc4dd7 100644
+--- a/biopython_utils.py
++++ b/biopython_utils.py
+@@ -23,6 +23,61 @@ def set_range(hotspots_input):
+             h_range.append(int(i))
+     return h_range
+ 
++
++def iter_until_target(items, current_count, target):
++    """Enumerate ``items`` as ``(index, item)`` but stop *before* yielding once
++    ``current_count()`` has reached ``target``.
++
++    Caps a batch loop against a GLOBAL running total so a single batch cannot
++    overshoot it. ``current_count`` is a zero-arg callable read at the top of
++    every iteration, so it reflects acceptances the caller makes *inside* the
++    loop body (e.g. ``current_count=lambda: passed`` where the body does
++    ``passed += 1`` for each accepted item). Items are yielded lazily, so any
++    per-item work past the target (here: an AF2 prediction per sample) is never
++    started.
++
++    Used by FoldCraft's ``--sample`` loop: ProteinMPNN emits a batch of
++    ``mpnn_samples`` sequences per trajectory and every sequence clearing the
++    success gate is saved; without this cap the final batch kept saving past
++    ``--target_success`` (overshooting by up to ``mpnn_samples - 1``). The outer
++    ``while passed < target`` only stops *starting* new trajectories, not the
++    in-flight batch -- this is what makes the success count exact.
++    """
++    it = iter(items)
++    index = 0
++    while current_count() < target:
++        try:
++            item = next(it)
++        except StopIteration:
++            return
++        yield index, item
++        index += 1
++
++
++def write_atomic(final_path, write_fn, finalize=False):
++    """Write output via a temporary ``.partial`` file, promoting it to
++    ``final_path`` only on ``finalize`` (an atomic ``os.replace``) -- so
++    ``final_path`` exists only once it is fully written.
++
++    ``write_fn(path)`` performs the actual write (e.g. ``df.to_csv``). Every call
++    (re)writes ``final_path + '.partial'``; with ``finalize=True`` that partial is
++    atomically renamed onto ``final_path``. A crash before the finalizing call
++    leaves only the ``.partial`` (every row written so far, for recovery) and
++    never a half-written ``final_path``.
++
++    This matters when a consumer treats the file's *existence* as "complete":
++    baseline/scheduler.py keys chunk resume/merge on ``results.csv`` existing, so
++    streaming progress straight into ``results.csv`` would make a preempted chunk
++    look finished. Streaming into ``results.csv.partial`` and promoting once, at
++    the end, keeps "``results.csv`` exists == chunk done" true. Returns the
++    partial path.
++    """
++    partial = final_path + ".partial"
++    write_fn(partial)
++    if finalize:
++        os.replace(partial, final_path)
++    return partial
++
+ # analyze sequence composition of design
+ def validate_design_sequence(sequence, num_clashes, advanced_settings):
+     note_array = []
+diff --git a/cmap_utils.py b/cmap_utils.py
+index cfbbe99..437ce2d 100644
+--- a/cmap_utils.py
++++ b/cmap_utils.py
+@@ -9,9 +9,10 @@
+ Index conventions: hotspot/mask range strings are parsed by ``set_range`` into
+ 1-based residue numbers (inclusive of both endpoints), which map to 0-based
+ array positions as ``residue R -> index R-1``. When no binder hotspots are
+-given the default ``np.array([range(0, binder_len)])`` -- a 2-D
+-``(1, binder_len)`` array -- drives NumPy fancy-indexing in the contact loop,
+-selecting every binder position.
++given the default ``np.array([range(1, binder_len + 1)])`` -- a 2-D
++``(1, binder_len)`` array of 1-based residue numbers -- drives NumPy
++fancy-indexing in the contact loop, selecting every binder position (identical
++to passing ``--binder_hotspots 1-<binder_len>``).
+ 
+ These semantics decide which residues the design loss conditions on, so changes
+ here are accuracy-relevant and should be measured against the design baseline.
+@@ -81,7 +82,13 @@ def assemble_fold_conditioned_cmap(binder_cmap, target_len, binder_len,
+     fc_cmap = np.zeros((target_len + binder_len, target_len + binder_len))
+ 
+     if binder_hotspots == '':
+-        cdr_range = np.array([range(0, binder_len)]) + target_len
++        # "all binder residues" -- 1-based 1..binder_len, matching what
++        # set_range yields for an explicit "1-<binder_len>". The previous
++        # 0-based range(0, binder_len) shifted the whole interface block up one
++        # row: it wrote a spurious contact on the LAST target residue and dropped
++        # the binder's C-terminal residue from conditioning (only hit when
++        # --binder_hotspots is omitted; every shipped config passes it).
++        cdr_range = np.array([range(1, binder_len + 1)]) + target_len
+     else:
+         cdr_range = np.array(set_range(binder_hotspots)) + target_len
+ 
+diff --git a/test/FoldCraft_binder.py b/test/FoldCraft_binder.py
+index 32a4a79..88afdff 100644
+--- a/test/FoldCraft_binder.py
++++ b/test/FoldCraft_binder.py
+@@ -165,7 +165,10 @@ def main():
+         passed = 0
+         #success_target = success_target
+         i=start_with
+-        while passed <= success_target:
++        # `< target` (not `<=`) and the iter_until_target cap on the inner batch
++        # loop below make the accepted count exactly --target_success (was `<=`
++        # plus an uncapped batch loop -> overshoot by up to mpnn_samples).
++        while passed < success_target:
+             clear_mem()
+             if binder_lengths != False:
+             	binder_len = random.randint(binder_lengths[0], binder_lengths[1]+1)
+@@ -222,8 +225,9 @@ def rg_loss(inputs, outputs):
+                         pickle.dump(samples, handle, protocol=pickle.HIGHEST_PROTOCOL)   
+                     
+                 #Predict Samples with AF2_ptm
+-                print('Predicting sequences with AF2_ptm...')    
+-                for num, seq in enumerate(samples['seq']):
++                print('Predicting sequences with AF2_ptm...')
++                # cap the batch at the remaining global budget (see iter_until_target)
++                for num, seq in iter_until_target(samples['seq'], lambda: passed, success_target):
+                     af_model = mk_afdesign_model(protocol="binder", loss_callback=rg_loss,
+                                                            use_templates=True,)
+            
+diff --git a/tests/test_biopython_utils.py b/tests/test_biopython_utils.py
+index 0f11e55..639d44d 100644
+--- a/tests/test_biopython_utils.py
++++ b/tests/test_biopython_utils.py
+@@ -4,6 +4,8 @@
+ secondary-structure fraction arithmetic, sequence-composition notes, clash
+ counting, interface detection, and CA-RMSD superposition.
+ """
++import os
++
+ import pytest
+ 
+ import biopython_utils as bu
+@@ -128,3 +130,79 @@ def test_self_alignment_is_zero(self, pdb_1qys):
+         # Aligning a structure's chain A against itself must give ~0 RMSD.
+         rmsd = bu.target_pdb_rmsd(pdb_1qys, pdb_1qys, "A")
+         assert rmsd == 0.0
++
++
++# ---------------------------------------------------------------------------
++# iter_until_target -- budget cap for the --sample design loop. Regression
++# guard for the overrun where the final MPNN batch kept saving every passing
++# sample past --target_success (the outer `while passed < target` only stops
++# *between* trajectories). The adversarial case is a batch of all-passing
++# samples with little remaining budget: the old uncapped `enumerate` accepted
++# the whole batch; iter_until_target must stop at exactly the target.
++# ---------------------------------------------------------------------------
++class TestIterUntilTarget:
++    def test_all_passing_batch_stops_at_exact_budget(self):
++        # The bug: a 5-sample batch, target 2 -> old code accepted all 5.
++        accepted = []
++        for _i, item in bu.iter_until_target("abcde", lambda: len(accepted), 2):
++            accepted.append(item)          # every sample "passes the gate"
++        assert accepted == ["a", "b"]      # exactly target, not the whole batch
++
++    def test_failures_do_not_consume_budget(self):
++        accepted, seen = [], []
++        for i, _item in bu.iter_until_target(range(10), lambda: len(accepted), 2):
++            seen.append(i)
++            if i in (1, 4):                # only these clear the success gate
++                accepted.append(i)
++        assert accepted == [1, 4]          # gate failures don't burn budget
++        assert seen == [0, 1, 2, 3, 4]     # stopped right after the 2nd acceptance
++
++    def test_yields_indices_like_enumerate(self):
++        assert list(bu.iter_until_target("xy", lambda: 0, 10)) == [(0, "x"), (1, "y")]
++
++    def test_already_at_target_yields_nothing(self):
++        # No remaining budget -> no per-item work (no AF2 prediction) is started.
++        assert list(bu.iter_until_target("abc", lambda: 5, 2)) == []
++
++    def test_lazy_stop_skips_remaining_work(self):
++        # Proves the cap stops *before* doing per-item work past the target,
++        # not just before recording it (the compute-saving property).
++        touched = []
++        accepted = []
++        def gen():
++            for ch in "abcde":
++                touched.append(ch)
++                yield ch
++        for _i, item in bu.iter_until_target(gen(), lambda: len(accepted), 2):
++            accepted.append(item)
++        assert touched == ["a", "b"]       # c/d/e never pulled from the source
++
++
++# ---------------------------------------------------------------------------
++# write_atomic -- stream to <path>.partial, promote to <path> only on finalize.
++# Regression guard for the scheduler interaction: writing results.csv
++# incrementally made a preempted chunk's partial table look like a finished
++# chunk (results.csv existing == done), so it was skipped on resume and merged
++# as complete. The final file must appear only when the run actually finished.
++# ---------------------------------------------------------------------------
++class TestWriteAtomic:
++    def test_partial_until_finalized(self, tmp_path):
++        final = str(tmp_path / "results.csv")
++        bu.write_atomic(final, lambda p: open(p, "w").write("a,b\n1,2\n"))
++        assert not os.path.exists(final)              # incomplete -> no results.csv
++        assert os.path.exists(final + ".partial")     # progress preserved
++        bu.write_atomic(final, lambda p: open(p, "w").write("a,b\n1,2\n3,4\n"),
++                        finalize=True)
++        assert os.path.exists(final)                  # atomically promoted
++        assert not os.path.exists(final + ".partial") # partial consumed by rename
++        assert open(final).read().count("\n") == 3    # final holds the full table
++
++    def test_crash_before_finalize_leaves_no_final(self, tmp_path):
++        # Simulated preemption: several incremental writes, never finalized. The
++        # scheduler must NOT see results.csv (else it skips/merges as done).
++        final = str(tmp_path / "results.csv")
++        for n in range(3):
++            bu.write_atomic(final, lambda p, n=n: open(p, "w").write("row\n" * (n + 1)))
++        assert not os.path.exists(final)
++        assert os.path.exists(final + ".partial")
++        assert open(final + ".partial").read() == "row\nrow\nrow\n"  # latest checkpoint
+diff --git a/tests/test_cmap_utils.py b/tests/test_cmap_utils.py
+index d4e8962..4828fbd 100644
+--- a/tests/test_cmap_utils.py
++++ b/tests/test_cmap_utils.py
+@@ -34,7 +34,10 @@ def _reference_cmap(load_np, target_len, binder_len, target_hotspots,
+     fc_cmap = np.zeros((target_len + binder_len, target_len + binder_len))
+ 
+     if binder_hotspots == '':
+-        cdr_range = np.array([range(0, binder_len)]) + target_len
++        # empty == all binder residues, 1-based (1..binder_len); must match an
++        # explicit "1-<binder_len>". (Previously 0-based here too, which made the
++        # differential test tautological -- it agreed with the same bug.)
++        cdr_range = np.array([range(1, binder_len + 1)]) + target_len
+     else:
+         cdr_range = np.array(set_range(binder_hotspots)) + target_len
+ 
+@@ -100,6 +103,26 @@ def test_hotspot_contacts_are_symmetric(self):
+         out = cu.assemble_fold_conditioned_cmap(bc, 5, 4, "2-4", "1-3", "")
+         np.testing.assert_array_equal(out, out.T)
+ 
++    def test_empty_binder_hotspots_equals_all_residues_explicit(self):
++        # Documented meaning of empty binder_hotspots = "all binder residues",
++        # so it must equal passing the full 1..binder_len range explicitly. The
++        # old 0-based default did NOT (it shifted the interface block up a row);
++        # this pins the corrected 1-based behavior independently of the reference.
++        bc = _fake_binder_cmap(4)
++        default = cu.assemble_fold_conditioned_cmap(bc, 5, 4, "2-4", "", "")
++        explicit = cu.assemble_fold_conditioned_cmap(bc, 5, 4, "2-4", "1-4", "")
++        np.testing.assert_array_equal(default, explicit)
++
++    def test_empty_default_conditions_every_binder_residue_not_last_target(self):
++        # Adversarial small case: target_len=5, binder_len=4, target hotspot "3"
++        # (col index 2). Correct binder rows are 5,6,7,8; the bug wrote 4,5,6,7 --
++        # a spurious contact on target row 4 and none on binder row 8.
++        bc = np.zeros((4, 4))
++        out = cu.assemble_fold_conditioned_cmap(bc, 5, 4, "3", "", "")
++        for r in (5, 6, 7, 8):                      # every binder residue conditioned
++            assert out[r, 2] == 1.0 and out[2, r] == 1.0
++        assert out[4, 2] == 0.0 and out[2, 4] == 0.0  # no spurious last-target contact
++
+     def test_known_contact_entries(self):
+         # set_range is inclusive: target_hotspots="2-3" -> [2, 3];
+         # binder_hotspots="1-3" -> [1, 2, 3]; cdr_range = [1,2,3] + 5 = [6,7,8].

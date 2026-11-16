@@ -1,0 +1,64 @@
+version = "1.0"
+
+[task]
+name = "default/RosettaCommons__rosetta-595"
+description = "Preserve Pose bitwise representation when accessing Pose.cache SimpleMetrics data"
+
+[metadata]
+difficulty = "large"
+category = "bugfix"
+keywords = [
+    "rosetta",
+    "pr_diff",
+]
+
+[metadata.repo2env]
+pipeline = "pr_diff"
+pipeline_version = "0.3.0"
+repo = "RosettaCommons/rosetta"
+ref = "612b6ef9e9d4638e6f1e47fabee02587d9453733"
+reference = "https://github.com/RosettaCommons/rosetta/pull/595"
+source_access = "auto"
+built_at = "2026-11-15T22:36:05.092198+00:00"
+reward_kinds = [
+    "diff_similarity",
+]
+spec_version = "0.2.0"
+content_hash = "sha256:1cb1b63e29052567d04a0bd08d448f2130e87d5ea39093c39bdd2b19b9d24027"
+
+[metadata.repo2env.pr_diff]
+pr_merged_at = "2026-01-07T00:41:30Z"
+diff_format = "unified"
+context_files = [
+    "source/src/python/PyRosetta/src/pyrosetta/bindings/scores/simple_metrics.py",
+    "source/src/python/PyRosetta/src/pyrosetta/tests/bindings/core/test_pose.py",
+    "source/src/python/PyRosetta/src/pyrosetta/tests/distributed/test_smoke.py",
+]
+
+[metadata.repo2env.reward_calibration]
+baseline_reward = 0.0
+loc_changed = 81
+difficulty = "large"
+
+[metadata.repo2env.evaluation]
+schema_version = "1"
+status = "unverified"
+stage = "generation"
+reason_codes = [
+    "validation_not_run",
+]
+detail = "Generated task; validation has not been established."
+provenance = "unknown"
+evidence = []
+
+[metadata.repo2env.reproducibility]
+mode = "local_only"
+image_ref = "python:3.12-slim"
+image_tag = "python:3.12-slim"
+image_visibility = "private"
+
+[agent]
+timeout_sec = 1800.0
+
+[verifier]
+timeout_sec = 300.0

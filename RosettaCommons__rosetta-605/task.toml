@@ -1,0 +1,69 @@
+version = "1.0"
+
+[task]
+name = "default/RosettaCommons__rosetta-605"
+description = "Supporting task retries in PyRosettaCluster"
+
+[metadata]
+difficulty = "large"
+category = "bugfix"
+keywords = [
+    "rosetta",
+    "pr_diff",
+]
+
+[metadata.repo2env]
+pipeline = "pr_diff"
+pipeline_version = "0.3.0"
+repo = "RosettaCommons/rosetta"
+ref = "5e498f1409c68ade56c8ce5842bf79e1b02e8db4"
+reference = "https://github.com/RosettaCommons/rosetta/pull/605"
+source_access = "auto"
+built_at = "2026-11-15T22:36:02.521404+00:00"
+reward_kinds = [
+    "diff_similarity",
+]
+spec_version = "0.2.0"
+content_hash = "sha256:2c2f738ff9dd2126be8ab78fb5cfa9ef212c87411a8e95e160514ceca4603daa"
+
+[metadata.repo2env.pr_diff]
+pr_merged_at = "2026-01-21T00:12:38Z"
+diff_format = "unified"
+context_files = [
+    "source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/__init__.py",
+    "source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/base.py",
+    "source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/converters.py",
+    "source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/core.py",
+    "source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/tools.py",
+    "source/src/python/PyRosetta/src/pyrosetta/distributed/cluster/validators.py",
+    "source/src/python/PyRosetta/src/pyrosetta/tests/distributed/cluster/test_smoke.py",
+    "source/src/python/PyRosetta/src/test/T900_distributed.py",
+]
+
+[metadata.repo2env.reward_calibration]
+baseline_reward = 0.0
+loc_changed = 575
+difficulty = "large"
+
+[metadata.repo2env.evaluation]
+schema_version = "1"
+status = "unverified"
+stage = "generation"
+reason_codes = [
+    "validation_not_run",
+]
+detail = "Generated task; validation has not been established."
+provenance = "unknown"
+evidence = []
+
+[metadata.repo2env.reproducibility]
+mode = "local_only"
+image_ref = "python:3.12-slim"
+image_tag = "python:3.12-slim"
+image_visibility = "private"
+
+[agent]
+timeout_sec = 1800.0
+
+[verifier]
+timeout_sec = 300.0

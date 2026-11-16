@@ -1,0 +1,72 @@
+version = "1.0"
+
+[task]
+name = "default/OATML-Markslab__ProteinGym-77"
+description = "Add AIDO.Protein-RAG-proteingym-dms-zeroshot"
+
+[metadata]
+difficulty = "large"
+category = "bugfix"
+keywords = [
+    "ProteinGym",
+    "pr_diff",
+]
+
+[metadata.repo2env]
+pipeline = "pr_diff"
+pipeline_version = "0.3.0"
+repo = "OATML-Markslab/ProteinGym"
+ref = "1f8de974dead8ff7501eff087b725d14a965e9f9"
+reference = "https://github.com/OATML-Markslab/ProteinGym/pull/77"
+source_access = "auto"
+built_at = "2026-11-15T22:30:18.102627+00:00"
+reward_kinds = [
+    "diff_similarity",
+]
+spec_version = "0.2.0"
+content_hash = "sha256:4036f70bf09464c00c8123fb2946fd1d6f11b77e7bc4d9072f589b13bdea07c4"
+
+[metadata.repo2env.pr_diff]
+pr_merged_at = "2025-06-09T20:20:31Z"
+diff_format = "unified"
+context_files = [
+    "config.json",
+    "proteingym/baselines/AIDO.Protein-RAG-proteingym-dms-zeroshot/LICENSE",
+    "proteingym/baselines/AIDO.Protein-RAG-proteingym-dms-zeroshot/README.md",
+    "proteingym/baselines/AIDO.Protein-RAG-proteingym-dms-zeroshot/compute_fitness.py",
+    "proteingym/baselines/AIDO.Protein-RAG-proteingym-dms-zeroshot/utils/.DS_Store",
+    "proteingym/baselines/AIDO.Protein-RAG-proteingym-dms-zeroshot/utils/__init__.py",
+    "proteingym/baselines/AIDO.Protein-RAG-proteingym-dms-zeroshot/utils/codebook.pt",
+    "proteingym/baselines/AIDO.Protein-RAG-proteingym-dms-zeroshot/utils/misc.py",
+    "proteingym/baselines/AIDO.Protein-RAG-proteingym-dms-zeroshot/utils/protein.py",
+    "proteingym/baselines/AIDO.Protein-RAG-proteingym-dms-zeroshot/utils/residue_constants.py",
+    "scripts/scoring_DMS_zero_shot/scoring_AIDO.Protein-RAG-proteingym-dms-zeroshot.sh",
+]
+
+[metadata.repo2env.reward_calibration]
+baseline_reward = 0.0
+loc_changed = 2278
+difficulty = "large"
+
+[metadata.repo2env.evaluation]
+schema_version = "1"
+status = "unverified"
+stage = "generation"
+reason_codes = [
+    "validation_not_run",
+]
+detail = "Generated task; validation has not been established."
+provenance = "unknown"
+evidence = []
+
+[metadata.repo2env.reproducibility]
+mode = "local_only"
+image_ref = "python:3.12-slim"
+image_tag = "python:3.12-slim"
+image_visibility = "private"
+
+[agent]
+timeout_sec = 1800.0
+
+[verifier]
+timeout_sec = 300.0

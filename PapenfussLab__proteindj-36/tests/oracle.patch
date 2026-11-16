@@ -1,0 +1,13 @@
+diff --git a/main.nf b/main.nf
+index 9d461a7..fc5b1ca 100644
+--- a/main.nf
++++ b/main.nf
+@@ -822,7 +822,7 @@ def collectInputFiles(params) {
+         }
+     }
+ 
+-    if(params.design_mode == 'bindcraft_denovo' & params.bc_advanced_json){
++    if(params.design_mode == 'bindcraft_denovo' && params.bc_advanced_json){
+         inputs << file(params.bc_advanced_json)
+     }
+ 

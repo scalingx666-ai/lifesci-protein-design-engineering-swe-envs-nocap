@@ -1,0 +1,68 @@
+version = "1.0"
+
+[task]
+name = "default/PapenfussLab__proteindj-15"
+description = "Bindcraft fixes"
+
+[metadata]
+difficulty = "medium"
+category = "bugfix"
+keywords = [
+    "proteindj",
+    "pr_diff",
+]
+
+[metadata.repo2env]
+pipeline = "pr_diff"
+pipeline_version = "0.3.0"
+repo = "PapenfussLab/proteindj"
+ref = "b20c24b6925267a33847f655bdc0d1f585dc548c"
+reference = "https://github.com/PapenfussLab/proteindj/pull/15"
+source_access = "auto"
+built_at = "2026-11-16T03:26:57.704053+00:00"
+reward_kinds = [
+    "diff_similarity",
+]
+spec_version = "0.2.0"
+content_hash = "sha256:7049b033efbe45b3281c583c6ee1bcc45933c6d809b4980dbd2a7ae8f460afad"
+
+[metadata.repo2env.pr_diff]
+pr_merged_at = "2025-10-24T05:22:59Z"
+diff_format = "unified"
+context_files = [
+    "modules/bindcraft.nf",
+    "nextflow_schema.json",
+    "schemas/mode_parameters.csv",
+    "schemas/nextflow_schema_bindcraft.json",
+    "schemas/nextflow_schema_binder_partialdiff.json",
+    "schemas/nextflow_schema_custom.json",
+    "schemas/nextflow_schema_monomer_partialdiff.json",
+]
+
+[metadata.repo2env.reward_calibration]
+baseline_reward = 0.0
+loc_changed = 27
+difficulty = "medium"
+
+[metadata.repo2env.evaluation]
+schema_version = "1"
+status = "unverified"
+stage = "generation"
+reason_codes = [
+    "validation_not_run",
+]
+detail = "Generated task; validation has not been established."
+provenance = "unknown"
+evidence = []
+
+[metadata.repo2env.reproducibility]
+mode = "local_only"
+image_ref = "python:3.12-slim"
+image_tag = "python:3.12-slim"
+image_visibility = "private"
+
+[agent]
+timeout_sec = 1800.0
+
+[verifier]
+timeout_sec = 300.0

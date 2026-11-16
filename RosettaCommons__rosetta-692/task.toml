@@ -1,0 +1,76 @@
+version = "1.0"
+
+[task]
+name = "default/RosettaCommons__rosetta-692"
+description = "Apply Rule of Zero across utility/ helpers"
+
+[metadata]
+difficulty = "large"
+category = "bugfix"
+keywords = [
+    "rosetta",
+    "pr_diff",
+]
+
+[metadata.repo2env]
+pipeline = "pr_diff"
+pipeline_version = "0.3.0"
+repo = "RosettaCommons/rosetta"
+ref = "80efd178b93d19b7cb76d9a0b34788104381afaa"
+reference = "https://github.com/RosettaCommons/rosetta/pull/692"
+source_access = "auto"
+built_at = "2026-11-15T22:34:58.819274+00:00"
+reward_kinds = [
+    "diff_similarity",
+]
+spec_version = "0.2.0"
+content_hash = "sha256:33fb6e33b0534adcbe8760b2a308143c4a5d24a45b7bd96e523b8a627b17c860"
+
+[metadata.repo2env.pr_diff]
+pr_merged_at = "2026-05-28T22:46:43Z"
+diff_format = "unified"
+context_files = [
+    "source/src/cppcheck_suppressions.txt",
+    "source/src/utility/DereferenceIterator.hh",
+    "source/src/utility/graph/ArrayPool.hh",
+    "source/src/utility/graph/Digraph.hh",
+    "source/src/utility/graph/Graph.hh",
+    "source/src/utility/graph/LowMemGraph.hh",
+    "source/src/utility/graph/UpperEdgeGraph.hh",
+    "source/src/utility/options/BooleanOption.hh",
+    "source/src/utility/options/BooleanVectorOption.hh",
+    "source/src/utility/options/FileOption.hh",
+    "source/src/utility/options/FileVectorOption.hh",
+    "source/src/utility/options/IntegerOption.hh",
+    "source/src/utility/options/IntegerVectorOption.hh",
+    "source/src/utility/options/RealOption.hh",
+    "source/src/utility/options/RealVectorOption.hh",
+]
+
+[metadata.repo2env.reward_calibration]
+baseline_reward = 0.0
+loc_changed = 144
+difficulty = "large"
+
+[metadata.repo2env.evaluation]
+schema_version = "1"
+status = "unverified"
+stage = "generation"
+reason_codes = [
+    "validation_not_run",
+]
+detail = "Generated task; validation has not been established."
+provenance = "unknown"
+evidence = []
+
+[metadata.repo2env.reproducibility]
+mode = "local_only"
+image_ref = "python:3.12-slim"
+image_tag = "python:3.12-slim"
+image_visibility = "private"
+
+[agent]
+timeout_sec = 1800.0
+
+[verifier]
+timeout_sec = 300.0

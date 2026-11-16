@@ -1,0 +1,68 @@
+diff --git a/source/src/utility/tag/XMLSchemaGeneration.cc b/source/src/utility/tag/XMLSchemaGeneration.cc
+index fdbf299645e..501d240e244 100644
+--- a/source/src/utility/tag/XMLSchemaGeneration.cc
++++ b/source/src/utility/tag/XMLSchemaGeneration.cc
+@@ -2051,7 +2051,7 @@ XMLSchemaParticleOP XMLSchemaComplexTypeGeneratorImpl::create_subelement(
+ }
+ 
+ XMLSchemaComplexTypeGenerator::XMLSchemaComplexTypeGenerator() : pimpl_( new XMLSchemaComplexTypeGeneratorImpl ) {}
+-XMLSchemaComplexTypeGenerator::~XMLSchemaComplexTypeGenerator() { delete pimpl_; }
++XMLSchemaComplexTypeGenerator::~XMLSchemaComplexTypeGenerator() = default;
+ //XMLSchemaComplexTypeGenerator::XMLSchemaComplexTypeGenerator( XMLSchemaComplexTypeGenerator const & src ) :
+ // pimpl_( new XMLSchemaComplexTypeGeneratorImpl( *src.pimpl_ ))
+ //{
+diff --git a/source/src/utility/tag/XMLSchemaGeneration.hh b/source/src/utility/tag/XMLSchemaGeneration.hh
+index be6397068a8..5c0587953a2 100644
+--- a/source/src/utility/tag/XMLSchemaGeneration.hh
++++ b/source/src/utility/tag/XMLSchemaGeneration.hh
+@@ -117,6 +117,7 @@
+ 
+ // Boost headers
+ #include <functional>
++#include <memory>
+ 
+ // LibXML includes
+ 
+@@ -969,7 +970,7 @@ public:
+ 
+ 
+ private:
+-	class XMLSchemaComplexTypeGeneratorImpl * pimpl_;
++	std::unique_ptr< class XMLSchemaComplexTypeGeneratorImpl > pimpl_;
+ 
+ };
+ 
+diff --git a/source/src/utility/tag/XMLSchemaValidation.cc b/source/src/utility/tag/XMLSchemaValidation.cc
+index 6e9418ea859..73361634a6f 100644
+--- a/source/src/utility/tag/XMLSchemaValidation.cc
++++ b/source/src/utility/tag/XMLSchemaValidation.cc
+@@ -425,7 +425,7 @@ class XMLValidatorImpl {
+ 
+ 
+ XMLValidator::XMLValidator() : pimpl_( new XMLValidatorImpl() ) {}
+-XMLValidator::~XMLValidator() { delete pimpl_; }
++XMLValidator::~XMLValidator() = default;
+ 
+ bool
+ XMLValidator::schema_has_been_set() const
+diff --git a/source/src/utility/tag/XMLSchemaValidation.hh b/source/src/utility/tag/XMLSchemaValidation.hh
+index bbfc007937e..f0641e329bd 100644
+--- a/source/src/utility/tag/XMLSchemaValidation.hh
++++ b/source/src/utility/tag/XMLSchemaValidation.hh
+@@ -28,6 +28,7 @@
+ 
+ // C++ headers
+ #include <list>
++#include <memory>
+ #include <string>
+ //#include <vector>
+ //#include <map>
+@@ -84,7 +85,7 @@ private:
+ 	XMLValidator( XMLValidator const & ) = delete;
+ 	XMLValidator & operator = ( XMLValidator const & rhs ) = delete;
+ 
+-	class XMLValidatorImpl * pimpl_;
++	std::unique_ptr< class XMLValidatorImpl > pimpl_;
+ };
+ 
+ class XMLValidationOutput
