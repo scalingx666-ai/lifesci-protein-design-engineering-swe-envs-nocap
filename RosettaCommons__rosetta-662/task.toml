@@ -33,7 +33,6 @@ context_files = [
     "source/src/utility/libsvm/Svm_rosetta.cc",
     "source/src/utility/libsvm/Svm_rosetta.hh",
 ]
-bootstrap_image = "python:3.12-slim"
 
 [metadata.repo2env.reward_calibration]
 baseline_reward = 0.0
@@ -52,15 +51,10 @@ provenance = "unknown"
 evidence = []
 
 [metadata.repo2env.reproducibility]
-mode = "inline_dockerfile"
+mode = "local_only"
 image_ref = "python:3.12-slim"
 image_tag = "python:3.12-slim"
-image_visibility = "public"
-pushed_at = "2026-11-16T15:51:18.606442+00:00"
-pushed_by = "scalingX"
-inline_recipe_sha256 = "sha256:ff0ff4cf0b8231a8ffaba131fe31b8b254b5bd952db2011d1a161bf67fae9dee"
-inline_recipe_lines = 37
-inline_recipe_source = "user_dockerfile"
+image_visibility = "private"
 
 [agent]
 timeout_sec = 1800.0

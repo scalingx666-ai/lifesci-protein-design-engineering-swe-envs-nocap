@@ -37,7 +37,6 @@ context_files = [
     "source/src/python/PyRosetta/src/pyrosetta/tests/distributed/cluster/test_smoke.py",
     "source/src/python/PyRosetta/src/pyrosetta/utility/initialization.py",
 ]
-bootstrap_image = "python:3.12-slim"
 
 [metadata.repo2env.reward_calibration]
 baseline_reward = 0.0
@@ -56,15 +55,10 @@ provenance = "unknown"
 evidence = []
 
 [metadata.repo2env.reproducibility]
-mode = "inline_dockerfile"
+mode = "local_only"
 image_ref = "python:3.12-slim"
 image_tag = "python:3.12-slim"
-image_visibility = "public"
-pushed_at = "2026-11-16T15:51:18.591610+00:00"
-pushed_by = "scalingX"
-inline_recipe_sha256 = "sha256:15c0cd9d8c94a6c323cde16500fac8eae2723fac9bf0fc383751bf35f3dd6c8e"
-inline_recipe_lines = 37
-inline_recipe_source = "user_dockerfile"
+image_visibility = "private"
 
 [agent]
 timeout_sec = 1800.0
